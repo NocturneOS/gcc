@@ -1,3 +1,27 @@
+2025-12-27  Eric Botcazou  <ebotcazou@gcc.gnu.org>
+
+	PR ada/123306
+	* sem_ch12.adb (Analyze_One_Association): Immediately freeze the
+	root type of mutably tagged types used as actual type parameters.
+
+2025-12-26  Eric Botcazou  <ebotcazou@gcc.gnu.org>
+
+	PR ada/123088
+	* sem_aggr.adb (Resolve_Record_Aggregate): Add more robust guard.
+
+2025-12-26  Eric Botcazou  <ebotcazou@gcc.gnu.org>
+
+	PR ada/123302
+	* sem_ch12.adb (Save_Global_Reference.Save_References_In_Aggregate):
+	Recurse on the scope of the type to find one that is visible, in the
+	case of an actual in a subprogram call with a local type.
+
+2025-12-26  Eric Botcazou  <ebotcazou@gcc.gnu.org>
+
+	PR ada/123289
+	* sem_ch13.adb (Resolve_Aspect_Aggregate.Resolve_Operation): Give
+	an error if the operation's name denotes more than one subprogram.
+
 2025-12-22  Eric Botcazou  <ebotcazou@adacore.com>
 
 	PR ada/123060
