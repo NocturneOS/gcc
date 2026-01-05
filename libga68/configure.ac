@@ -138,6 +138,7 @@ m4_rename([_AC_ARG_VAR_PRECIOUS],[real_PRECIOUS])
 m4_define([_AC_ARG_VAR_PRECIOUS],[])
 AC_PROG_CC
 AM_PROG_AS
+AC_PROG_A68
 m4_rename_force([real_PRECIOUS],[_AC_ARG_VAR_PRECIOUS])
 AC_SUBST(CFLAGS)
 
@@ -168,6 +169,9 @@ AC_LANG([C])
 # Allow the user to set CC_FOR_BUILD in the environment.
 CC_FOR_BUILD=${CC_FOR_BUILD:-gcc}
 AC_SUBST(CC_FOR_BUILD)
+
+# Check whether the target supports hidden visibility.
+LIBGA68_CHECK_ATTRIBUTE_VISIBILITY
 
 # Search for needed functions in host libraries.
 AC_SEARCH_LIBS([malloc], [c])

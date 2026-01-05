@@ -1,5 +1,5 @@
 /* Subroutines used for code generation for RISC-V.
-   Copyright (C) 2011-2025 Free Software Foundation, Inc.
+   Copyright (C) 2011-2026 Free Software Foundation, Inc.
    Contributed by Andrew Waterman (andrew@sifive.com).
    Based on MIPS target for GNU compiler.
 
@@ -3440,8 +3440,11 @@ riscv_legitimize_const_move (machine_mode mode, rtx dest, rtx src)
   src = force_const_mem (mode, src);
 
   /* When using explicit relocs, constant pool references are sometimes
-     not legitimate addresses.  */
-  riscv_split_symbol (dest, XEXP (src, 0), mode, &XEXP (src, 0));
+     not legitimate addresses.   If DEST is not a suitable register (ie,
+     not a Pmode pseudo), then let RISCV_SPLIT_SYMBOL generate a fresh
+     temporary.  */
+  riscv_split_symbol (GET_MODE (dest) == Pmode ? dest : NULL_RTX,
+		      XEXP (src, 0), mode, &XEXP (src, 0));
   riscv_emit_move (dest, src);
 }
 
@@ -12579,9 +12582,7 @@ riscv_conditional_register_usage (void)
 	call_used_regs[regno] = 1;
     }
 
-  if (TARGET_VECTOR)
-    global_regs[VXRM_REGNUM] = 1;
-  else
+  if (!TARGET_VECTOR)
     {
       for (int regno = V_REG_FIRST; regno <= V_REG_LAST; regno++)
 	fixed_regs[regno] = call_used_regs[regno] = 1;
