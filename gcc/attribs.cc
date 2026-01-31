@@ -1322,14 +1322,15 @@ build_type_attribute_qual_variant (tree otype, tree attribute, int quals)
 	  warning (OPT_Wattributes,
 		   "ignoring attributes applied to %qT after definition",
 		   TYPE_MAIN_VARIANT (ttype));
-	  return build_qualified_type (ttype, quals);
+	  return lang_hooks.types.build_lang_qualified_type (ttype, NULL_TREE,
+							     quals);
 	}
 
-      ttype = build_qualified_type (ttype, TYPE_UNQUALIFIED);
-      if (lang_hooks.types.copy_lang_qualifiers
-	  && otype != TYPE_MAIN_VARIANT (otype))
-	ttype = (lang_hooks.types.copy_lang_qualifiers
-		 (ttype, TYPE_MAIN_VARIANT (otype)));
+      tree mtype = NULL_TREE;
+      if (otype != TYPE_MAIN_VARIANT (otype))
+	mtype = TYPE_MAIN_VARIANT (otype);
+      ttype = lang_hooks.types.build_lang_qualified_type (ttype, mtype,
+							  TYPE_UNQUALIFIED);
 
       tree dtype = ntype = build_distinct_type_copy (ttype);
 
@@ -1354,13 +1355,15 @@ build_type_attribute_qual_variant (tree otype, tree attribute, int quals)
       else if (TYPE_CANONICAL (ntype) == ntype)
 	TYPE_CANONICAL (ntype) = TYPE_CANONICAL (ttype);
 
-      ttype = build_qualified_type (ntype, quals);
-      if (lang_hooks.types.copy_lang_qualifiers
-	  && otype != TYPE_MAIN_VARIANT (otype))
-	ttype = lang_hooks.types.copy_lang_qualifiers (ttype, otype);
+      if (otype != TYPE_MAIN_VARIANT (otype))
+	mtype = otype;
+      else
+	mtype = NULL_TREE;
+      ttype = lang_hooks.types.build_lang_qualified_type (ntype, mtype, quals);
     }
   else if (TYPE_QUALS (ttype) != quals)
-    ttype = build_qualified_type (ttype, quals);
+    ttype = lang_hooks.types.build_lang_qualified_type (ttype, NULL_TREE,
+							quals);
 
   return ttype;
 }
@@ -1458,6 +1461,10 @@ attribute_value_equal (const_tree attr1, const_tree attr2)
       && TREE_VALUE (attr2) != NULL_TREE
       && TREE_CODE (TREE_VALUE (attr2)) == TREE_LIST)
     {
+      if (ATTR_UNIQUE_VALUE_P (TREE_VALUE (attr1))
+	  || ATTR_UNIQUE_VALUE_P (TREE_VALUE (attr2)))
+	return false;
+
       /* Handle attribute format.  */
       if (is_attribute_p ("format", get_attribute_name (attr1)))
 	{
@@ -1739,11 +1746,34 @@ merge_attributes (tree a1, tree a2)
 	attributes = a2;
       else
 	{
-	  /* Pick the longest list, and hang on the other list.  */
+	  /* Pick the longest list, and hang on the other list,
+	     unless both lists contain ATTR_UNIQUE_VALUE_P values.
+	     In that case a1 list needs to go after the a2 list
+	     because attributes from a single declaration are stored
+	     in reverse order of their declarations.  */
+	  bool a1_unique_value_p = false, a2_unique_value_p = false;
+	  tree aa1 = a1, aa2 = a2;
+	  for (; aa1 && aa2; aa1 = TREE_CHAIN (aa1), aa2 = TREE_CHAIN (aa2))
+	    {
+	      if (!a1_unique_value_p
+		  && TREE_VALUE (aa1)
+		  && TREE_CODE (TREE_VALUE (aa1)) == TREE_LIST
+		  && ATTR_UNIQUE_VALUE_P (TREE_VALUE (aa1)))
+		a1_unique_value_p = true;
+	      if (!a2_unique_value_p
+		  && TREE_VALUE (aa2)
+		  && TREE_CODE (TREE_VALUE (aa2)) == TREE_LIST
+		  && ATTR_UNIQUE_VALUE_P (TREE_VALUE (aa2)))
+		a2_unique_value_p = true;
+	    }
 
-	  if (list_length (a1) < list_length (a2))
-	    attributes = a2, a2 = a1;
+	  if (aa2 && (!a1_unique_value_p || !a2_unique_value_p))
+	    {
+	      attributes = a2;
+	      a2 = a1;
+	    }
 
+	  tree a3 = NULL_TREE, *pa = &a3;
 	  for (; a2 != 0; a2 = TREE_CHAIN (a2))
 	    {
 	      tree a;
@@ -1756,9 +1786,14 @@ merge_attributes (tree a1, tree a2)
 	      if (a == NULL_TREE)
 		{
 		  a1 = copy_node (a2);
-		  TREE_CHAIN (a1) = attributes;
-		  attributes = a1;
+		  *pa = a1;
+		  pa = &TREE_CHAIN (a1);
 		}
+	    }
+	  if (a3)
+	    {
+	      *pa = attributes;
+	      attributes = a3;
 	    }
 	}
     }
@@ -2620,6 +2655,7 @@ std::string
 attr_access::array_as_string (tree type) const
 {
   std::string typstr;
+  bool free_type = false;
 
   if (type == error_mark_node)
     return std::string ();
@@ -2660,12 +2696,35 @@ attr_access::array_as_string (tree type) const
 	     [*] is represented the same as [0] this hack only works for
 	     the most significant bound like static and the others are
 	     rendered as [0].  */
-	  arat = build_tree_list (get_identifier ("array"), flag);
+	  arat = build_tree_list (get_identifier ("array "), flag);
 	}
 
       const int quals = TYPE_QUALS (type);
       type = build_array_type (eltype, index_type);
-      type = build_type_attribute_qual_variant (type, arat, quals);
+      if (arat || TYPE_QUALS (type) != quals)
+	{
+	  /* We create a new array type which is only used during
+	     printing.  Can't use build_type_attribute_qual_variant
+	     because it might with some lang hooks e.g. try to push
+	     qualifiers to the element type, while for the printing
+	     this wants the element type qualifiers to be unmodified
+	     and ARRAY_TYPE qualifiers to be a copy of the pointer
+	     type qualifiers.  Furthermore, a type with somtimes
+	     weird qualifiers or artificial attribute should be
+	     freed right after the use.  */
+	  type = copy_node (type);
+	  if (arat)
+	    {
+	      TREE_CHAIN (arat) = TYPE_ATTRIBUTES (type);
+	      TYPE_ATTRIBUTES (type) = arat;
+	    }
+	  TYPE_READONLY (type) = (quals & TYPE_QUAL_CONST) != 0;
+	  TYPE_VOLATILE (type) = (quals & TYPE_QUAL_VOLATILE) != 0;
+	  TYPE_ATOMIC (type) = (quals & TYPE_QUAL_ATOMIC) != 0;
+	  TYPE_RESTRICT (type) = (quals & TYPE_QUAL_RESTRICT) != 0;
+	  TYPE_ADDR_SPACE (type) = DECODE_QUAL_ADDR_SPACE (quals);
+	  free_type = true;
+	}
     }
 
   /* Format the type using the current pretty printer.  The generic tree
@@ -2673,6 +2732,8 @@ attr_access::array_as_string (tree type) const
   std::unique_ptr<pretty_printer> pp (global_dc->clone_printer ());
   pp_printf (pp.get (), "%qT", type);
   typstr = pp_formatted_text (pp.get ());
+  if (free_type)
+    ggc_free (type);
 
   return typstr;
 }

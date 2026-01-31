@@ -476,6 +476,7 @@ void a68_make_soid (SOID_T *s, int sort, MOID_T *type, int attribute);
 void a68_make_strong (NODE_T *n, MOID_T *p, MOID_T *q);
 void a68_make_uniting_coercion (NODE_T *n, MOID_T *q);
 void a68_make_void (NODE_T *p, MOID_T *q);
+bool a68_is_c_mode (MOID_T *m);
 
 #define A68_DEPREF true
 #define A68_NO_DEPREF false
@@ -578,7 +579,6 @@ tree a68_complex_widen_from_real (MOID_T *mode, tree r);
 
 /* a68-low-posix.cc  */
 
-tree a68_posix_setexitstatus (void);
 tree a68_posix_argc (void);
 tree a68_posix_argv (void);
 tree a68_posix_getenv (void);
@@ -591,6 +591,7 @@ tree a68_posix_fclose (void);
 tree a68_posix_fsize (void);
 tree a68_posix_lseek (void);
 tree a68_posix_errno (void);
+tree a68_posix_exit (void);
 tree a68_posix_perror (void);
 tree a68_posix_strerror (void);
 tree a68_posix_getchar (void);
@@ -699,9 +700,9 @@ tree a68_row_value (tree type, size_t dim,
 		    tree *lower_bound, tree *upper_bound);
 tree a68_row_value_raw (tree type, tree descriptor,
 			tree elements, tree elements_size);
-tree a68_row_malloc (tree type, int dim,
+tree a68_row_malloc (MOID_T *m, int dim,
 		    tree elements, tree elements_size,
-		    tree *lower_bound, tree *upper_bound);		     
+		    tree *lower_bound, tree *upper_bound);
 tree a68_multiple_slice (NODE_T *p, tree multiple, bool slicing_name,
 			 int num_indexes, tree *indexes);
 tree a68_multiple_copy_elems (MOID_T *to_mode, tree to, tree from);
@@ -810,13 +811,14 @@ tree a68_make_variable_declaration_decl (NODE_T *identifier, const char *module_
 tree a68_make_proc_identity_declaration_decl (NODE_T *identifier, const char *module_name = NULL,
 					      bool indicant = false, bool external = false,
 					      const char *extern_symbol = NULL);
+tree a68_make_formal_hole_decl (NODE_T *p, const char *extern_symbol);
 tree a68_make_anonymous_routine_decl (MOID_T *mode);
 tree a68_get_skip_tree (MOID_T *m);
 tree a68_get_empty (void);
 void a68_ref_counts (tree exp, MOID_T *m, int *num_refs, int *num_pointers);
 tree a68_consolidate_ref (MOID_T *m, tree expr);
-tree a68_lower_alloca (tree type, tree size);
-tree a68_lower_malloc (tree type, tree size);
+tree a68_lower_alloca (MOID_T *m, tree size);
+tree a68_lower_malloc (MOID_T *m, tree size);
 tree a68_checked_indirect_ref (NODE_T *p, tree exp, MOID_T *exp_mode);
 tree a68_low_deref (tree exp, NODE_T *p);
 tree a68_low_dup (tree exp, bool use_heap = false);
@@ -873,6 +875,7 @@ tree a68_lower_assignation (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_routine_text (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_generator (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_call (NODE_T *p, LOW_CTX_T ctx);
+tree a68_lower_formal_hole (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_unit (NODE_T *p, LOW_CTX_T ctx);
 
 /* a68-low-generator.c  */
@@ -1067,7 +1070,6 @@ tree a68_lower_shortenreal2 (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_random (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_longrandom (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_longlongrandom (NODE_T *p, LOW_CTX_T ctx);
-tree a68_lower_setexitstatus (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixargc (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixargv (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixputchar (NODE_T *p, LOW_CTX_T ctx);
@@ -1093,6 +1095,7 @@ tree a68_lower_posixfileordonly (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixfileowronly (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixfileotrunc (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixerrno (NODE_T *p, LOW_CTX_T ctx);
+tree a68_lower_posixexit (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixperror (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixstrerror (NODE_T *p, LOW_CTX_T ctx);
 tree a68_lower_posixgetchar (NODE_T *p, LOW_CTX_T ctx);

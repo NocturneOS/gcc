@@ -385,6 +385,7 @@ constexpr auto AARCH64_FL_DEFAULT_ISA_MODE ATTRIBUTE_UNUSED
 #define TARGET_BF16_FP AARCH64_HAVE_ISA (BF16)
 #define TARGET_BF16_SIMD (TARGET_BF16_FP && TARGET_SIMD)
 #define TARGET_SVE_BF16 (TARGET_BF16_FP && TARGET_SVE)
+#define TARGET_SVE_BFSCALE (AARCH64_HAVE_ISA (SVE_BFSCALE))
 
 /* PAUTH instructions are enabled through +pauth.  */
 #define TARGET_PAUTH AARCH64_HAVE_ISA (PAUTH)
@@ -406,6 +407,16 @@ constexpr auto AARCH64_FL_DEFAULT_ISA_MODE ATTRIBUTE_UNUSED
 /* CB<cc> instructions are enabled through +cmpbr,
    but are incompatible with -mtrack-speculation. */
 #define TARGET_CMPBR (AARCH64_HAVE_ISA (CMPBR) && !aarch64_track_speculation)
+
+/* PCDPHINT instructions are enabled through +pcdphint.  */
+#define TARGET_PCDPHINT AARCH64_HAVE_ISA (PCDPHINT)
+
+/* F8F32MM instructions, enabled through +f8f32mm.  */
+#define TARGET_F8F32MM (AARCH64_HAVE_ISA (F8F32MM))
+/* F8F16MM instructions, enabled through +f8f16mm.  */
+#define TARGET_F8F16MM (AARCH64_HAVE_ISA (F8F16MM))
+/* SVE_F16F32MM instructions, enabled through +sve-f16f32mm.  */
+#define TARGET_SVE_F16F32MM (AARCH64_HAVE_ISA (SVE_F16F32MM))
 
 /* Make sure this is always defined so we don't have to check for ifdefs
    but rather use normal ifs.  */

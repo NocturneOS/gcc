@@ -796,6 +796,11 @@ extern void omp_clause_range_check_failed (const_tree, const char *, int,
 /* Determines whether an ENUMERAL_TYPE has defined the list of constants. */
 #define ENUM_IS_OPAQUE(NODE) (ENUMERAL_TYPE_CHECK (NODE)->base.private_flag)
 
+/* Determines whether a VIEW_CONVERT_EXPR node is used to create const
+   qualified variant of its first operand (used by C++ contracts).  */
+#define CONST_WRAPPER_P(NODE) \
+  (TREE_CHECK (NODE, VIEW_CONVERT_EXPR)->base.private_flag)
+
 /* In an expr node (usually a conversion) this means the node was made
    implicitly and should not lead to any sort of warning.  In a decl node,
    warnings concerning the decl should be suppressed.  This is used at
@@ -974,13 +979,7 @@ extern void omp_clause_range_check_failed (const_tree, const char *, int,
       || flag_wrapv))
 
 /* True if overflow is undefined for the given integral or pointer type.
-   We may optimize on the assumption that values in the type never overflow.
-
-   IMPORTANT NOTE: Any optimization based on TYPE_OVERFLOW_UNDEFINED
-   must issue a warning based on warn_strict_overflow.  In some cases
-   it will be appropriate to issue the warning immediately, and in
-   other cases it will be appropriate to simply set a flag and let the
-   caller decide whether a warning is appropriate or not.  */
+   We may optimize on the assumption that values in the type never overflow.  */
 #define TYPE_OVERFLOW_UNDEFINED(TYPE)				\
   (POINTER_TYPE_P (TYPE)					\
    ? !flag_wrapv_pointer					\
@@ -1239,6 +1238,12 @@ extern void omp_clause_range_check_failed (const_tree, const char *, int,
 /* In a TREE_LIST node.  */
 #define TREE_PURPOSE(NODE) (TREE_LIST_CHECK (NODE)->list.purpose)
 #define TREE_VALUE(NODE) (TREE_LIST_CHECK (NODE)->list.value)
+
+/* In TREE_VALUE of an attribute this means the attribute is never equal to
+   different attribute with the same name and value and that the attribute
+   is order sensitive, the order of attributes with this flag on their
+   TREE_VALUE should be preserved.  */
+#define ATTR_UNIQUE_VALUE_P(NODE) (TREE_LIST_CHECK (NODE)->base.protected_flag)
 
 /* In a TREE_VEC node.  */
 #define TREE_VEC_LENGTH(NODE) (TREE_VEC_CHECK (NODE)->base.u.length)
@@ -2767,9 +2772,14 @@ extern tree vector_element_bits_tree (const_tree);
    vtable where the offset to the virtual base can be found.  */
 #define BINFO_VPTR_FIELD(NODE) (TREE_BINFO_CHECK (NODE)->binfo.vptr_field)
 
-/* Indicates the accesses this binfo has to its bases. The values are
+/* Indicates the accesses this binfo has to its bases.  The values are
    access_public_node, access_protected_node or access_private_node.
-   If this array is not present, public access is implied.  */
+   If this vector is not present, public access is implied.  If present,
+   the vector should have BINFO_N_BASE_BINFOS or larger length.  Elements
+   beyond BINFO_N_BASE_BINFOS are base attributes instead of the
+   access_p*_node values for base with index IDX at IDX + BINFO_N_BASE_BINFOS
+   index.  If that is beyond the length of the vector, no attributes for
+   that base is implied.  */
 #define BINFO_BASE_ACCESSES(NODE) \
   (TREE_BINFO_CHECK (NODE)->binfo.base_accesses)
 

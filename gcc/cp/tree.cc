@@ -46,8 +46,8 @@ static tree verify_stmt_tree_r (tree *, int *, void *);
 
 static tree handle_init_priority_attribute (tree *, tree, tree, int, bool *);
 static tree handle_abi_tag_attribute (tree *, tree, tree, int, bool *);
-static tree handle_contract_attribute (tree *, tree, tree, int, bool *);
 static tree handle_no_dangling_attribute (tree *, tree, tree, int, bool *);
+static tree handle_annotation_attribute (tree *, tree, tree, int, bool *);
 
 /* If REF is an lvalue, returns the kind of lvalue that REF is.
    Otherwise, returns clk_none.  */
@@ -568,6 +568,7 @@ builtin_valid_in_constant_expr_p (const_tree decl)
 	  case CP_BUILT_IN_IS_CORRESPONDING_MEMBER:
 	  case CP_BUILT_IN_IS_POINTER_INTERCONVERTIBLE_WITH_CLASS:
 	  case CP_BUILT_IN_EH_PTR_ADJUST_REF:
+	  case CP_BUILT_IN_IS_STRING_LITERAL:
 	    return true;
 	  default:
 	    break;
@@ -1467,6 +1468,27 @@ c_build_qualified_type (tree type, int type_quals, tree /* orig_qual_type */,
 			size_t /* orig_qual_indirect */)
 {
   return cp_build_qualified_type (type, type_quals);
+}
+
+/* Implementation of the build_lang_qualified_type langhook.  */
+tree
+cxx_build_lang_qualified_type (tree type, tree otype, int type_quals)
+{
+  /* Only handle ARRAY_TYPEs using cp_build_qualified_type, so that
+     quals are pushed to the element type.  That is needed for PR101312.
+     For other types just keep using build_qualified_type with
+     cxx_copy_lang_qualifiers if needed, otherwise we can run into
+     issues with FUNCTION_TYPEs with cv-qualifier-seq vs. type-specifier,
+     or REFERENCE_TYPE which will error on certain TYPE_QUALS.  */
+  if (TREE_CODE (type) == ARRAY_TYPE)
+    return cp_build_qualified_type (type, type_quals);
+  else
+    {
+      tree ret = build_qualified_type (type, type_quals);
+      if (otype)
+	ret = cxx_copy_lang_qualifiers (ret, otype);
+      return ret;
+    }
 }
 
 
@@ -2780,7 +2802,7 @@ maybe_get_fns (tree from)
   if (OVL_P (from))
     return from;
 
-  return NULL;
+  return NULL_TREE;
 }
 
 /* FROM refers to an overload set.  Return that set (or die).  */
@@ -2800,6 +2822,17 @@ tree
 get_first_fn (tree from)
 {
   return OVL_FIRST (get_fns (from));
+}
+
+/* Return the first function of the overload set FROM refers to if
+   there is an overload set, otherwise return FROM unchanged.  */
+
+tree
+maybe_get_first_fn (tree from)
+{
+  if (tree res = maybe_get_fns (from))
+    return OVL_FIRST (res);
+  return from;
 }
 
 /* Return the scope where the overloaded functions OVL were found.  */
@@ -2846,6 +2879,15 @@ cxx_printable_name_internal (tree decl, int v, bool translate)
       /* yes, so return it.  */
       return print_ring[i];
 
+  const char *ret = lang_decl_name (decl, v, translate);
+
+  /* The lang_decl_name call could have called this function recursively,
+     so check again.  */
+  for (i = 0; i < PRINT_RING_SIZE; i++)
+    if (uid_ring[i] == DECL_UID (decl) && translate == trans_ring[i])
+      /* yes, so return it.  */
+      return print_ring[i];
+
   if (++ring_counter == PRINT_RING_SIZE)
     ring_counter = 0;
 
@@ -2865,7 +2907,7 @@ cxx_printable_name_internal (tree decl, int v, bool translate)
 
   free (print_ring[ring_counter]);
 
-  print_ring[ring_counter] = xstrdup (lang_decl_name (decl, v, translate));
+  print_ring[ring_counter] = xstrdup (ret);
   uid_ring[ring_counter] = DECL_UID (decl);
   trans_ring[ring_counter] = translate;
   return print_ring[ring_counter];
@@ -3847,7 +3889,8 @@ build_min_non_dep_op_overload (enum tree_code op,
 
 	  if (TREE_CODE (non_dep) != CALL_EXPR)
 	    {
-	      gcc_checking_assert (COMPARISON_CLASS_P (non_dep));
+	      gcc_checking_assert (COMPARISON_CLASS_P (non_dep)
+				   || TREE_CODE (non_dep) == SPACESHIP_EXPR);
 	      if (reversed)
 		std::swap (op0, op1);
 	      return build_min_non_dep (TREE_CODE (non_dep), non_dep, op0, op1);
@@ -4081,50 +4124,6 @@ called_fns_equal (tree t1, tree t2)
     return cp_tree_equal (t1, t2);
 }
 
-bool comparing_override_contracts;
-
-/* In a component reference, return the innermost object of
-   the postfix-expression.  */
-
-static tree
-get_innermost_component (tree t)
-{
-  gcc_assert (TREE_CODE (t) == COMPONENT_REF);
-  while (TREE_CODE (t) == COMPONENT_REF)
-    t = TREE_OPERAND (t, 0);
-  return t;
-}
-
-/* Returns true if T is a possibly converted 'this' or '*this' expression.  */
-
-static bool
-is_this_expression (tree t)
-{
-  t = get_innermost_component (t);
-  /* See through deferences and no-op conversions.  */
-  if (INDIRECT_REF_P (t))
-    t = TREE_OPERAND (t, 0);
-  if (TREE_CODE (t) == NOP_EXPR)
-    t = TREE_OPERAND (t, 0);
-  return is_this_parameter (t);
-}
-
-static bool
-comparing_this_references (tree t1, tree t2)
-{
-  return is_this_expression (t1) && is_this_expression (t2);
-}
-
-static bool
-equivalent_member_references (tree t1, tree t2)
-{
-  if (!comparing_this_references (t1, t2))
-    return false;
-  t1 = TREE_OPERAND (t1, 1);
-  t2 = TREE_OPERAND (t2, 1);
-  return t1 == t2;
-}
-
 /* Return truthvalue of whether T1 is the same tree structure as T2.
    Return 1 if they are the same. Return 0 if they are different.  */
 
@@ -4140,6 +4139,26 @@ cp_tree_equal (tree t1, tree t2)
 
   code1 = TREE_CODE (t1);
   code2 = TREE_CODE (t2);
+
+  if (comparing_contracts)
+    {
+      /* When comparing contracts, one declaration may already be
+	 genericized. Check for invisible references and unravel them
+	 for comparison purposes. Remember that a parameter is an invisible
+	 reference so we can compare the parameter types accordingly.  */
+      if (code1 == VIEW_CONVERT_EXPR
+	  && is_invisiref_parm (TREE_OPERAND(t1, 0)))
+	{
+	  t1 = TREE_OPERAND(t1, 0);
+	  code1 = TREE_CODE(t1);
+	}
+      if (code2 == VIEW_CONVERT_EXPR
+	  && is_invisiref_parm (TREE_OPERAND(t2, 0)))
+	{
+	  t2 = TREE_OPERAND(t2, 0);
+	  code2 = TREE_CODE(t2);
+	}
+    }
 
   if (code1 != code2)
     return false;
@@ -4303,8 +4322,14 @@ cp_tree_equal (tree t1, tree t2)
 	   with parameters with identical contexts.  */
 	return false;
 
-      if (same_type_p (TREE_TYPE (t1), TREE_TYPE (t2)))
+      if (same_type_p (TREE_TYPE (t1), TREE_TYPE (t2)) || comparing_contracts)
 	{
+	  /* When comparing contracts, we already know the declarations match,
+	    and that the arguments have the same type. If one of the declarations
+	    has been genericised, then the type of arguments in that declaration
+	    will be adjusted for an invisible reference and the type comparison
+	    would spuriosly fail. The only thing we care about when comparing
+	    contractsis that we're using the same parameter.  */
 	  if (DECL_ARTIFICIAL (t1) ^ DECL_ARTIFICIAL (t2))
 	    return false;
 	  if (CONSTRAINT_VAR_P (t1) ^ CONSTRAINT_VAR_P (t2))
@@ -4501,12 +4526,11 @@ cp_tree_equal (tree t1, tree t2)
 	return false;
       return true;
 
-    case COMPONENT_REF:
-      /* If we're comparing contract conditions of overrides, member references
-	 compare equal if they designate the same member.  */
-      if (comparing_override_contracts)
-	return equivalent_member_references (t1, t2);
-      break;
+    case REFLECT_EXPR:
+      if (!cp_tree_equal (REFLECT_EXPR_HANDLE (t1), REFLECT_EXPR_HANDLE (t2))
+	  || REFLECT_EXPR_KIND (t1) != REFLECT_EXPR_KIND (t2))
+	return false;
+      return true;
 
     default:
       break;
@@ -5588,10 +5612,6 @@ static const attribute_spec std_attributes[] =
     handle_carries_dependency_attribute, NULL },
   { "indeterminate", 0, 0, true, false, false, false,
     handle_indeterminate_attribute, NULL },
-  { "pre", 0, -1, false, false, false, false,
-    handle_contract_attribute, NULL },
-  { "post", 0, -1, false, false, false, false,
-    handle_contract_attribute, NULL }
 };
 
 const scoped_attribute_specs std_attribute_table =
@@ -5603,7 +5623,9 @@ const scoped_attribute_specs std_attribute_table =
 static const attribute_spec internal_attributes[] =
 {
   { "aligned", 0, 1, false, false, false, false,
-    handle_alignas_attribute, attr_aligned_exclusions }
+    handle_alignas_attribute, attr_aligned_exclusions },
+  { "annotation ", 1, 1, false, false, false, false,
+    handle_annotation_attribute, NULL }
 };
 
 const scoped_attribute_specs internal_attribute_table =
@@ -5857,17 +5879,6 @@ handle_abi_tag_attribute (tree* node, tree name, tree args,
   return NULL_TREE;
 }
 
-/* Perform checking for contract attributes.  */
-
-tree
-handle_contract_attribute (tree *ARG_UNUSED (node), tree ARG_UNUSED (name),
-			   tree ARG_UNUSED (args), int ARG_UNUSED (flags),
-			   bool *ARG_UNUSED (no_add_attrs))
-{
-  /* TODO: Is there any checking we could do here?  */
-  return NULL_TREE;
-}
-
 /* Handle a "no_dangling" attribute; arguments as in
    struct attribute_spec.handler.  */
 
@@ -5888,6 +5899,76 @@ handle_no_dangling_attribute (tree *node, tree name, tree args, int,
       *no_add_attrs = true;
     }
 
+  return NULL_TREE;
+}
+
+/* Perform checking for annotations.  */
+
+tree
+handle_annotation_attribute (tree *node, tree ARG_UNUSED (name),
+			     tree args, int ARG_UNUSED (flags),
+			     bool *no_add_attrs)
+{
+  if (TYPE_P (*node)
+      && TREE_CODE (*node) != ENUMERAL_TYPE
+      && TREE_CODE (*node) != RECORD_TYPE
+      && TREE_CODE (*node) != UNION_TYPE)
+    {
+      error ("annotation on a type other than class or enumeration "
+	     "definition");
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*node) == LABEL_DECL)
+    {
+      error ("annotation applied to a label");
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  if (TREE_CODE (*node) == FIELD_DECL && DECL_UNNAMED_BIT_FIELD (*node))
+    {
+      error ("annotation on unnamed bit-field");
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  if (!type_dependent_expression_p (TREE_VALUE (args)))
+    {
+      if (!structural_type_p (TREE_TYPE (TREE_VALUE (args))))
+	{
+	  auto_diagnostic_group d;
+	  error ("annotation does not have structural type");
+	  structural_type_p (TREE_TYPE (TREE_VALUE (args)), true);
+	  *no_add_attrs = true;
+	  return NULL_TREE;
+	}
+      if (CLASS_TYPE_P (TREE_TYPE (TREE_VALUE (args))))
+	{
+	  tree arg = make_tree_vec (1);
+	  tree type = TREE_TYPE (TREE_VALUE (args));
+	  TREE_VEC_ELT (arg, 0)
+	    = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST,
+			       /*rvalue=*/false);
+	  if (!is_xible (INIT_EXPR, type, arg))
+	    {
+	      auto_diagnostic_group d;
+	      error ("annotation does not have copy constructible type");
+	      is_xible (INIT_EXPR, type, arg, /*explain=*/true);
+	      *no_add_attrs = true;
+	      return NULL_TREE;
+	    }
+	}
+    }
+  if (!processing_template_decl)
+    {
+      location_t loc = EXPR_LOCATION (TREE_VALUE (args));
+      TREE_VALUE (args) = cxx_constant_value (TREE_VALUE (args));
+      if (error_operand_p (TREE_VALUE (args)))
+        *no_add_attrs = true;
+      auto suppression
+	= make_temp_override (suppress_location_wrappers, 0);
+      TREE_VALUE (args) = maybe_wrap_with_location (TREE_VALUE (args), loc);
+    }
+  ATTR_UNIQUE_VALUE_P (args) = 1;
   return NULL_TREE;
 }
 
@@ -6358,10 +6439,13 @@ decl_linkage (tree decl)
     {
       /* But this could be a typedef name for linkage purposes, in which
 	 case we're interested in the linkage of the main decl.  */
-      if (decl == TYPE_NAME (TYPE_MAIN_VARIANT (TREE_TYPE (decl)))
-	  /* Likewise for the injected-class-name.  */
-	  || DECL_SELF_REFERENCE_P (decl))
-	decl = TYPE_MAIN_DECL (TREE_TYPE (decl));
+      tree type = TREE_TYPE (decl);
+      if (type == error_mark_node)
+	return lk_none;
+      else if (decl == TYPE_NAME (TYPE_MAIN_VARIANT (type))
+	       /* Likewise for the injected-class-name.  */
+	       || DECL_SELF_REFERENCE_P (decl))
+	decl = TYPE_MAIN_DECL (type);
       else
 	return lk_none;
     }
@@ -6809,6 +6893,14 @@ maybe_adjust_arg_pos_for_attribute (const_tree fndecl)
   /* The manual states that it's the user's responsibility to account
      for the implicit this parameter.  */
   return n > 0 ? n - 1 : 0;
+}
+
+/* True if ATTR is annotation.  */
+
+bool
+annotation_p (tree attr)
+{
+  return is_attribute_p ("annotation ", get_attribute_name (attr));
 }
 
 

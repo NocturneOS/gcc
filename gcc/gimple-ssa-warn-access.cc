@@ -1701,6 +1701,7 @@ new_delete_mismatch_p (const demangle_component &newc,
       return new_delete_mismatch_p (*newc.u.s_dtor.name,
 				    *delc.u.s_dtor.name);
 
+    case DEMANGLE_COMPONENT_EXTENDED_BUILTIN_TYPE:
     case DEMANGLE_COMPONENT_BUILTIN_TYPE:
       {
 	/* The demangler API provides no better way to compare built-in
@@ -2246,11 +2247,21 @@ pass_waccess::~pass_waccess ()
 }
 
 void
-pass_waccess::set_pass_param (unsigned int n, bool early)
+pass_waccess::set_pass_param (unsigned int n, bool param)
 {
-  gcc_assert (n == 0);
-
-  m_early_checks_p = early;
+  /* Check for dangling pointers in the earliest runs of the pass.
+     The latest point -Wdangling-pointer should run is just before
+     loop unrolling which introduces uses after clobbers.  Most cases
+     can be detected without optimization; cases where the address of
+     the local variable is passed to and then returned from a user-
+     defined function before its lifetime ends and the returned pointer
+     becomes dangling depend on inlining.  */
+  if (n == 0)
+    m_early_checks_p = param;
+  else if (n == 1)
+    m_check_dangling_p = param;
+  else
+    __builtin_unreachable ();
 }
 
 /* Return true when any checks performed by the pass are enabled.  */
@@ -4380,6 +4391,16 @@ pass_waccess::check_call (gcall *stmt)
       && gimple_call_internal_fn (stmt) == IFN_ASAN_MARK)
     return;
 
+  if (m_check_dangling_p)
+    {
+      check_call_dangling (stmt);
+
+      /* Don't do any other checks when doing dangling pointer checks the
+	 second time.  */
+      if (!m_early_checks_p)
+	return;
+    }
+
   if (gimple_call_builtin_p (stmt, BUILT_IN_NORMAL))
     check_builtin (stmt);
 
@@ -4397,7 +4418,6 @@ pass_waccess::check_call (gcall *stmt)
     }
 
   check_call_access (stmt);
-  check_call_dangling (stmt);
 
   if (m_early_checks_p)
     return;
@@ -4799,15 +4819,6 @@ pass_waccess::execute (function *fun)
   /* Create a new ranger instance and associate it with FUN.  */
   m_ptr_qry.rvals = enable_ranger (fun);
   m_func = fun;
-
-  /* Check for dangling pointers in the earliest run of the pass.
-     The latest point -Wdangling-pointer should run is just before
-     loop unrolling which introduces uses after clobbers.  Most cases
-     can be detected without optimization; cases where the address of
-     the local variable is passed to and then returned from a user-
-     defined function before its lifetime ends and the returned pointer
-     becomes dangling depend on inlining.  */
-  m_check_dangling_p = m_early_checks_p;
 
   auto_bitmap bb_uids_set (&bitmap_default_obstack);
   m_bb_uids_set = bb_uids_set;

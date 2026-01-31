@@ -3038,6 +3038,7 @@ emit_group_load_1 (rtx *tmps, rtx dst, rtx orig_src, tree type,
       src = orig_src;
       if (!MEM_P (orig_src)
 	  && (!REG_P (orig_src) || HARD_REGISTER_P (orig_src))
+	  && GET_CODE (orig_src) != CONCAT
 	  && !CONSTANT_P (orig_src))
 	{
 	  gcc_assert (GET_MODE (orig_src) != VOIDmode);
@@ -7579,8 +7580,13 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    if (cleared && initializer_zerop (value))
 	      continue;
 
-	    if (tree_fits_uhwi_p (DECL_SIZE (field)))
-	      bitsize = tree_to_uhwi (DECL_SIZE (field));
+	    /* Variable sized arrays are ignored.  */
+	    tree decl_size = DECL_SIZE (field);
+	    if (!decl_size)
+	      continue;
+
+	    if (tree_fits_uhwi_p (decl_size))
+	      bitsize = tree_to_uhwi (decl_size);
 	    else
 	      gcc_unreachable ();
 
@@ -8012,7 +8018,8 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    && VECTOR_BOOLEAN_TYPE_P (type)
 	    && SCALAR_INT_MODE_P (TYPE_MODE (type))
 	    && (elt = uniform_vector_p (exp))
-	    && !VECTOR_TYPE_P (TREE_TYPE (elt)))
+	    && !VECTOR_TYPE_P (TREE_TYPE (elt))
+	    && !BYTES_BIG_ENDIAN)
 	  {
 	    rtx op0 = force_reg (TYPE_MODE (TREE_TYPE (elt)),
 				 expand_normal (elt));
@@ -8022,7 +8029,7 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 	    /* Ensure no excess bits are set.
 	       GCN needs this for nunits < 64.
 	       x86 needs this for nunits < 8.  */
-	    auto nunits = TYPE_VECTOR_SUBPARTS (type).to_constant ();
+	    unsigned int nunits = TYPE_VECTOR_SUBPARTS (type).to_constant ();
 	    if (maybe_ne (GET_MODE_PRECISION (mode), nunits))
 	      tmp = expand_binop (mode, and_optab, tmp,
 				  GEN_INT ((HOST_WIDE_INT_1U << nunits) - 1),
@@ -12330,13 +12337,26 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 	   and need be, put it there.  */
 	else if (CONSTANT_P (op0) || (!MEM_P (op0) && must_force_mem))
 	  {
+	    machine_mode tem_mode = TYPE_MODE (TREE_TYPE (tem));
 	    poly_int64 size;
 	    if (!poly_int_tree_p (TYPE_SIZE_UNIT (TREE_TYPE (tem)), &size))
 	      size = max_int_size_in_bytes (TREE_TYPE (tem));
-	    memloc = assign_stack_local (TYPE_MODE (TREE_TYPE (tem)), size,
-					 TREE_CODE (tem) == SSA_NAME
-					 ? TYPE_ALIGN (TREE_TYPE (tem))
-					 : get_object_alignment (tem));
+	    unsigned int align = TREE_CODE (tem) == SSA_NAME
+				 ? TYPE_ALIGN (TREE_TYPE (tem))
+				 : get_object_alignment (tem);
+	    if (STRICT_ALIGNMENT)
+	      {
+		/* For STRICT_ALIGNMENT targets, when we force the operand to
+		   memory, we may need to increase the alignment to meet the
+		   expectation in later RTL lowering passes.  The increased
+		   alignment is capped by MAX_SUPPORTED_STACK_ALIGNMENT.  */
+		if (tem_mode != BLKmode)
+		  align = MAX (align, GET_MODE_ALIGNMENT (tem_mode));
+		else
+		  align = MAX (align, TYPE_ALIGN (TREE_TYPE (tem)));
+		align = MIN (align, (unsigned) MAX_SUPPORTED_STACK_ALIGNMENT);
+	      }
+	    memloc = assign_stack_local (tem_mode, size, align);
 	    emit_move_insn (memloc, op0);
 	    op0 = memloc;
 	    clear_mem_expr = true;

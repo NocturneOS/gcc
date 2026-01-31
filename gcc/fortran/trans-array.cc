@@ -2248,6 +2248,11 @@ gfc_trans_array_constructor_value (stmtblock_t * pblock,
 	    {
 	      /* Scalar values.  */
 	      gfc_init_se (&se, NULL);
+	      if (c->expr->ts.type == BT_DERIVED
+		  && c->expr->ts.u.derived->attr.pdt_type
+		  && c->expr->expr_type == EXPR_STRUCTURE)
+		c->expr->must_finalize = 1;
+
 	      gfc_trans_array_ctor_element (&body, desc, *poffset,
 					    &se, c->expr);
 
@@ -3088,6 +3093,10 @@ trans_array_constructor (gfc_ss * ss, locus * where)
   finalize_required = expr->must_finalize;
   if (expr->ts.type == BT_DERIVED && expr->ts.u.derived->attr.alloc_comp)
     finalize_required = true;
+
+  if (expr->ts.type == BT_DERIVED && expr->ts.u.derived->attr.pdt_type)
+   finalize_required = true;
+
   gfc_trans_array_constructor_value (&outer_loop->pre,
 				     finalize_required ? &finalblock : NULL,
 				     type, desc, c, &offset, &offsetvar,
@@ -11054,9 +11063,14 @@ structure_alloc_comps (gfc_symbol * der_type, tree decl, tree dest,
 					  copy_wrapper);
 	      gfc_add_expr_to_block (&fnblock, call);
 	    }
+	  /* For allocatable arrays with nested allocatable components,
+	     add_when_allocated already includes gfc_duplicate_allocatable
+	     (from the recursive structure_alloc_comps call at line 10290-10293),
+	     so we must not call it again here.  PR121628 added an
+	     add_when_allocated != NULL clause that was redundant for scalars
+	     (already handled by !c->as) and wrong for arrays (double alloc).  */
 	  else if (c->attr.allocatable && !c->attr.proc_pointer
-		   && (add_when_allocated != NULL_TREE
-		       || !cmp_has_alloc_comps
+		   && (!cmp_has_alloc_comps
 		       || !c->as
 		       || c->attr.codimension
 		       || caf_in_coarray (caf_mode)))
@@ -11446,12 +11460,12 @@ gfc_nullify_alloc_comp (gfc_symbol * der_type, tree decl, int rank,
 
 tree
 gfc_deallocate_alloc_comp (gfc_symbol * der_type, tree decl, int rank,
-			   int caf_mode)
+			   int caf_mode, bool no_finalization)
 {
   return structure_alloc_comps (der_type, decl, NULL_TREE, rank,
 				DEALLOCATE_ALLOC_COMP,
 				GFC_STRUCTURE_CAF_MODE_ENABLE_COARRAY | caf_mode,
-				NULL);
+				NULL, no_finalization);
 }
 
 tree

@@ -10436,30 +10436,14 @@ loongarch_expand_vector_init_same (rtx target, rtx vals, unsigned nvar)
 	}
     }
 
-  if (imode == GET_MODE (same))
-    temp = same;
-  else if (GET_MODE_SIZE (imode) >= UNITS_PER_WORD)
+  if (GET_CODE (same) == MEM && GET_MODE (same) != imode)
     {
-      if (GET_CODE (same) == MEM)
-	{
-	  rtx reg_tmp = gen_reg_rtx (GET_MODE (same));
-	  loongarch_emit_move (reg_tmp, same);
-	  temp = simplify_gen_subreg (imode, reg_tmp, GET_MODE (reg_tmp), 0);
-	}
-      else
-	temp = simplify_gen_subreg (imode, same, GET_MODE (same), 0);
+      rtx reg_tmp = gen_reg_rtx (GET_MODE (same));
+      loongarch_emit_move (reg_tmp, same);
+      temp = lowpart_subreg (imode, reg_tmp, GET_MODE (reg_tmp));
     }
   else
-    {
-      if (GET_CODE (same) == MEM)
-	{
-	  rtx reg_tmp = gen_reg_rtx (GET_MODE (same));
-	  loongarch_emit_move (reg_tmp, same);
-	  temp = lowpart_subreg (imode, reg_tmp, GET_MODE (reg_tmp));
-	}
-      else
-	temp = lowpart_subreg (imode, same, GET_MODE (same));
-    }
+    temp = same;
 
   temp = force_reg (imode, temp);
 
@@ -12165,7 +12149,8 @@ loongarch_generate_version_dispatcher_body (void *node_p)
    This assumes that FN1 and FN2 have the same signature.  */
 
 bool
-loongarch_option_same_function_versions (string_slice str1, string_slice str2)
+loongarch_option_same_function_versions (string_slice str1, const_tree,
+					 string_slice str2, const_tree)
 {
   loongarch_fmv_feature_mask feature_mask1;
   loongarch_fmv_feature_mask feature_mask2;

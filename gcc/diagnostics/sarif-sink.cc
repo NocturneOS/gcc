@@ -18,6 +18,8 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
+#include "config.h"
+
 #ifdef __MINGW32__
 #include <winsock2.h>
 #include <afunix.h>
@@ -26,7 +28,6 @@ along with GCC; see the file COPYING3.  If not see
 #include <sys/socket.h>
 #endif
 
-#include "config.h"
 #define INCLUDE_LIST
 #define INCLUDE_MAP
 #define INCLUDE_STRING
@@ -95,6 +96,12 @@ class sarif_array_of_unique : public json::array
     for (size_t idx = 0; idx < length (); ++idx)
       if (json::object *obj = get (idx)->dyn_cast_object ())
 	obj->set_integer ("index", idx);
+  }
+
+  JsonElementType *
+  get_element (size_t i) const
+  {
+    return static_cast<JsonElementType *> ((*this)[i]);
   }
 
 private:
@@ -801,6 +808,10 @@ public:
 
   void
   report_global_digraph (const lazily_created<digraphs::digraph> &);
+
+  void
+  report_digraph_for_logical_location (const lazily_created<digraphs::digraph> &ldg,
+				       logical_locations::key);
 
   std::unique_ptr<sarif_result> take_current_result ()
   {
@@ -1946,6 +1957,29 @@ report_global_digraph (const lazily_created<digraphs::digraph> &ldg)
   /* Presumably the location manager must be nullptr; see
      https://github.com/oasis-tcs/sarif-spec/issues/712  */
   m_run_graphs->append (make_sarif_graph (dg, this, nullptr));
+}
+
+void
+sarif_builder::
+report_digraph_for_logical_location (const lazily_created<digraphs::digraph> &ldg,
+				     logical_locations::key logical_loc)
+{
+  /* Adding the graph to the logical location itself would break consolidation
+     of logical locations, as the objects would no longer be equal.
+     So we add the graph to the per-run graphs, but add a logicalLocation
+     property to it.  */
+
+  auto &dg = ldg.get_or_create ();
+
+  /* Presumably the location manager must be nullptr; see
+     https://github.com/oasis-tcs/sarif-spec/issues/712  */
+  auto graph_obj = make_sarif_graph (dg, this, nullptr);
+
+  auto &bag = graph_obj->get_or_create_properties ();
+  bag.set ("logicalLocation",
+	   make_minimal_sarif_logical_location (logical_loc));
+
+  m_run_graphs->append (std::move (graph_obj));
 }
 
 /* Create a top-level object, and add it to all the results
@@ -4046,6 +4080,13 @@ public:
     final override
   {
     m_builder.report_global_digraph (ldg);
+  }
+
+  void
+  report_digraph_for_logical_location (const lazily_created<digraphs::digraph> &ldg,
+				       logical_locations::key key) final override
+  {
+    m_builder.report_digraph_for_logical_location (ldg, key);
   }
 
   sarif_builder &get_builder () { return m_builder; }

@@ -70,8 +70,10 @@ void _libga68_bounds_mismatch (const char *filename, unsigned int lineno,
 
 void _libga68_init_heap (void) GA68_HIDDEN;
 void *_libga68_malloc (size_t size);
+void *_libga68_malloc_leaf (size_t size);
 void *_libga68_malloc_internal (size_t size) GA68_HIDDEN;
 void *_libga68_realloc (void *ptr, size_t size) GA68_HIDDEN;
+void *_libga68_realloc_internal (void *ptr, size_t size) GA68_HIDDEN;
 void *_libga68_realloc_unchecked (void *ptr, size_t size) GA68_HIDDEN;
 void _libga68_free_internal (void *ptr) GA68_HIDDEN;
 
@@ -84,6 +86,7 @@ long double _libga68_longlongrandom (void);
 /* ga68-posix.c  */
 
 int _libga68_posixerrno (void);
+void _libga68_posixexit (int) __attribute__ ((__noreturn__));
 void _libga68_posixperror (uint32_t *s, size_t len, size_t stride);
 uint32_t *_libga68_posixstrerror (int errnum, size_t *len);
 long long int _libga68_posixfsize (int fd);
@@ -115,8 +118,8 @@ int _libga68_u32_cmp2 (const uint32_t *s1, size_t n1, size_t stride1,
 		       const uint32_t *s2, size_t n2, size_t stride2);
 int _libga68_u8_uctomb (uint8_t *s, uint32_t uc, ptrdiff_t n) GA68_HIDDEN;
 int _libga68_u8_mbtouc (uint32_t *puc, const uint8_t *s, size_t n) GA68_HIDDEN;
-uint8_t *_libga68_u32_to_u8 (const uint32_t *s, size_t n, size_t stride,
-			     uint8_t *resultbuf, size_t *lengthp) GA68_HIDDEN;
+char *_libga68_u32_to_u8 (const uint32_t *s, size_t n, size_t stride,
+			  size_t *lengthp) GA68_HIDDEN;
 uint32_t *_libga68_u8_to_u32 (const uint8_t *s, size_t n,
 			      uint32_t *resultbuf, size_t *lengthp);
 
@@ -124,7 +127,5 @@ uint32_t *_libga68_u8_to_u32 (const uint8_t *s, size_t n,
 
 extern int _libga68_argc;
 extern char **_libga68_argv;
-
-void _libga68_set_exit_status (int status);
 
 #endif /* ! GA68_H */

@@ -292,6 +292,12 @@ public:
   libgdiagnostics::message_buffer m_label;
 };
 
+struct embedded_link
+{
+  std::string text;
+  std::string destination;
+};
+
 using id_map = std::map<std::string, const json::string *>;
 
 class sarif_replayer
@@ -723,6 +729,10 @@ private:
       return nullptr;
     return sub;
   }
+
+  void
+  append_embeddded_link (libgdiagnostics::message_buffer &result,
+			 const embedded_link &link);
 
   /* The manager to replay the SARIF files to.  */
   libgdiagnostics::manager m_output_mgr;
@@ -1499,12 +1509,6 @@ maybe_consume_placeholder (const char *&iter_src, unsigned *out_arg_idx)
   return false;
 }
 
-struct embedded_link
-{
-  std::string text;
-  std::string destination;
-};
-
 /*  If ITER_SRC starts with an embedded link as per §3.11.6, advance ITER_SRC
     to immediately beyond the link, and return the link.
 
@@ -1576,6 +1580,21 @@ maybe_consume_embedded_link (const char *&iter_src)
 
   iter_src = iter;
   return std::make_unique<embedded_link> (std::move (result));
+}
+
+void
+sarif_replayer::append_embeddded_link (libgdiagnostics::message_buffer &result,
+				       const embedded_link &link)
+{
+  /* We can't yet decode intra-sarif links, so simply use their text.  */
+  if (!strncmp (link.destination.c_str (), "sarif:/", strlen ("sarif:/")))
+    {
+      result += link.text.c_str ();
+      return;
+    }
+  result.begin_url (link.destination.c_str ());
+  result += link.text.c_str ();
+  result.end_url ();
 }
 
 /* Lookup the plain text string within a result.message (§3.27.11),
@@ -1662,13 +1681,7 @@ make_plain_text_within_result_message (const json::object *tool_component_obj,
 	    }
 	}
       else if (auto link = maybe_consume_embedded_link (iter_src))
-	{
-	  result.begin_url (link->destination.c_str ());
-	  result += link->text.c_str ();
-	  result.end_url ();
-	  /* TODO: potentially could try to convert
-	     intra-sarif links into event ids.  */
-	}
+	append_embeddded_link (result, *link);
       else
 	{
 	  result += ch;
@@ -2303,8 +2316,9 @@ sarif_replayer::handle_graph_object (const json::object &graph_json_obj,
   id_map edge_id_map;
 
   if (auto properties = maybe_get_property_bag (graph_json_obj))
-    private_diagnostic_graph_set_property_bag (*out_graph.m_inner,
-					       properties->clone_as_object ());
+    private_diagnostic_graph_set_property_bag
+      (*out_graph.m_inner,
+       properties->clone_as_object ());
 
   // §3.39.2: MAY contain a "description" property
   const property_spec_ref description_prop

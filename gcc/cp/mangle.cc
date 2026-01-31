@@ -478,7 +478,7 @@ add_substitution (tree node)
 }
 
 /* Helper function for find_substitution.  Returns nonzero if NODE,
-   which may be a decl or a CLASS_TYPE, is a template-id with template
+   which may be a class or a class template, is a template-id with template
    name of substitution_index[INDEX] in the ::std namespace, with
    global module attachment.  */
 
@@ -486,10 +486,28 @@ static bool
 is_std_substitution (const tree node,
 		     const substitution_identifier_index_t index)
 {
-  tree type = NULL;
-  tree decl = NULL;
+  tree type = NULL_TREE;
+  tree decl = NULL_TREE;
 
-  if (DECL_P (node))
+  auto std_substitution_p = [&] (tree decl, tree type)
+    {
+      if (!DECL_NAMESPACE_STD_P (CP_DECL_CONTEXT (decl)))
+	return false;
+
+      if (!(TYPE_LANG_SPECIFIC (type) && TYPE_TEMPLATE_INFO (type)))
+	return false;
+
+      tree tmpl = TYPE_TI_TEMPLATE (type);
+      if (DECL_NAME (tmpl) != subst_identifiers[index])
+	return false;
+
+      if (modules_p () && get_originating_module (tmpl, true) >= 0)
+	return false;
+
+      return true;
+    };
+
+  if (TREE_CODE (node) == TYPE_DECL || DECL_CLASS_TEMPLATE_P (node))
     {
       type = TREE_TYPE (node);
       decl = node;
@@ -500,23 +518,17 @@ is_std_substitution (const tree node,
       decl = TYPE_NAME (node);
     }
   else
-    /* These are not the droids you're looking for.  */
-    return false;
+    {
+      /* We used to accept all _DECL nodes in this function but now we
+	 only accept classes or class templates.  Verify that we don't
+	 return false for something that used to yield true.  */
+      gcc_checking_assert (!DECL_P (node)
+			   || !std_substitution_p (node, TREE_TYPE (node)));
+      /* These are not the droids you're looking for.  */
+      return false;
+    }
 
-  if (!DECL_NAMESPACE_STD_P (CP_DECL_CONTEXT (decl)))
-    return false;
-
-  if (!(TYPE_LANG_SPECIFIC (type) && TYPE_TEMPLATE_INFO (type)))
-    return false;
-
-  tree tmpl = TYPE_TI_TEMPLATE (type);
-  if (DECL_NAME (tmpl) != subst_identifiers[index])
-    return false;
-
-  if (modules_p () && get_originating_module (tmpl, true) >= 0)
-    return false;
-
-  return true;
+  return std_substitution_p (decl, type);
 }
 
 /* Return the ABI tags (the TREE_VALUE of the "abi_tag" attribute entry) for T,
@@ -820,13 +832,6 @@ write_mangled_name (const tree decl, bool top_level)
       write_string ("_Z");
       write_encoding (decl);
     }
-
-  /* If this is the pre/post function for a guarded function, append
-     .pre/post, like something from create_virtual_clone.  */
-  if (DECL_IS_PRE_FN_P (decl))
-    write_string (".pre");
-  else if (DECL_IS_POST_FN_P (decl))
-    write_string (".post");
 
   /* If this is a coroutine helper, then append an appropriate string to
      identify which.  */
@@ -2439,6 +2444,7 @@ write_local_name (tree function, const tree local_entity,
                                 # class member access
      <type> ::= DT <expression> # decltype of an expression
      <type> ::= Dn              # decltype of nullptr
+     <type> ::= Dm		# decltype of ^^int
 
    TYPE is a type node.  */
 
@@ -2714,6 +2720,11 @@ write_type (tree type)
 	      write_string ("Dn");
 	      if (abi_check (7))
 		++is_builtin_type;
+	      break;
+
+	    case META_TYPE:
+	      write_string ("Dm");
+	      ++is_builtin_type;
 	      break;
 
 	    case TYPEOF_TYPE:
@@ -3467,7 +3478,8 @@ write_expression (tree expr)
     write_template_param (expr);
   /* Handle literals.  */
   else if (TREE_CODE_CLASS (code) == tcc_constant
-	   || code == CONST_DECL)
+	   || code == CONST_DECL
+	   || code == REFLECT_EXPR)
     write_template_arg_literal (expr);
   else if (code == EXCESS_PRECISION_EXPR
 	   && TREE_CODE (TREE_OPERAND (expr, 0)) == REAL_CST)
@@ -4104,6 +4116,140 @@ write_expression (tree expr)
     }
 }
 
+/* Non-terminal <reflection>.
+
+     <reflection> ::= nu				# null reflection
+		  ::= vl <expression>			# value
+		  ::= ob <expression>			# object
+		  ::= vr <variable name>		# variable
+		  ::= sb <sb name>			# structured binding
+		  ::= fn <function encoding>		# function
+		  ::= pa [ <nonnegative number> ] _ <encoding>	# fn param
+		  ::= en <prefix> <unqualified-name>	# enumerator
+		  ::= an [ <nonnegative number> ] _	# annotation
+		  ::= ta <alias prefix>			# type alias
+		  ::= ty <type>				# type
+		  ::= dm <prefix> <unqualified-name>	# ns data member
+		  ::= un <prefix> [ <nonnegative number> ] _ # unnamed bitfld
+		  ::= ct [ <prefix> ] <unqualified-name> # class template
+		  ::= ft [ <prefix> ] <unqualified-name> # function template
+		  ::= vt [ <prefix> ] <unqualified-name> # variable template
+		  ::= at [ <prefix> ] <unqualified-name> # alias template
+		  ::= co [ <prefix> ] <unqualified-name> # concept
+		  ::= na [ <prefix> ] <unqualified-name> # namespace alias
+		  ::= ns [ <prefix> ] <unqualified-name> # namespace
+		  ::= ng				# ^^::
+		  ::= ba [ <nonnegative number> ] _ <type> # dir. base cls rel
+		  ::= ds <type> _ [ <unqualified-name> ] _
+		      [ <alignment number> ] _ [ <bit-width number> ] _
+		      [ n ]				# data member spec  */
+
+static void
+write_reflection (tree refl)
+{
+  char prefix[3];
+  tree arg = reflection_mangle_prefix (refl, prefix);
+  write_string (prefix);
+  /* If there is no argument, nothing further needs to be mangled.  */
+  if (arg == NULL_TREE)
+    return;
+  if (strcmp (prefix, "vl") == 0 || strcmp (prefix, "ob") == 0)
+    write_expression (arg);
+  else if (strcmp (prefix, "vr") == 0 || strcmp (prefix, "sb") == 0)
+    write_name (arg, 0);
+  else if (strcmp (prefix, "fn") == 0)
+    write_encoding (arg);
+  else if (strcmp (prefix, "pa") == 0)
+    {
+      tree fn = DECL_CONTEXT (arg);
+      tree args = FUNCTION_FIRST_USER_PARM (fn);
+      int idx = 0;
+      while (arg != args)
+	{
+	  args = DECL_CHAIN (args);
+	  ++idx;
+	}
+      write_compact_number (idx);
+      write_encoding (fn);
+    }
+  else if (strcmp (prefix, "en") == 0)
+    {
+      write_prefix (decl_mangling_context (arg));
+      write_unqualified_name (arg);
+    }
+  else if (strcmp (prefix, "an") == 0)
+    write_compact_number (tree_to_uhwi (arg));
+  else if (strcmp (prefix, "ta") == 0)
+    {
+      arg = TYPE_NAME (arg);
+      write_prefix (arg);
+    }
+  else if (strcmp (prefix, "ty") == 0)
+    write_type (arg);
+  else if (strcmp (prefix, "dm") == 0)
+    {
+      tree ctx = decl_mangling_context (arg);
+      while (ctx && ANON_UNION_TYPE_P (ctx))
+	ctx = decl_mangling_context (TYPE_NAME (ctx));
+      write_prefix (ctx);
+      write_unqualified_name (arg);
+    }
+  else if (strcmp (prefix, "un") == 0)
+    {
+      tree ctx = DECL_CONTEXT (arg);
+      int idx = 0;
+      for (tree f = TYPE_FIELDS (ctx); f; f = DECL_CHAIN (f))
+	if (f == arg)
+	  break;
+	else if (TREE_CODE (f) == FIELD_DECL && DECL_UNNAMED_BIT_FIELD (f))
+	  ++idx;
+      write_prefix (decl_mangling_context (arg));
+      write_compact_number (idx);
+    }
+  else if (strcmp (prefix, "ct") == 0
+	   || strcmp (prefix, "ft") == 0
+	   || strcmp (prefix, "vt") == 0
+	   || strcmp (prefix, "at") == 0
+	   || strcmp (prefix, "co") == 0
+	   || strcmp (prefix, "na") == 0
+	   || strcmp (prefix, "ns") == 0)
+    {
+      write_prefix (decl_mangling_context (arg));
+      write_unqualified_name (arg);
+    }
+  else if (strcmp (prefix, "ba") == 0)
+    {
+      gcc_assert (TREE_CODE (arg) == TREE_BINFO);
+      tree c = arg, base_binfo;
+      while (BINFO_INHERITANCE_CHAIN (c))
+	c = BINFO_INHERITANCE_CHAIN (c);
+
+      unsigned idx;
+      for (idx = 0; BINFO_BASE_ITERATE (c, idx, base_binfo); idx++)
+	if (base_binfo == arg)
+	  break;
+      write_compact_number (idx);
+      write_type (BINFO_TYPE (c));
+    }
+  else if (strcmp (prefix, "ds") == 0)
+    {
+      gcc_assert (TREE_CODE (arg) == TREE_VEC);
+      write_type (TREE_VEC_ELT (arg, 0));
+      write_char ('_');
+      if (TREE_VEC_ELT (arg, 1))
+	write_unqualified_id (TREE_VEC_ELT (arg, 1));
+      write_char ('_');
+      if (TREE_VEC_ELT (arg, 2))
+	write_number (tree_to_shwi (TREE_VEC_ELT (arg, 2)), 0, 10);
+      write_char ('_');
+      if (TREE_VEC_ELT (arg, 3))
+	write_number (tree_to_shwi (TREE_VEC_ELT (arg, 3)), 0, 10);
+      write_char ('_');
+      if (integer_nonzerop (TREE_VEC_ELT (arg, 4)))
+	write_char ('n');
+    }
+}
+
 /* Literal subcase of non-terminal <template-arg>.
 
      "Literal arguments, e.g. "A<42L>", are encoded with their type
@@ -4192,6 +4338,10 @@ write_template_arg_literal (const tree value)
 	  break;
 	}
 
+      case REFLECT_EXPR:
+	write_reflection (value);
+	break;
+
       default:
 	gcc_unreachable ();
       }
@@ -4273,7 +4423,8 @@ write_template_arg (tree node)
     write_template_template_arg (node);
   else if ((TREE_CODE_CLASS (code) == tcc_constant && code != PTRMEM_CST)
 	   || code == CONST_DECL
-	   || null_member_pointer_value_p (node))
+	   || null_member_pointer_value_p (node)
+	   || code == REFLECT_EXPR)
     write_template_arg_literal (node);
   else if (code == EXCESS_PRECISION_EXPR
 	   && TREE_CODE (TREE_OPERAND (node, 0)) == REAL_CST)

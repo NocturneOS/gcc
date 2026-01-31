@@ -292,6 +292,15 @@ case ${target} in
     fi;;
 esac
 
+case ${target} in
+  s390-*)
+    if test "x$enable_obsolete" != xyes; then
+      echo "*** Configuration ${target} is deprecated and will be removed." >&2
+      echo "*** Specify --enable-obsolete to build it anyway." >&2
+      exit 1
+    fi;;
+esac
+
 # Unsupported targets list.  Do not put an entry in this list unless
 # it would otherwise be caught by a more permissive pattern.  The list
 # should be in alphabetical order.
@@ -678,6 +687,28 @@ i[34567]86-*-*)
 x86_64-*-darwin*)
 	;;
 x86_64-*-*)
+        # Pick a default with_abi and with_multilib_list for m32
+        # restricted toolchains
+        case ${target} in
+        *abi32)
+		case ${with_abi} in
+		"" | 32 | m32)
+			with_abi=m32
+			;;
+		*)
+			echo "Invalid --with-abi=$with_abi for m32 target"
+			exit 1
+	       esac
+	       case ${with_multilib_list} in
+	       default | *m32*)
+			;;
+	       *)
+			echo "Invalid multilib list for abi32 target"
+			exit 1
+	       esac
+	       ;;
+	esac
+
 	case ${with_abi} in
 	"")
 		if test "x$with_multilib_list" = xmx32; then
@@ -691,6 +722,9 @@ x86_64-*-*)
 		;;
 	x32 | mx32)
 		tm_file="i386/biarchx32.h ${tm_file}"
+		;;
+	32 | m32)
+		tm_defines="${tm_defines} TARGET_BI_ARCH=1"
 		;;
 	*)
 		echo "Unknown ABI used in --with-abi=$with_abi"
@@ -2374,7 +2408,10 @@ ia64*-*-freebsd*)
 	;;
 ia64*-*-linux*)
 	tm_file="${tm_file} elfos.h gnu-user.h linux.h glibc-stdint.h ia64/sysv4.h ia64/linux.h"
-	tmake_file="${tmake_file} ia64/t-ia64 ia64/t-linux t-libunwind"
+	tmake_file="${tmake_file} ia64/t-ia64 ia64/t-linux"
+	if test x$with_system_libunwind = xyes ; then
+		tmake_file="${tmake_file} t-libunwind"
+	fi
 	target_cpu_default="MASK_GNU_AS|MASK_GNU_LD"
 	;;
 ia64*-*-hpux*)
@@ -4379,7 +4416,7 @@ case "${target}" in
 				  echo "Unknown extension used in --with-$which=$val" 1>&2
 				  exit 1
 				fi
-				ext_val=`echo $ext_val | sed -E -e 's/[a-z0-9]+//'`
+				ext_val=`echo $ext_val | sed -E -e 's/[a-z0-9-]+//'`
 			  done
 
 			  true

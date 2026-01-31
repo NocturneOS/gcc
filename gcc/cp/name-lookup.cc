@@ -862,6 +862,14 @@ name_lookup::search_namespace_only (tree scope)
 	     the import bitmap.  Hence iterate over the former
 	     checking for bits set in the bitmap.  */
 	  bitmap imports = get_import_bitmap ();
+	  /* FIXME: For instantiations, we also want to include any
+	     declarations visible at the point it was defined, even
+	     if not visible from the current TU; we approximate
+	     this here, but a proper solution would involve caching
+	     phase 1 lookup results (PR c++/122609).  */
+	  unsigned orig_mod = 0;
+	  bitmap orig_imp = visible_from_instantiation_origination (&orig_mod);
+
 	  binding_cluster *cluster = BINDING_VECTOR_CLUSTER_BASE (val);
 	  int marker = 0;
 	  int dup_detect = 0;
@@ -922,18 +930,19 @@ name_lookup::search_namespace_only (tree scope)
 		  if (unsigned span = cluster->indices[jx].span)
 		    do
 		      if (bool (want & LOOK_want::ANY_REACHABLE)
-			  || bitmap_bit_p (imports, base))
+			  || bitmap_bit_p (imports, base)
+			  || (orig_imp && bitmap_bit_p (orig_imp, base)))
 			goto found;
 		    while (++base, --span);
 		continue;
 
 	      found:;
 		/* Is it loaded?  */
+		unsigned mod = cluster->indices[jx].base;
 		if (cluster->slots[jx].is_lazy ())
 		  {
 		    gcc_assert (cluster->indices[jx].span == 1);
-		    lazy_load_binding (cluster->indices[jx].base,
-				       scope, name, &cluster->slots[jx]);
+		    lazy_load_binding (mod, scope, name, &cluster->slots[jx]);
 		  }
 		tree bind = cluster->slots[jx];
 		if (!bind)
@@ -966,7 +975,8 @@ name_lookup::search_namespace_only (tree scope)
 			dup_detect |= dup;
 		      }
 
-		    if (bool (want & LOOK_want::ANY_REACHABLE))
+		    if (bool (want & LOOK_want::ANY_REACHABLE)
+			|| mod == orig_mod)
 		      {
 			type = STAT_TYPE (bind);
 			bind = STAT_DECL (bind);
@@ -1581,6 +1591,13 @@ name_lookup::adl_type (tree type)
       /* Pointer to member: associate class type and value type.  */
       adl_type (TYPE_PTRMEM_CLASS_TYPE (type));
       adl_type (TYPE_PTRMEM_POINTED_TO_TYPE (type));
+      return;
+    }
+  else if (REFLECTION_TYPE_P (type))
+    {
+      /* The namespace std::meta is an associated namespace of
+	 std::meta::info.  */
+      adl_namespace (std_meta_node);
       return;
     }
 
@@ -2765,7 +2782,10 @@ strip_using_decl (tree decl)
   if (decl == NULL_TREE)
     return NULL_TREE;
 
-  while (TREE_CODE (decl) == USING_DECL && !DECL_DEPENDENT_P (decl))
+  while (TREE_CODE (decl) == USING_DECL
+	 && !DECL_DEPENDENT_P (decl)
+	 && (LIKELY (!cp_preserve_using_decl)
+	     || TREE_CODE (USING_DECL_DECLS (decl)) == NAMESPACE_DECL))
     decl = USING_DECL_DECLS (decl);
 
   if (TREE_CODE (decl) == USING_DECL && DECL_DEPENDENT_P (decl)
@@ -4727,7 +4747,8 @@ cp_binding_level_descriptor (cp_binding_level *scope)
     "template-explicit-spec-scope",
     "transaction-scope",
     "openmp-scope",
-    "lambda-scope"
+    "lambda-scope",
+    "contract-check-scope"
   };
   static_assert (ARRAY_SIZE (scope_kind_names) == sk_count,
 		 "must keep names aligned with scope_kind enum");
@@ -4818,6 +4839,7 @@ begin_scope (scope_kind kind, tree entity)
     case sk_scoped_enum:
     case sk_transaction:
     case sk_omp:
+    case sk_contract:
     case sk_stmt_expr:
     case sk_lambda:
       scope->keep = keep_next_level_flag;
@@ -6336,7 +6358,8 @@ lookup_using_decl (tree scope, name_lookup &lookup)
     {
       auto_diagnostic_group d;
       error ("reference to %qD is ambiguous", lookup.name);
-      print_candidates (TREE_CODE (lookup.value) == TREE_LIST
+      print_candidates (input_location,
+			TREE_CODE (lookup.value) == TREE_LIST
 			? lookup.value : lookup.type);
       return NULL_TREE;
     }
@@ -6469,7 +6492,7 @@ set_decl_namespace (tree decl, tree scope, bool friendp)
       auto_diagnostic_group d;
       DECL_CONTEXT (decl) = FROB_CONTEXT (scope);
       error ("reference to %qD is ambiguous", decl);
-      print_candidates (old);
+      print_candidates (input_location, old);
       return;
     }
 
@@ -6615,7 +6638,8 @@ handle_namespace_attrs (tree ns, tree attributes)
       tree name = get_attribute_name (d);
       tree args = TREE_VALUE (d);
 
-      if (is_attribute_p ("visibility", name))
+      if (is_attribute_p ("visibility", name)
+	  && is_attribute_namespace_p ("gnu", d))
 	{
 	  /* attribute visibility is a property of the syntactic block
 	     rather than the namespace as a whole, so we don't touch the
@@ -6637,7 +6661,8 @@ handle_namespace_attrs (tree ns, tree attributes)
 	  push_visibility (TREE_STRING_POINTER (x), 1);
 	  saw_vis = true;
 	}
-      else if (is_attribute_p ("abi_tag", name))
+      else if (is_attribute_p ("abi_tag", name)
+	       && is_attribute_namespace_p ("gnu", d))
 	{
 	  if (!DECL_NAME (ns))
 	    {
@@ -6664,7 +6689,8 @@ handle_namespace_attrs (tree ns, tree attributes)
 	    DECL_ATTRIBUTES (ns) = tree_cons (name, args,
 					      DECL_ATTRIBUTES (ns));
 	}
-      else if (is_attribute_p ("deprecated", name))
+      else if (is_attribute_p ("deprecated", name)
+	       && is_attribute_namespace_p ("", d))
 	{
 	  if (!DECL_NAME (ns))
 	    {
@@ -6680,6 +6706,15 @@ handle_namespace_attrs (tree ns, tree attributes)
 	  TREE_DEPRECATED (ns) = 1;
 	  if (args)
 	    DECL_ATTRIBUTES (ns) = tree_cons (name, args,
+					      DECL_ATTRIBUTES (ns));
+	}
+      else if (annotation_p (d))
+	{
+	  const attribute_spec *as = lookup_attribute_spec (TREE_PURPOSE (d));
+	  bool no_add_attrs = false;
+	  as->handler (&ns, name, args, 0, &no_add_attrs);
+	  if (!no_add_attrs)
+	    DECL_ATTRIBUTES (ns) = tree_cons (TREE_PURPOSE (d), args,
 					      DECL_ATTRIBUTES (ns));
 	}
       else if (!attribute_ignored_p (d))
@@ -6719,9 +6754,10 @@ do_namespace_alias (location_t loc, tree alias, tree name_space)
   if (name_space == error_mark_node)
     return;
 
-  gcc_assert (TREE_CODE (name_space) == NAMESPACE_DECL);
-
-  name_space = ORIGINAL_NAMESPACE (name_space);
+  if (TREE_CODE (name_space) == NAMESPACE_DECL)
+    name_space = ORIGINAL_NAMESPACE (name_space);
+  else
+    gcc_assert (TREE_CODE (name_space) == SPLICE_EXPR);
 
   /* Build the alias.  */
   alias = build_lang_decl_loc (loc, NAMESPACE_DECL, alias, void_type_node);
@@ -7531,7 +7567,9 @@ lookup_qualified_name (tree scope, tree name, LOOK_want want, bool complain)
 
 	  /* If we have a known type overload, pull it out.  This can happen
 	     for using decls.  */
-	  if (TREE_CODE (t) == OVERLOAD && TREE_TYPE (t) != unknown_type_node)
+	  if (TREE_CODE (t) == OVERLOAD
+	      && TREE_TYPE (t) != unknown_type_node
+	      && LIKELY (!cp_preserve_using_decl))
 	    t = OVL_FUNCTION (t);
 	}
     }
@@ -7893,7 +7931,17 @@ lookup_name_fuzzy (tree name, enum lookup_name_fuzzy_kind kind, location_t loc)
 {
   gcc_assert (TREE_CODE (name) == IDENTIFIER_NODE);
 
-  /* First, try some well-known names in the C++ standard library, in case
+  /* Look up function-like macros first; maybe misusing them. */
+  auto cpp_node = cpp_lookup (parse_in,
+			      (const unsigned char*)IDENTIFIER_POINTER (name),
+			      IDENTIFIER_LENGTH (name));
+  if (cpp_node && cpp_fun_like_macro_p (cpp_node))
+    return name_hint
+      (nullptr,
+       std::make_unique<macro_like_function_used> (loc,
+						   IDENTIFIER_POINTER (name)));
+
+  /* Then, try some well-known names in the C++ standard library, in case
      the user forgot a #include.  */
   const char *header_hint
     = get_cp_stdlib_header_for_name (IDENTIFIER_POINTER (name));
@@ -8004,6 +8052,7 @@ binding_to_template_parms_of_scope_p (cxx_binding *binding,
   /* The template of the current scope, iff said scope is a primary
      template.  */
   tmpl = (tinfo
+	  && TREE_CODE (TI_TEMPLATE (tinfo)) == TEMPLATE_DECL
 	  && PRIMARY_TEMPLATE_P (TI_TEMPLATE (tinfo))
 	  ? TI_TEMPLATE (tinfo)
 	  : NULL_TREE);
@@ -8933,6 +8982,7 @@ struct local_state_t
   int cp_unevaluated_operand;
   int c_inhibit_evaluation_warnings;
   int cp_noexcept_operand_;
+  bool has_cfun;
 
   static local_state_t
   save_and_clear ()
@@ -8944,6 +8994,9 @@ struct local_state_t
     ::c_inhibit_evaluation_warnings = 0;
     s.cp_noexcept_operand_ = ::cp_noexcept_operand;
     ::cp_noexcept_operand = 0;
+    s.has_cfun = !!cfun;
+    if (s.has_cfun)
+      push_function_context ();
     return s;
   }
 
@@ -8953,6 +9006,8 @@ struct local_state_t
     ::cp_unevaluated_operand = this->cp_unevaluated_operand;
     ::c_inhibit_evaluation_warnings = this->c_inhibit_evaluation_warnings;
     ::cp_noexcept_operand = this->cp_noexcept_operand_;
+    if (this->has_cfun)
+      pop_function_context ();
   }
 };
 
@@ -8981,7 +9036,6 @@ maybe_push_to_top_level (tree d)
   else
     {
       gcc_assert (!processing_template_decl);
-      push_function_context ();
       local_state_stack.safe_push (local_state_t::save_and_clear ());
     }
 
@@ -8996,10 +9050,7 @@ maybe_pop_from_top_level (bool push_to_top)
   if (push_to_top)
     pop_from_top_level ();
   else
-    {
-      local_state_stack.pop ().restore ();
-      pop_function_context ();
-    }
+    local_state_stack.pop ().restore ();
 }
 
 /* Push into the scope of the namespace NS, even if it is deeply
@@ -9153,6 +9204,8 @@ finish_using_directive (tree target, tree attribs)
 		diagnosed = true;
 	      }
 	  }
+	else if (annotation_p (a))
+	  error ("annotation on using directive");
 	else if (!attribute_ignored_p (a))
 	  warning (OPT_Wattributes, "%qD attribute directive ignored", name);
       }
@@ -9288,7 +9341,8 @@ make_namespace_finish (tree ns, tree *slot, bool from_import = false)
   /* An unnamed namespace implicitly has a using-directive inserted so
      that its contents are usable in the surrounding context.  */
   if (!DECL_NAMESPACE_INLINE_P (ns) && !DECL_NAME (ns))
-    add_using_namespace (NAMESPACE_LEVEL (ctx)->using_directives, ns);
+    add_using_namespace (NAMESPACE_LEVEL (ctx)->using_directives, ns,
+			 from_import);
 }
 
 /* NS is a possibly-imported namespace that is now needed for
@@ -9365,7 +9419,7 @@ push_namespace (tree name, bool make_inline)
 	if (TREE_CHAIN (lookup.value))
 	  {
 	    error ("%<namespace %E%> is ambiguous", name);
-	    print_candidates (lookup.value);
+	    print_candidates (input_location, lookup.value);
 	  }
       }
     else if (TREE_CODE (lookup.value) == NAMESPACE_DECL)
