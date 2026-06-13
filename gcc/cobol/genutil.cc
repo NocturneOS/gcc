@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -33,6 +33,14 @@
 #include "cobol-system.h"
 #include "coretypes.h"
 #include "tree.h"
+#include "langhooks.h"
+#include "tree-iterator.h"
+#include "stringpool.h"
+#include "cgraph.h"
+#include "stor-layout.h"
+#include "toplev.h"
+#include "function.h"
+#include "fold-const.h"
 #include "../../libgcobol/ec.h"
 #include "../../libgcobol/common-defs.h"
 #include "util.h"
@@ -49,6 +57,8 @@
 #include "show_parse.h"
 #include "../../libgcobol/exceptl.h"
 #include "exceptg.h"
+#include "dumpfile.h"
+
 
 bool exception_location_active = true;
 bool skip_exception_processing = true;
@@ -71,32 +81,11 @@ tree var_decl_default_compute_error;  // int         __gg__default_compute_error
 tree var_decl_rdigits;                // int         __gg__rdigits;
 tree var_decl_unique_prog_id;         // size_t      __gg__unique_prog_id;
 
-tree var_decl_entry_location;         // This is for managing ENTRY statements
 tree var_decl_exit_address;           // This is for implementing pseudo_return_pop
 
 tree var_decl_call_parameter_signature; // char   *__gg__call_parameter_signature
 tree var_decl_call_parameter_count;     // int __gg__call_parameter_count
 tree var_decl_call_parameter_lengths;   // size_t *__gg__call_parameter_count
-
-tree var_decl_return_code;             // short __gg__data_return_code
-
-tree var_decl_arithmetic_rounds_size;  // size_t __gg__arithmetic_rounds_size;
-tree var_decl_arithmetic_rounds;       // int*   __gg__arithmetic_rounds;
-tree var_decl_fourplet_flags_size;     // size_t __gg__fourplet_flags_size;
-tree var_decl_fourplet_flags;          // int*   __gg__fourplet_flags;
-
-tree var_decl_treeplet_1f; // cblc_field_pp_type_node , "__gg__treeplet_1f"
-tree var_decl_treeplet_1o; // SIZE_T_P                , "__gg__treeplet_1o"
-tree var_decl_treeplet_1s; // SIZE_T_P                , "__gg__treeplet_1s"
-tree var_decl_treeplet_2f; // cblc_field_pp_type_node , "__gg__treeplet_2f"
-tree var_decl_treeplet_2o; // SIZE_T_P                , "__gg__treeplet_2o"
-tree var_decl_treeplet_2s; // SIZE_T_P                , "__gg__treeplet_2s"
-tree var_decl_treeplet_3f; // cblc_field_pp_type_node , "__gg__treeplet_3f"
-tree var_decl_treeplet_3o; // SIZE_T_P                , "__gg__treeplet_3o"
-tree var_decl_treeplet_3s; // SIZE_T_P                , "__gg__treeplet_3s"
-tree var_decl_treeplet_4f; // cblc_field_pp_type_node , "__gg__treeplet_4f"
-tree var_decl_treeplet_4o; // SIZE_T_P                , "__gg__treeplet_4o"
-tree var_decl_treeplet_4s; // SIZE_T_P                , "__gg__treeplet_4s"
 
 // There are times when I need to insert a NOP into the code, mainly to force
 // a .loc directive into the assembly language so that the GDB-COBOL debugger
@@ -109,8 +98,11 @@ tree var_decl_nop;                // int         __gg__nop;
 // Indicates which routine main() called
 tree var_decl_main_called;        // int         __gg__main_called;
 
-// Indicates the target label for an ENTRY statement
-tree var_decl_entry_label; // void* __gg__entry_label
+// Indicates the target index of an ENTRY statement
+tree var_decl_entry_index; // void* __gg__entry_index
+
+// Indicates the dialects the compiler was set to
+tree var_decl_dialects; // void* __gg__dialects
 
 #if 0
 #define REFER(a)
@@ -184,7 +176,7 @@ get_scaled_digits(cbl_field_t *field)
   }
 
 tree
-tree_type_from_digits(size_t digits, int signable)
+tree_type_from_digits(size_t digits, uint64_t signable)
   {
   tree retval = NULL_TREE;
 
@@ -567,12 +559,100 @@ get_depending_on_value(tree retval, const cbl_refer_t &refer)
 
 static
 tree
-get_data_offset(const cbl_refer_t &refer,
-                      int *pflags = NULL)
+get_data_offset(const cbl_refer_t &refer, int *pflags = NULL)
   {
-  Analyze();
   // This routine returns a tree which is the size_t offset to the data in the
   // refer/field
+
+  /* Let's first attempt to handle commonly-occurring situations that can
+     be handled efficiently.  */
+
+  const cbl_enabled_exceptions_t &enabled_exceptions(cdf_enabled_exceptions());
+  if(    !enabled_exceptions.match(ec_bound_subscript_e)
+      && !enabled_exceptions.match(ec_bound_odo_e)
+      && !enabled_exceptions.match(ec_bound_ref_mod_e) )
+    {
+    // There is no subscript bounds checking
+    bool all_literals = true;
+    for( size_t i=0; i<refer.nsubscript(); i++ )
+      {
+      if( (refer.subscripts[i].field->attr & FIGCONST_MASK) == zero_value_e )
+        {
+        // This refer is a figconst ZERO; we treat it as an ALL ZERO
+        // This is our internal representation for ALL, as in TABLE(ALL)
+        all_literals = false;
+        break;
+        }
+      if( !is_literal(refer.subscripts[i].field) )
+        {
+        // A subscript is not a literal.  Too bad.
+        all_literals = false;
+        break;
+        }
+      }
+    if( refer.refmod.from && !is_literal(refer.refmod.from->field) )
+      {
+      all_literals = false;
+      }
+    if( all_literals )
+      {
+      // We are dealing with foo(x)(y:z) where x and y are integer constants.
+      size_t offset = 0;
+
+      if( refer.nsubscript() )
+        {
+        // We have at least one subscript:
+
+        // Figure we have three subscripts, so nsubscript is 3
+        // Figure that the subscripts are {5, 4, 3}
+
+        // We expect that starting from refer.field, that three of our ancestors --
+        // call them A1, A2, and A3 -- have occurs clauses.
+
+        // We need to start with the rightmost subscript, and work our way up through
+        // our parents.  As we find each parent with an OCCURS, we increment qual_data
+        // by (subscript-1)*An->data.capacity()
+
+        // Establish the field_t pointer for walking up through our ancestors:
+        cbl_field_t *parent = refer.field;
+
+        // Note the backwards test, because refer->nsubscript is an unsigned value
+        for(size_t i=refer.nsubscript()-1; i<refer.nsubscript(); i-- )
+          {
+          // We need to search upward for an ancestor with occurs_max:
+          while(parent)
+            {
+            if( parent->occurs.ntimes() )
+              {
+              break;
+              }
+            parent = parent_of(parent);
+            }
+          // we might have an error condition at this point:
+          if( !parent )
+            {
+            cbl_internal_error("Too many subscripts");
+            }
+          // Pick up the integer value of the subscript.
+          long subscript = atol(refer.subscripts[i].field->data.original());
+
+          // Subscript is one-based integer
+          // Make it zero-based:
+          subscript = subscript - 1;
+          offset += subscript * parent->data.capacity();
+          parent = parent_of(parent);
+          }
+        }
+
+      if( refer.refmod.from )
+        {
+        // We know the refmod is a literal
+        offset +=   (atol(refer.refmod.from->field->data.original()) - 1)
+                  * refer.field->codeset.stride();
+        return build_int_cst_type(SIZE_T, offset);
+        }
+      }
+    }
 
   // Because this is for source / sending variables, checks are made for
   // OCCURS DEPENDING ON violations (when those exceptions are enabled)
@@ -636,8 +716,6 @@ get_data_offset(const cbl_refer_t &refer,
         }
       else
         {
-        const cbl_enabled_exceptions_t&
-                                enabled_exceptions( cdf_enabled_exceptions() );
         if( !enabled_exceptions.match(ec_bound_subscript_e) )
           {
           // With no exception testing, just pick up the value
@@ -673,7 +751,7 @@ get_data_offset(const cbl_refer_t &refer,
             ELSE
               {
               IF( subscript,
-                  ge_op,
+                  gt_op,
                   build_int_cst_type( TREE_TYPE(subscript),
                                       parent->occurs.ntimes()) )
                 {
@@ -697,9 +775,6 @@ get_data_offset(const cbl_refer_t &refer,
 
       // Although we strictly don't need to look at the ODO value at this
       // point, we do want it checked for the purposes of ec-bound-odo
-
-      const cbl_enabled_exceptions_t&
-                                enabled_exceptions( cdf_enabled_exceptions() );
 
       if( enabled_exceptions.match(ec_bound_odo_e) )
         {
@@ -744,17 +819,16 @@ get_data_offset(const cbl_refer_t &refer,
   return retval;
   }
 
-static tree tree_type_from_field(const cbl_field_t *field);
-
-void
-get_binary_value( tree value,
-                  tree rdigits,
-                  cbl_field_t *field,
-                  tree         field_offset,
-                  tree         hilo
-                  )
+tree
+get_binary_value_tree(tree return_type,
+                      tree rdigits,
+                      cbl_field_t *field,
+                      tree         field_offset,
+                      tree         hilo
+                      )
   {
-  Analyze();
+  tree retval;
+
   if( hilo )
     {
     gg_assign(hilo, integer_zero_node);
@@ -766,22 +840,20 @@ get_binary_value( tree value,
   // Very special case:
   if( strcmp(field->name, "ZEROS") == 0 )
     {
-    gg_assign(value, gg_cast(TREE_TYPE(value), integer_zero_node));
+    retval = gg_cast(return_type, integer_zero_node);
     if( rdigits )
       {
       gg_assign(rdigits, gg_cast(TREE_TYPE(rdigits), integer_zero_node));
       }
-    return;
+    return retval;
     }
 
-  static tree pointer = gg_define_variable( UCHAR_P,
-                                            "..gbv_pointer",
-                                            vs_file_static);
+  tree pointer = gg_define_variable(UCHAR_P);
   switch(field->type)
     {
     case FldLiteralN:
       {
-      if( SCALAR_FLOAT_TYPE_P(value) )
+      if( return_type == FLOAT )
         {
         cbl_internal_error("cannot get %<float%> value from %s", field->name);
         }
@@ -792,21 +864,13 @@ get_binary_value( tree value,
           gg_assign(rdigits, build_int_cst_type(TREE_TYPE(rdigits),
                                                 field->data.rdigits));
           }
-        tree dest_type   = TREE_TYPE(value);
-        tree source_type = tree_type_from_field(field);
-
-        gg_assign(value,
-                  gg_cast(dest_type,
-                          gg_indirect( gg_cast(build_pointer_type(source_type),
-                              gg_get_address_of(field->data_decl_node)))));
+        retval = gg_cast(return_type, field->data_decl_node);
         }
-
       break;
       }
 
     case FldNumericDisplay:
       {
-      Analyzer.Message("FldNumericDisplay");
       const charmap_t *charmap = __gg__get_charmap(field->codeset.encoding);
       int stride = charmap->stride();
 
@@ -829,14 +893,13 @@ get_binary_value( tree value,
                     build_int_cst_type( TREE_TYPE(rdigits),
                                         get_scaled_rdigits(field)));
           }
-        gg_assign(value, build_int_cst_type(TREE_TYPE(value),
-                                            0x7FFFFFFFFFFFFFFFUL));
+        retval = build_int_cst_type(return_type, 0x7FFFFFFFFFFFFFFFUL);
         }
       ELSE
         {
         IF( digit, eq_op, build_int_cst(UCHAR, DEGENERATE_LOW_VALUE) )
           {
-          // We are dealing with LOW-VALUE 
+          // We are dealing with LOW-VALUE
           if( hilo )
             {
             gg_assign(hilo, integer_minus_one_node);
@@ -918,7 +981,10 @@ get_binary_value( tree value,
                               build_int_cst_type(INT, field->codeset.encoding),
                               NULL_TREE));
           // Assign the value we got from the string to our "return" value:
-          gg_assign(value, gg_cast(TREE_TYPE(value), val128));
+
+          // Note that cppcheck can't understand the run-time IF()
+          // cppcheck-suppress redundantAssignment
+          retval = gg_cast(return_type, val128);
           }
         ENDIF
         }
@@ -931,10 +997,11 @@ get_binary_value( tree value,
       {
       // As of this writing, the source value is big-endian
       // We have to convert it to a little-endian destination.
+      tree value = gg_define_variable(return_type);
       tree dest   = gg_cast(build_pointer_type(UCHAR), gg_get_address_of(value));
       tree source = get_data_address(field, field_offset);
 
-      size_t dest_nbytes   = gg_sizeof(value);
+      size_t dest_nbytes   =  TREE_INT_CST_LOW(TYPE_SIZE_UNIT(return_type));
       size_t source_nbytes = field->data.capacity();
 
       if( debugging )
@@ -968,7 +1035,7 @@ get_binary_value( tree value,
         if( field->attr & signable_e )
           {
           IF( gg_array_value(gg_cast(build_pointer_type(SCHAR), source)),
-              lt_op, 
+              lt_op,
               gg_cast(SCHAR, integer_zero_node) )
             {
             gg_assign(extension, build_int_cst_type(UCHAR, 0xFF));
@@ -1007,6 +1074,7 @@ get_binary_value( tree value,
         hex_dump(dest, dest_nbytes);
         gg_printf("\n", NULL_TREE);
         }
+      retval = value;
       break;
       }
 
@@ -1035,7 +1103,6 @@ get_binary_value( tree value,
           }
         }
       tree source_address = get_data_address(field, field_offset);
-      tree dest_type = TREE_TYPE(value);
       tree source_type = tree_type_from_size( field->data.capacity(),
                                               field->attr & signable_e);
       if( debugging && rdigits)
@@ -1043,10 +1110,9 @@ get_binary_value( tree value,
         gg_printf("get_binary_value bin5 rdigits: %d\n", rdigits, NULL_TREE);
         }
 
-      gg_assign(value,
-                gg_cast(dest_type,
-                        gg_indirect(gg_cast( build_pointer_type(source_type),
-                                             source_address ))));
+      retval = gg_cast(return_type,
+                       gg_indirect(gg_cast( build_pointer_type(source_type),
+                                            source_address )));
       break;
       }
 
@@ -1058,17 +1124,16 @@ get_binary_value( tree value,
                   build_int_cst_type( TREE_TYPE(rdigits),
                                       get_scaled_rdigits(field)));
         }
-      tree dest_type = TREE_TYPE(value);
-        
-      gg_assign(value, 
-                gg_cast(dest_type,
-                        gg_call_expr(INT128,
+      tree value = gg_define_variable(return_type);
+      gg_assign(value, gg_cast(return_type,
+                                    gg_call_expr(INT128,
                                     "__gg__packed_to_binary",
                                     get_data_address( field,
                                                       field_offset),
                                     build_int_cst_type(INT,
                                                       field->data.capacity()),
                                     NULL_TREE)));
+      retval = value;
       break;
       }
 
@@ -1080,13 +1145,14 @@ get_binary_value( tree value,
         gg_assign(rdigits,
                   gg_cast( TREE_TYPE(rdigits), integer_zero_node));
         }
-      gg_assign(value,
-                gg_cast(TREE_TYPE(value),
-                        gg_call_expr( INT128,
-                                      "__gg__integer_from_float128",
-                                      gg_get_address_of(field->var_decl_node),
-                                      NULL_TREE)));
+      tree value = gg_define_variable(return_type);
+      gg_assign(value, gg_cast(return_type,
+                               gg_call_expr( INT128,
+                                     "__gg__integer_from_float128",
+                                     gg_get_address_of(field->var_decl_node),
+                                     NULL_TREE)));
       needs_scaling = false;
+      retval = value;
       break;
       }
 
@@ -1108,17 +1174,224 @@ get_binary_value( tree value,
       {
       if( field->data.rdigits < 0 )
         {
+        // Hey, Dubner!
+        // Should that test be != 0 rather than < 0?  Maybe not; this routine
+        // is supposed to be for integers.
+        tree value = gg_define_variable(return_type);
+        gg_assign(value, retval);
         scale_by_power_of_ten_N(value, -field->data.rdigits);
+        retval = value;
         }
       }
     }
+  return retval;
   }
 
-static tree
+tree
+get_binary_value_tree(tree return_type,
+                      tree rdigits,
+                const cbl_refer_t &refer,
+                      tree         hilo
+                      )
+  {
+  tree retval;
+  if( refer_is_clean(refer) )
+    {
+    retval = get_binary_value_tree(return_type,
+                                   rdigits,
+                                   refer.field,
+                                   integer_zero_node,
+                                   hilo);
+    }
+  else
+    {
+    retval = get_binary_value_tree(return_type,
+                                   rdigits,
+                                   refer.field,
+                                   refer_offset(refer),
+                                   hilo);
+    }
+  return retval;
+  }
+
+void
+get_binary_value( tree value,
+                  tree rdigits,
+                  cbl_field_t *field,
+                  tree         field_offset,
+                  tree         hilo
+                  )
+  {
+  tree return_type = TREE_TYPE(value);
+  gg_assign(value, get_binary_value_tree( return_type,
+                                          rdigits,
+                                          field,
+                                          field_offset,
+                                          hilo ));
+  }
+
+tree
 tree_type_from_field(const cbl_field_t *field)
   {
-  gcc_assert(field);
-  return tree_type_from_size(field->data.capacity(), field->attr & signable_e);
+  /*  This routine is used to determine what action is taken with type of a
+      CALL ... USING <var> and the matching PROCEDURE DIVISION USING <var> of
+      a PROGRAM-ID or FUNCTION-ID
+      */
+  tree retval;
+
+  switch(field->type)
+    {
+    case FldGroup:
+    case FldAlphanumeric:
+    case FldAlphaEdited:
+    case FldNumericEdited:
+    case FldLiteralA:
+      {
+      retval = CHAR_P;
+      break;
+      }
+
+    case FldNumericDisplay:
+    case FldPacked:
+      {
+      if( field->attr & signable_e )
+        {
+        if( field->data.digits > 18 )
+          {
+          retval = INT128;
+          }
+        else if( field->data.digits > 9)
+          {
+          retval = LONG;
+          }
+        else if( field->data.digits > 4)
+          {
+          retval = INT;
+          }
+        else if( field->data.digits > 2)
+          {
+          retval = SHORT;
+          }
+        else
+          {
+          retval = SCHAR;
+          }
+        }
+      else
+        {
+        if( field->data.digits > 18 )
+          {
+          retval = UINT128;
+          }
+        else if( field->data.digits > 9)
+          {
+          retval = ULONG;
+          }
+        else if( field->data.digits > 4)
+          {
+          retval = UINT;
+          }
+        else if( field->data.digits > 2)
+          {
+          retval = USHORT;
+          }
+        else
+          {
+          retval = UCHAR;
+          }
+        }
+      break;
+      }
+
+    case FldLiteralN:
+    case FldNumericBinary:
+    case FldNumericBin5:
+    case FldIndex:
+    case FldPointer:
+      {
+      if( field->attr & signable_e )
+        {
+        if( field->data.capacity() == 16 )
+          {
+          retval = INT128;
+          }
+        else if( field->data.capacity() == 8 )
+          {
+          retval = LONG;
+          }
+        else if( field->data.capacity() == 4 )
+          {
+          retval = INT;
+          }
+        else if( field->data.capacity() == 2 )
+          {
+          retval = SHORT;
+          }
+        else if( field->data.capacity() == 1 )
+          {
+          retval = SCHAR;
+          }
+        else
+          {
+          gcc_unreachable();
+          }
+        }
+      else
+        {
+        if( field->data.capacity() == 16 )
+          {
+          retval = UINT128;
+          }
+        else if( field->data.capacity() == 8 )
+          {
+          retval = ULONG;
+          }
+        else if( field->data.capacity() == 4 )
+          {
+          retval = UINT;
+          }
+        else if( field->data.capacity() == 2 )
+          {
+          retval = USHORT;
+          }
+        else if( field->data.capacity() == 1 )
+          {
+          retval = UCHAR;
+          }
+        else
+          {
+          gcc_unreachable();
+          }
+        }
+      break;
+      }
+
+    case FldFloat:
+      {
+      if( field->data.capacity() == 8 )
+        {
+        retval = DOUBLE;
+        }
+      else if( field->data.capacity() == 4 )
+        {
+        retval = FLOAT;
+        }
+      else
+        {
+        retval = FLOAT128;
+        }
+      break;
+      }
+
+    default:
+      {
+      cbl_internal_error(  "%s: Invalid field type %s:",
+              __func__,
+              cbl_field_type_str(field->type));
+      break;
+      }
+    }
+  return retval;
   }
 
 tree
@@ -1351,7 +1624,7 @@ hex_dump(tree data, size_t bytes)
   }
 
 tree
-tree_type_from_size(size_t bytes, int signable)
+tree_type_from_size(size_t bytes, uint64_t signable)
   {
   tree retval = NULL_TREE;
 
@@ -1360,7 +1633,7 @@ tree_type_from_size(size_t bytes, int signable)
     switch( bytes )
       {
       case 1:
-        retval = CHAR;
+        retval = SCHAR;
         break;
       case 2:
         retval = SHORT;
@@ -1369,7 +1642,7 @@ tree_type_from_size(size_t bytes, int signable)
         retval = INT;
         break;
       case 8:
-        retval = LONGLONG;
+        retval = LONG;
         break;
       case 16:
         retval = INT128;
@@ -1393,7 +1666,7 @@ tree_type_from_size(size_t bytes, int signable)
         retval = UINT;
         break;
       case 8:
-        retval = ULONGLONG;
+        retval = ULONG;
         break;
       case 16:
         retval = UINT128;
@@ -1419,6 +1692,12 @@ refer_has_depends(const cbl_refer_t &refer, refer_type_t refer_type)
 
   if(    refer.field
       && (refer.field->attr & (intermediate_e)) )
+    {
+    // This field can't have a DEPENDING ON
+    return false;
+    }
+
+  if( refer.field && refer.field->type == FldIndex )
     {
     // This field can't have a DEPENDING ON
     return false;
@@ -1596,126 +1875,68 @@ copy_little_endian_into_place(cbl_field_t *dest,
             gg_cast(dest_type, value));
   }
 
-void
-build_array_of_treeplets( int ngroup,
-                          size_t N,
+tree
+build_array_of_referlets( size_t N,
                           cbl_refer_t *refers)
   {
-  if( N )
+  tree retval = null_pointer_node;
+  if(N)
     {
-    // At the present time the most this routine is called is four times, for
-    // the implementation of the UNSTRING verb.
+    // Create the array of referlets.
+    tree table_type = build_array_type_nelts(cblc_referlet_type_node, N);
+    tree reflets    = gg_define_variable(table_type);
 
-    if( N > MIN_FIELD_BLOCK_SIZE )
-      {
-      gg_call(VOID,
-              "__gg__resize_treeplet",
-              build_int_cst_type(INT,    ngroup),
-              build_int_cst_type(SIZE_T, N),
-              NULL_TREE
-              );
-      }
-    switch(ngroup)
-      {
-      case 1:
-        for(size_t i=0; i<N; i++)
-          {
-          gg_assign(gg_array_value(var_decl_treeplet_1f, i),
-                    refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
-                                    : gg_cast(cblc_field_p_type_node, null_pointer_node));
-          gg_assign(gg_array_value(var_decl_treeplet_1o, i),
-                    refer_offset(refers[i]));
-          gg_assign(gg_array_value(var_decl_treeplet_1s, i),
-                    refer_size_source(refers[i]));
-          }
-        break;
-      case 2:
-        for(size_t i=0; i<N; i++)
-          {
-          gg_assign(gg_array_value(var_decl_treeplet_2f, i),
-                    refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
-                                    : gg_cast(cblc_field_p_type_node, null_pointer_node));
-          gg_assign(gg_array_value(var_decl_treeplet_2o, i),
-                    refer_offset(refers[i]));
-          gg_assign(gg_array_value(var_decl_treeplet_2s, i),
-                    refer_size_source(refers[i]));
-          }
-        break;
-      case 3:
-        for(size_t i=0; i<N; i++)
-          {
-          gg_assign(gg_array_value(var_decl_treeplet_3f, i),
-                    refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
-                                    : gg_cast(cblc_field_p_type_node, null_pointer_node));
-          gg_assign(gg_array_value(var_decl_treeplet_3o, i),
-                    refer_offset(refers[i]));
-          gg_assign(gg_array_value(var_decl_treeplet_3s, i),
-                    refer_size_source(refers[i]));
-          }
-        break;
-      case 4:
-        for(size_t i=0; i<N; i++)
-          {
-          gg_assign(gg_array_value(var_decl_treeplet_4f, i),
-                    refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
-                                    : gg_cast(cblc_field_p_type_node, null_pointer_node));
-          gg_assign(gg_array_value(var_decl_treeplet_4o, i),
-                    refer_offset(refers[i]));
-          gg_assign(gg_array_value(var_decl_treeplet_4s, i),
-                    refer_size_source(refers[i]));
-          }
-        break;
-      default:
-        abort();
-        break;
-      }
-    }
-  else
-    {
-    // Just do nothing
-    }
-  }
-
-void
-build_array_of_fourplets( int ngroup,
-                          size_t N,
-                          cbl_refer_t *refers)
-  {
-  int flag_bits = 0;
-  if( N )
-    {
-    if( N > MIN_FIELD_BLOCK_SIZE )
-      {
-      gg_call(VOID,
-              "__gg__resize_treeplet",
-              build_int_cst_type(INT, ngroup),
-              build_int_cst_type(SIZE_T, N),
-              NULL_TREE);
-
-      gg_call(VOID,
-              "__gg__resize_int_p",
-              gg_get_address_of(var_decl_fourplet_flags_size),
-              gg_get_address_of(var_decl_fourplet_flags),
-              build_int_cst_type(SIZE_T, N),
-              NULL_TREE);
-      }
-
+    // Initialize the array of referlets from the list of refers:
     for(size_t i=0; i<N; i++)
       {
-      gg_assign(gg_array_value(var_decl_treeplet_1f, i),
-                gg_get_address_of(refers[i].field->var_decl_node));
-      gg_assign(gg_array_value(var_decl_treeplet_1o, i),
-                refer_offset(refers[i], &flag_bits));
-      gg_assign(gg_array_value(var_decl_treeplet_1s, i),
+      gg_assign(gg_struct_field_ref(gg_array_value(reflets, i), "field"),
+            refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
+                            : gg_cast(cblc_field_p_type_node,
+                                      null_pointer_node));
+      gg_assign(gg_struct_field_ref(gg_array_value(reflets, i), "offset"),
+                refer_offset(refers[i]));
+      gg_assign(gg_struct_field_ref(gg_array_value(reflets, i), "size"),
                 refer_size_source(refers[i]));
-      gg_assign(gg_array_value(var_decl_fourplet_flags, i),
+      }
+
+    // And just return a pointer to the first element of the array:
+    retval = gg_pointer_to_array(reflets);
+    }
+
+  return retval;
+  }
+
+tree
+build_array_of_refers(size_t N,
+                      cbl_refer_t *refers)
+  {
+  tree retval;
+  if( N )
+    {
+    int flag_bits = 0;
+    tree table_type = build_array_type_nelts(cblc_refer_type_node, N);
+    tree table      = gg_define_variable(table_type);
+    for(size_t i=0; i<N; i++)
+      {
+      gg_assign(gg_struct_field_ref(gg_array_value(table, i), "field"),
+            refers[i].field ? gg_get_address_of(refers[i].field->var_decl_node)
+                            : gg_cast(cblc_field_p_type_node,
+                                      null_pointer_node));
+      gg_assign(gg_struct_field_ref(gg_array_value(table, i), "offset"),
+                refer_offset(refers[i], &flag_bits));
+      gg_assign(gg_struct_field_ref(gg_array_value(table, i), "size"),
+                refer_size_source(refers[i]));
+      gg_assign(gg_struct_field_ref(gg_array_value(table, i), "flags"),
                 build_int_cst_type(INT, flag_bits));
       }
+    // And just return a pointer to the first element of the array:
+    retval = gg_pointer_to_array(table);
     }
   else
     {
     abort();
     }
+  return retval;
   }
 
 tree
@@ -1778,17 +1999,17 @@ get_literal_string(cbl_field_t *field)
 bool
 refer_is_clean(const cbl_refer_t &refer)
   {
-    if( !refer.field || refer.field->is_numeric_constant() )
+  if( !refer.field || refer.field->is_numeric_constant() )
     {
     // It is routine for a refer to have no field.  It happens when the parser
     // passes us a refer for an optional parameter that has been omitted, for
     // example.
 
-    // It is also the case that a FldLiteralN will never have suscripts, or the
+    // It is also the case that a FldLiteralN will never have subscripts, or the
     // like.
     return true;
     }
-    
+
   return     !refer.all
           && !refer.addr_of
           && !refer.nsubscript()
@@ -1798,6 +2019,41 @@ refer_is_clean(const cbl_refer_t &refer)
           ;
   }
 
+bool
+refer_is_super_clean(const cbl_refer_t &refer)
+  {
+  // By super-clean, we mean that in addition to refer_is_clean, the value
+  // is also in working-storage with fixed offset and capacity, and is
+  // otherwise in condition so that we can use refer.field->var_data_node for
+  // GENERIC, thus getting rid the additional level of indirection through
+  // the refer.field->var_decl_node::data pointer
+
+  // Note: By rights, FldLiteralA should be super-clean, but errors ensue when
+  // it is made so.  This should be tracked down.  The disconnect might be in
+  // get_location().
+  return     // refer.field->type == FldLiteralA ||
+             refer.field->type == FldLiteralN
+           || (refer_is_clean(refer)
+              && !(refer.field->attr & (  based_e
+                                        | linkage_e
+                                        | local_e
+                                        | intermediate_e
+                                        | any_length_e
+                                        | external_e))) ;
+  }
+
+bool
+refer_is_working_storage(const cbl_refer_t &refer)
+  {
+  // This returns TRUE in cases where the refer.field->data_decl_node is
+  // stored in .bss or .data, and is thus directly addressable.
+  bool retval = !( refer.field->attr & (  based_e
+                                        | linkage_e
+                                        | local_e
+                                        | intermediate_e) )
+                || (refer.field->type == FldLiteralN);
+  return retval;
+  }
 
 /*  This routine returns the length portion of a refmod(start:length) reference.
     It extracts both the start and the length so that it can add them together
@@ -1851,8 +2107,7 @@ refer_fill_depends(const cbl_refer_t &refer)
   }
 
 tree  // size_t
-refer_offset(const cbl_refer_t &refer,
-                   int *pflags)
+refer_offset(const cbl_refer_t &refer, int *pflags)
   {
   // This routine calculates the effect of a refer offset on the
   // refer.field->data location.  When there are subscripts, the data location
@@ -1882,41 +2137,50 @@ tree   // size_t
 refer_size(const cbl_refer_t &refer, refer_type_t refer_type)
   {
   Analyze();
-  static tree retval = gg_define_variable(SIZE_T, "..rs_retval", vs_file_static);
-
-  if( !refer.field )
+  if( refer.refmod.len && refer.refmod.len->field->type == FldLiteralN )
     {
-    return size_t_zero_node;
-    }
-
-  if( refer_is_clean(refer) )
-    {
-    return get_any_capacity(refer.field);
-    }
-
-  // Step the first:  Get the actual full length:
-
-  if( refer_has_depends(refer, refer_type) )
-    {
-    // Because there is a depends, we might have to change the length:
-    gg_assign(retval, refer_fill_depends(refer));
+    return build_int_cst_type(SIZE_T,
+                              atol(  refer.refmod.len->field->data.original())
+                                   * refer.field->codeset.stride());
     }
   else
     {
-    gg_assign(retval, get_any_capacity(refer.field));
-    }
+    static tree retval = gg_define_variable(SIZE_T, "..rs_retval", vs_file_static);
 
-  if( refer.refmod.from || refer.refmod.len )
-    {
-    tree refmod = refer_refmod_length(refer);
-    // retval is the ODO based total length.
-    // refmod is the length resulting from refmod(from:len)
-    // We have to reduce retval by the effect of refmod:
-    tree diff = gg_subtract(get_any_capacity(refer.field),
-                            refmod);
-    gg_assign(retval, gg_subtract(retval, diff));
+    if( !refer.field )
+      {
+      return size_t_zero_node;
+      }
+
+    if( refer_is_clean(refer) )
+      {
+      return get_any_capacity(refer.field);
+      }
+
+    // Step the first:  Get the actual full length:
+
+    if( refer_has_depends(refer, refer_type) )
+      {
+      // Because there is a depends, we might have to change the length:
+      gg_assign(retval, refer_fill_depends(refer));
+      }
+    else
+      {
+      gg_assign(retval, get_any_capacity(refer.field));
+      }
+
+    if( refer.refmod.from || refer.refmod.len )
+      {
+      tree refmod = refer_refmod_length(refer);
+      // retval is the ODO based total length.
+      // refmod is the length resulting from refmod(from:len)
+      // We have to reduce retval by the effect of refmod:
+      tree diff = gg_subtract(get_any_capacity(refer.field),
+                              refmod);
+      gg_assign(retval, gg_subtract(retval, diff));
+      }
+    return retval;
     }
-  return retval;
   }
 
 tree  // size_t
@@ -1938,7 +2202,6 @@ refer_size_source(const cbl_refer_t &refer)
       other.  But there conceivably might be others,.
 
       You have been warned.
-
       */
 
   if( !refer.field )
@@ -1951,6 +2214,20 @@ refer_size_source(const cbl_refer_t &refer)
   if( refer_is_clean(refer) )
     {
     return get_any_capacity(refer.field);
+    }
+
+  // We are dealing with a refer
+  const cbl_enabled_exceptions_t&
+                                enabled_exceptions( cdf_enabled_exceptions() );
+  if( !enabled_exceptions.match(ec_bound_ref_mod_e) )
+    {
+    // ref_mod bounds checking is off
+    if( refer.refmod.len && refer.refmod.len->field->type == FldLiteralN )
+      {
+      // And the refmod.len is a literal.
+      return build_int_cst_type(SIZE_T,
+                              atol(  refer.refmod.len->field->data.original())
+                                   * refer.field->codeset.stride());      }
     }
 
   // This assignment has to be here. Simply returning refer_size() results
@@ -1989,3 +2266,1156 @@ get_time_nanoseconds()
 #endif
   return retval;
 }
+
+bool
+is_pure_integer(const cbl_field_t *field)
+  {
+  // Check to see if field is suitable for fast arithmetic.  That is, it is
+  // a native binary integer with no fixed-point decimal places:
+  bool retval = false;
+  switch( field->type )
+    {
+    case FldIndex:
+    case FldPointer:
+    case FldLiteralN:
+      retval = true;
+      break;
+
+    case FldNumericBin5:
+      if( !(field->attr & intermediate_e) && field->data.rdigits == 0 )
+        {
+        // This is a pure integer, with no rdigits
+        switch(field->data.capacity())
+          {
+          case 1:
+          case 2:
+          case 4:
+          case 8:
+          case 16:
+            // These are the sizes we know how to handle
+            retval = true;
+            break;
+          }
+        }
+      break;
+
+    case FldAlphanumeric:
+      if( strcmp(field->name, "ZEROS") == 0 )
+        {
+        retval = true;
+        }
+      break;
+
+    case FldInvalid:
+    case FldGroup:
+    case FldNumericBinary:
+    case FldFloat:
+    case FldPacked:
+    case FldNumericDisplay:
+    case FldNumericEdited:
+    case FldAlphaEdited:
+    case FldLiteralA:
+    case FldClass:
+    case FldConditional:
+    case FldForward:
+    case FldSwitch:
+    case FldDisplay:
+      break;
+    }
+  return retval;
+  }
+
+static bool
+binary_from_FldNumericBin5(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval = false;
+
+  tree source_type = tree_type_from_field(refer.field);
+
+  if( refer_is_working_storage(refer) )
+    {
+    if( !type )
+      {
+      type = source_type;
+      }
+
+    value = gg_define_variable(type);
+
+    if(  refer.field->offset == 0
+      && TREE_CODE(TREE_TYPE(refer.field->data_decl_node)) == INTEGER_TYPE)
+      {
+      // This is the cleanest method: We can just pick up the original base
+      // data.
+
+//#define FOUND_THE_ALIASING_PROBLEM
+#ifdef FOUND_THE_ALIASING_PROBLEM
+      // At the present writing, we can't just pick up the data_decl_node data,
+      // because the contents can be altered by pointer operations that the
+      // compiler doesn't know about.  And we get errors, first noted with the
+      // results of fast_add (which uses *(data *) to change the data.) Using
+      // -fno-strict-aliasing makes the problem go away.  Until we get that
+      // sorted out, we use the slightly less efficient method on the other
+      // side of the #else.
+      gg_assign(value, gg_cast(type, refer.field->data_decl_node));
+#else
+      tree base;
+      base = gg_cast(build_pointer_type(TREE_TYPE(refer.field->data_decl_node)),
+                                member(refer.field->var_decl_node, "data"));
+      gg_assign(value,
+                gg_cast(type,
+                        gg_indirect(gg_cast(build_pointer_type(source_type),
+                                            base))));
+#endif
+      }
+    else
+      {
+      // We can't just pick up the stuff at data_decl_node.  Either there is
+      // an offset from the 01 grandfather, or else there is a type mismatch,
+      // probably because of a REDEFINES.  So, we do the equivalent of
+      // *(type *)&thing;
+      tree base;
+      base = gg_cast(UCHAR_P, gg_get_address(refer.field->data_decl_node));
+      if( refer_is_clean(refer) )
+        {
+        if( refer.field->offset )
+          {
+          base = gg_add(base, build_int_cst_type(SIZE_T, refer.field->offset));
+          }
+        }
+      else
+        {
+        base = gg_add(base, refer_offset(refer));
+        }
+      gg_assign(value,
+                gg_cast(type,
+                        gg_indirect(gg_cast(build_pointer_type(source_type),
+                                            base))));
+      }
+    retval = true;
+    }
+  else
+    {
+    if( !type )
+      {
+      type = tree_type_from_field(refer.field);
+      }
+
+    tree base;
+    get_location(base, refer);
+    value = gg_define_variable(type);
+    gg_assign(value,
+              gg_cast(type,
+                      gg_indirect(gg_cast(build_pointer_type(source_type),
+                                          base))));
+    retval = true;
+    }
+  return retval;
+  }
+
+static bool
+binary_from_FldLiteralN(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  // The data_decl_node has the value we need.
+
+  tree source_type = tree_type_from_field(refer.field);
+  if( !type )
+    {
+    type = source_type;
+    }
+
+  value = gg_define_variable(type);
+  gg_assign(value, gg_cast(type, refer.field->data_decl_node));
+
+  return true;
+  }
+
+
+bool
+binary_from_FldNumericBinary(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval = false;
+
+  // get the value as its own type.
+  tree unflipped;
+  retval = binary_from_FldNumericBin5(unflipped, refer, NULL_TREE);
+  if( retval )
+    {
+    // The actual return value gets the flipped bytes:
+    value = gg_define_variable(type);
+    gg_assign(value, gg_cast(type, gg_bswap(unflipped)));
+    }
+
+  return retval;
+  }
+
+static const unsigned long pots[17] =
+  {
+  1ULL,                       // 00
+  10ULL,                      // 01
+  100ULL,                     // 02
+  1000ULL,                    // 03
+  10000ULL,                   // 04
+  100000ULL,                  // 05
+  1000000ULL,                 // 06
+  10000000ULL,                // 07
+  100000000ULL,               // 08
+  1000000000ULL,              // 09
+  10000000000ULL,             // 10
+  100000000000ULL,            // 11
+  1000000000000ULL,           // 12
+  10000000000000ULL,          // 13
+  100000000000000ULL,         // 14
+  1000000000000000ULL,        // 15
+  10000000000000000ULL,       // 16
+  };
+
+static void
+d_and_q_num_disp( tree  &retval,   // We define this return value
+                  tree   loc,     // This is a UCHAR_P
+                  size_t digits,
+                  size_t stride)
+  {
+  switch( digits )
+    {
+    case 1:
+      {
+      retval = gg_define_variable(UCHAR);
+      gg_assign(retval,
+                gg_bitwise_and(gg_indirect(loc),
+                               build_int_cst_type(UCHAR, 0x0F)));
+      break;
+      }
+
+    case 2:
+      {
+      retval = gg_define_variable(UCHAR);
+      tree ldigit = gg_bitwise_and(gg_indirect(loc),
+                                   build_int_cst_type(UCHAR, 0x0F));
+      tree rdigit = gg_bitwise_and(gg_indirect(loc,
+                                               build_int_cst_type(SIZE_T,
+                                                                  stride)),
+                                   build_int_cst_type(UCHAR, 0x0F));
+      gg_assign(retval,
+                gg_add(gg_multiply(ldigit,
+                                   build_int_cst_type(UCHAR, 10)),
+                       rdigit));
+      break;
+      }
+
+    case 3:
+    case 4:
+      {
+      tree type = USHORT;
+      int rsize = 2;
+      retval = gg_define_variable(type);
+      tree left_half;
+      tree right_half;
+      d_and_q_num_disp(left_half,
+                       loc,
+                       digits - rsize,
+                       stride);
+      d_and_q_num_disp(right_half,
+                       gg_add(loc,
+                              build_int_cst_type(SIZE_T,
+                                                 stride*(digits - rsize))),
+                       rsize,
+                       stride);
+      gg_assign(retval,
+                gg_add(gg_cast(type,
+                               gg_multiply(left_half,
+                                          build_int_cst_type(type, 100))),
+                       gg_cast(type, right_half)));
+      break;
+      }
+    case 5:
+    case 6:
+    case 7:
+    case 8:
+      {
+      tree type = UINT;
+      int rsize = 4;
+      retval = gg_define_variable(type);
+      tree left_half;
+      tree right_half;
+      d_and_q_num_disp(left_half,
+                       loc,
+                       digits - rsize,
+                       stride);
+      d_and_q_num_disp(right_half,
+                       gg_add(loc,
+                              build_int_cst_type(SIZE_T,
+                                                 stride*(digits - rsize))),
+                       rsize,
+                       stride);
+      gg_assign(retval,
+                gg_add(gg_cast(type,
+                               gg_multiply(left_half,
+                                           build_int_cst_type(type, 10000))),
+                       gg_cast(type, right_half)));
+      break;
+      }
+
+    case  9:
+    case 10:
+    case 11:
+    case 12:
+    case 13:
+    case 14:
+    case 15:
+    case 16:
+      {
+      tree type = ULONG;
+      int rsize = 8;
+      retval = gg_define_variable(type);
+      tree left_half;
+      tree right_half;
+      d_and_q_num_disp(left_half,
+                       loc,
+                       digits - rsize,
+                       stride);
+      d_and_q_num_disp(right_half,
+                       gg_add(loc,
+                              build_int_cst_type(SIZE_T,
+                                                 stride*(digits - rsize))),
+                       rsize,
+                       stride);
+      gg_assign(retval,
+                gg_add(gg_cast(type,
+                               gg_multiply(left_half,
+                                     build_int_cst_type(type, 100000000UL))),
+                       gg_cast(type, right_half)));
+      break;
+      }
+
+    default:
+      {
+      // 'digits' is greater than 16.  We will peel off sixteen digits at a
+      // time, and multiply-and-accumulate into our return value:
+
+      tree type = UINT128;
+      retval = gg_define_variable(type);
+
+      size_t digits_this_time = std::min(digits, 16UL);
+      digits -= digits_this_time;
+      tree value;
+      d_and_q_num_disp(value,
+                       loc,
+                       digits_this_time,
+                       stride);
+      gg_assign(retval, gg_cast(type, value));
+      gg_assign(loc,
+                gg_add(loc,
+                       build_int_cst_type(SIZE_T,
+                                          stride*digits_this_time)));
+      while(digits > 0)
+        {
+        digits_this_time = std::min(digits, 16UL);
+        size_t pot = pots[digits_this_time];
+        gg_assign(retval, gg_multiply(retval,
+                                      build_int_cst_type(type, pot)));
+        d_and_q_num_disp(value,
+                         loc,
+                         digits_this_time,
+                         stride);
+        gg_assign(retval, gg_add(retval, gg_cast(type, value)));
+        gg_assign(loc,
+                  gg_add(loc,
+                         build_int_cst_type(SIZE_T,
+                                            stride*digits_this_time)));
+        digits -= digits_this_time;
+        }
+      break;
+      }
+    }
+  }
+
+bool
+binary_from_FldNumericDisplay(tree &value,
+                              const cbl_refer_t &refer,
+                              tree return_type)
+  {
+  // A return of false means we couldn't convert this value
+  bool retval = false;
+
+  tree source_type = tree_type_from_field(refer.field);
+  if( !return_type )
+    {
+    return_type = source_type;
+    }
+
+  // This is where we build the actual numeric value of the digits of the
+  // COBOL numeric display variable.  It is up to the caller to interpret
+  // scaledness and rdigits and so forth.
+  value = gg_define_variable(return_type);
+
+  // This is our address pointer, used for walking the digits.
+  tree base          = gg_define_variable(UCHAR_P);
+
+  // This is the location of the byte holding the sign (if any)
+  tree sign_location = gg_define_variable(UCHAR_P);
+  // This is the operational counter
+  tree digit_count = gg_define_variable(SIZE_T);
+
+  // The stride of the numerical value is the distance, in bytes, between
+  // characters of the zoned decimal value.  It can be 1 (ascii or ebcdic),
+  // or 2 or 4 for utf16 and utf32.
+  tree stride;
+
+  // This works for all forms of storage:
+  gg_assign(base,
+            gg_cast(build_pointer_type(UCHAR_P),
+                    member(refer.field->var_decl_node,"data")));
+  if( !refer_is_clean(refer) )
+    {
+    gg_assign(base, gg_add(base, refer_offset(refer)));
+    }
+
+  gg_assign(digit_count, build_int_cst_type(SIZE_T, refer.field->data.digits));
+
+  charmap_t *charmap = __gg__get_charmap(refer.field->codeset.encoding);
+  size_t fstride = charmap->stride();
+  stride = build_int_cst_type(SIZE_T, fstride);
+
+  if( refer.field->attr & signable_e )
+    {
+    // The value is signable.
+    if( refer.field->attr & separate_e )
+      {
+      // The sign byte is separate from the digits
+      if( refer.field->attr & leading_e )
+        {
+        // separate & leading.  sign_location is the first character.
+        gg_assign(sign_location, base);
+        gg_assign(base, gg_add(base, stride));
+        }
+      else
+        {
+        // separate & trailing.  The sign byte is after the last character:
+        gg_assign(sign_location,
+                  gg_add(base,
+                         build_int_cst_type(SIZE_T,
+                                        refer.field->data.digits * fstride)));
+        }
+      }
+    else
+      {
+      // sign is internal:
+      if( refer.field->attr & leading_e )
+        {
+        // internal & leading
+        gg_assign(sign_location, base);
+        }
+      else
+        {
+        // internal & trailing
+        gg_assign(sign_location,
+                  gg_add(base,
+                         build_int_cst_type(SIZE_T,
+                                            fstride *
+                                              (refer.field->data.digits-1))));
+        }
+      }
+    }
+
+  size_t digits = refer.field->data.digits;
+  // At this point, we have 'digits', which is the number of characters at
+  // 'base',  The obvious thing is a multiply-and-accumulate loop, but faster
+  // code can result from allowing the middle-end to create overlapping.
+
+  // This divide-and-conquer algorithm gives the middle-end that flexibility.
+  // It runs about three times faster than a multiply-accumulate when compiled
+  // with -O0, and about 2.8 times faster when compiled with -O2.
+
+  tree d_and_q;
+  d_and_q_num_disp(d_and_q, base, digits, fstride);
+
+  // d_and_q contains our value.  We need to know if negativeness is involved.
+  if( refer.field->attr & signable_e )
+    {
+    if( refer.field->attr & separate_e )
+      {
+      // If the sign location is a minus sign, we have to negate the value.
+      IF( gg_indirect(sign_location),
+          eq_op,
+          build_int_cst_type(UCHAR, charmap->mapped_character(ascii_minus)) )
+        {
+        gg_assign(value, gg_negate(gg_cast(return_type, d_and_q)));
+        }
+      ELSE
+        {
+        gg_assign(value, gg_cast(return_type, d_and_q));
+        }
+      ENDIF
+      }
+    else
+      {
+      // The sign indicator is inside the sign_location digit.
+      if( charmap->is_like_ebcdic() )
+        {
+        // In EBCDIC, the value is negative when the sign_indicator is less
+        // than ebcdic zero:
+        IF( gg_indirect(sign_location),
+            lt_op,
+            build_int_cst_type(UCHAR, charmap->mapped_character(ascii_zero)) )
+          {
+          gg_assign(value, gg_negate(gg_cast(return_type, d_and_q)));
+          }
+        ELSE
+          {
+          gg_assign(value, gg_cast(return_type, d_and_q));
+          }
+        ENDIF
+        }
+      else
+        {
+        // In ASCII, the value is negative when the sign_indicator is greater
+        // than ascii nine:
+        IF( gg_indirect(sign_location),
+            gt_op,
+            build_int_cst_type(UCHAR, ascii_9) )
+          {
+          gg_assign(value, gg_negate(gg_cast(return_type, d_and_q)));
+          }
+        ELSE
+          {
+          gg_assign(value, gg_cast(return_type, d_and_q));
+          }
+        ENDIF
+        }
+      }
+    }
+  else
+    {
+    gg_assign(value, gg_cast(return_type, d_and_q));
+    }
+
+  retval = true;
+  return retval;
+  }
+
+  /* This is the GENERIC that creates
+  static const unsigned char dp2bin[160] =
+    {
+    00, 01, 02, 03, 04, 05, 06, 07,  8,  9,  0,  0,  0,  0,  0,  0, // 0x00
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 10, 10, 10, 10, 10, 10, // 0x10
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 20, 20, 20, 20, 20, 20, // 0x20
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 30, 30, 30, 30, 30, 30, // 0x30
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 40, 40, 40, 40, 40, 40, // 0x40
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 50, 50, 50, 50, 50, 50, // 0x50
+    60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 60, 60, 60, 60, 60, 60, // 0x60
+    70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 70, 70, 70, 70, 70, 70, // 0x70
+    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 80, 80, 80, 80, 80, 80, // 0x80
+    90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 90, 90, 90, 90, 90, 90, // 0x90
+    };
+  */
+
+static tree
+make_dp2bin_decl()
+  {
+  static const unsigned char dp2bin[160] =
+    {
+    00, 01, 02, 03, 04, 05, 06, 07,  8,  9,  0,  0,  0,  0,  0,  0, // 0x00
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 10, 10, 10, 10, 10, 10, // 0x10
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 20, 20, 20, 20, 20, 20, // 0x20
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 30, 30, 30, 30, 30, 30, // 0x30
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 40, 40, 40, 40, 40, 40, // 0x40
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 50, 50, 50, 50, 50, 50, // 0x50
+    60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 60, 60, 60, 60, 60, 60, // 0x60
+    70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 70, 70, 70, 70, 70, 70, // 0x70
+    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 80, 80, 80, 80, 80, 80, // 0x80
+    90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 90, 90, 90, 90, 90, 90, // 0x90
+    };
+
+  tree array_type = build_array_type_nelts(UCHAR, 160);
+  tree decl = gg_define_variable( array_type,
+                                          "_dp2bin",
+                                          vs_file_static);
+  tree ctor = make_node(CONSTRUCTOR);
+  TREE_TYPE(ctor) = array_type;
+  TREE_STATIC(ctor)    = 1;
+  TREE_CONSTANT(ctor)  = 1;
+
+  for(int i=0; i<160; i++)
+    {
+    CONSTRUCTOR_APPEND_ELT( CONSTRUCTOR_ELTS(ctor),
+                            build_int_cst_type(SIZE_T, i),
+                            build_int_cst_type(UCHAR, dp2bin[i]) );
+    }
+  DECL_INITIAL(decl) = ctor;
+
+  TREE_STATIC (decl) = 1;
+  TREE_PUBLIC (decl) = 0;
+  DECL_EXTERNAL (decl) = 0;
+  TREE_READONLY (decl) = 1;
+  DECL_ARTIFICIAL (decl) = 1;
+  DECL_IGNORED_P (decl) = 1;
+  TREE_USED (decl) = 1;
+
+  DECL_INITIAL (decl) = ctor;
+
+  return decl;
+  }
+
+static void
+d_and_q_packed(tree &value, tree base, size_t places)
+  {
+  static tree dp2bin = make_dp2bin_decl();
+
+  switch(places)
+    {
+    case 0:
+      {
+      // This is what happens for a single-digit comp-3
+      tree type = UCHAR;
+      value = gg_define_variable(type);
+      gg_assign(value, gg_cast(type, integer_zero_node));
+      break;
+      }
+    case 1:
+      {
+      // One place is two digits:
+      tree type = UCHAR;
+      value = gg_define_variable(type);
+      gg_assign(value, gg_array_value(dp2bin, gg_indirect(base)));
+      break;
+      }
+    case 2:
+      {
+      // Four digits:
+      tree type = USHORT;
+      value = gg_define_variable(type);
+      tree lhalf;
+      tree rhalf;
+      size_t rplaces = 1;
+      size_t lplaces = places - rplaces;
+      size_t pot = pots[rplaces*2];
+      d_and_q_packed(lhalf, base, lplaces);
+      d_and_q_packed(rhalf,
+                     gg_add(base, build_int_cst_type(SIZE_T, lplaces)),
+                     rplaces);
+      gg_assign(value,
+                gg_add(gg_cast(type, gg_multiply(gg_cast(type, lhalf),
+                                               build_int_cst_type(type, pot))),
+                       gg_cast(type, rhalf)));
+      break;
+      }
+    case 3: // six digits
+    case 4: // eight digits
+      {
+      tree type = UINT;
+      value = gg_define_variable(type);
+      tree lhalf;
+      tree rhalf;
+      size_t rplaces = 2;
+      size_t lplaces = places - rplaces;
+      size_t pot = pots[rplaces*2];
+      d_and_q_packed(lhalf, base, lplaces);
+      d_and_q_packed(rhalf,
+                     gg_add(base, build_int_cst_type(SIZE_T, lplaces)),
+                     rplaces);
+      gg_assign(value,
+                gg_add(gg_cast(type, gg_multiply(gg_cast(type, lhalf), build_int_cst_type(type, pot))),
+                       gg_cast(type, rhalf)));
+      break;
+      }
+    case 5: // ten digits
+    case 6: // twelve digits
+    case 7: // fourteen digits
+    case 8: // sixteen digits
+      {
+      tree type = ULONG;
+      value = gg_define_variable(type);
+      tree lhalf;
+      tree rhalf;
+      size_t rplaces = 4;
+      size_t lplaces = places - rplaces;
+      size_t pot = pots[rplaces*2];
+      d_and_q_packed(lhalf, base, lplaces);
+      d_and_q_packed(rhalf,
+                     gg_add(base, build_int_cst_type(SIZE_T, lplaces)),
+                     rplaces);
+      gg_assign(value,
+                gg_add(gg_cast(type, gg_multiply(gg_cast(type, lhalf), build_int_cst_type(type, pot))),
+                       gg_cast(type, rhalf)));
+      break;
+      }
+    default:
+      {
+      // This is nine places (eighteen digits) and up,  We are going to peel
+      // off eight places (sixteen digits) at a time:
+      tree type = UINT128;
+      value = gg_define_variable(type);
+      tree lhalf;
+      size_t lplaces = places % 8;
+      if( lplaces != 0 )
+        {
+        d_and_q_packed(lhalf, base, lplaces);
+        gg_assign(value, gg_cast(type, lhalf));
+        places -= lplaces;
+        gg_assign(base, gg_add(base, build_int_cst_type(SIZE_T, lplaces)));
+        }
+      else
+        {
+        gg_assign(value, gg_cast(type, integer_zero_node));
+        }
+      // The remaining places is a multiple of eight:
+      size_t pot = pots[8 * 2];
+      while( places )
+        {
+        gg_assign(value, gg_multiply(value, build_int_cst_type(type, pot)));
+        tree rhalf;
+        d_and_q_packed(rhalf, base, 8);
+        gg_assign(value, gg_add(value, gg_cast(type, rhalf)));
+        gg_assign(base,  gg_add(base, build_int_cst_type(SIZE_T, 8)));
+        places -= 8;
+        }
+      }
+    }
+  }
+
+static bool
+binary_from_comp_3(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval = false;
+
+  // This is where we build the actual numeric value of the digits of the
+  // COBOL packed-decimal variable.  It is up to the caller to interpret
+  // scaledness and rdigits and so forth.
+
+  tree source_type = tree_type_from_field(refer.field);
+
+  if( !type )
+    {
+    type = source_type;
+    }
+
+  tree working = gg_define_variable(source_type);
+
+  tree base = gg_define_variable(UCHAR_P);
+  gg_assign(base,
+            gg_cast(build_pointer_type(UCHAR_P),
+                    member(refer.field->var_decl_node,"data")));
+  if( !refer_is_clean(refer) )
+    {
+    gg_assign(base, gg_add(base, refer_offset(refer)));
+    }
+
+  // This is the location of the byte holding the sign nybble
+  tree sign_location = gg_define_variable(UCHAR_P);
+
+  // The sign nybble is in the last byte:
+  gg_assign(sign_location,
+            gg_add(base,
+                   build_int_cst_type(SIZE_T,
+                                      refer.field->data.capacity()-1)));
+  tree d_and_q;
+  // Pick up the binary value of the first capacity-1 places
+  d_and_q_packed(d_and_q,
+                 base,
+                 refer.field->data.capacity()-1);
+  // Multiply that by 10
+  tree d_and_q_10 = gg_multiply(gg_cast(source_type, d_and_q),
+                                build_int_cst_type(source_type, 10));
+  // Pick up the final digit
+  tree final_digit = gg_rshift(gg_indirect(sign_location),
+                               build_int_cst_type(SIZE_T, 4));
+  // Add the results together.
+  tree x0f = build_int_cst_type(UCHAR, 0x0F);
+  tree x0d = build_int_cst_type(UCHAR, 0x0D);
+  IF( gg_bitwise_and( gg_indirect(sign_location), x0f), eq_op, x0d )
+    {
+    gg_assign(working,
+              gg_cast(source_type, gg_negate(gg_add(d_and_q_10, final_digit))));
+    }
+  ELSE
+    {
+    gg_assign(working, gg_cast(source_type, gg_add(d_and_q_10, final_digit)));
+    }
+  ENDIF
+
+  value = gg_define_variable(type);
+  gg_assign(value, gg_cast(type, working));
+
+  retval = true;
+  return retval;
+  }
+
+static bool
+binary_from_comp_6(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval = false;
+
+  // This is where we build the actual numeric value of the digits of the
+  // COBOL packed-decimal variable.  It is up to the caller to interpret
+  // scaledness and rdigits and so forth.
+  value = gg_define_variable(type);
+
+  tree base = gg_define_variable(UCHAR_P);
+  gg_assign(base,
+            gg_cast(build_pointer_type(UCHAR_P),
+                    member(refer.field->var_decl_node,"data")));
+  if( !refer_is_clean(refer) )
+    {
+    gg_assign(base, gg_add(base, refer_offset(refer)));
+    }
+
+  tree d_and_q;
+  d_and_q_packed(d_and_q,
+                 base,
+                 refer.field->data.capacity());
+  gg_assign(value, gg_cast(type, d_and_q));
+
+  retval = true;
+  return retval;
+  }
+
+bool
+binary_from_FldPacked(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval;
+  if( refer.field->attr & packed_no_sign_e )
+    {
+    retval = binary_from_comp_6(value, refer, type);
+    }
+  else
+    {
+    retval = binary_from_comp_3(value, refer, type);
+    }
+  return retval;
+  }
+
+static
+bool binary_from_FldFloat(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  tree source_type = tree_type_from_field(refer.field);
+
+  if( !type )
+    {
+    type = source_type;
+    }
+
+  value = gg_define_variable(type);
+
+  tree base;
+  get_location(base, refer);
+
+  gg_assign(value,
+            gg_cast(type,
+                    gg_indirect(gg_cast(build_pointer_type(source_type),
+                                                                   base))));
+
+  return true;
+  }
+
+bool
+get_binary_value(tree &value, const cbl_refer_t &refer, tree type)
+  {
+  bool retval = false;
+  /* There are other get binary value routines.  This one is intended to be the
+     "best in class" version, incorporating everything that's been learned
+     about the process, and incorporating compiler SSA guidelines. */
+
+  if( (refer.field->attr & FIGCONST_MASK) == zero_value_e )
+    {
+    // The ZERO figurative constant is not flagged as signed:
+    if( !type )
+      {
+      type = UINT;
+      }
+    value = gg_define_variable(type);
+    gg_assign(value, gg_cast(type, integer_zero_node));
+    retval = true;
+    }
+  else if( refer.addr_of )
+    {
+    // The case of ADDRESS OF
+    value = gg_define_variable(type);
+    tree base = gg_define_variable(UCHAR_P);
+    gg_assign(base, member(refer.field->var_decl_node, "data"));
+    if( !refer_is_clean(refer) )
+      {
+      gg_assign(base, gg_add(base, refer_offset(refer)));
+      }
+    gg_assign(value, gg_cast(type, base));
+    }
+  else
+    {
+    // We know that the refer is a type that involves an integer binary value.
+    switch(refer.field->type)
+      {
+      case FldLiteralN:
+        retval = binary_from_FldLiteralN(value, refer, type);
+        break;
+
+      case FldNumericBin5:
+      case FldIndex:
+      case FldPointer:
+        retval = binary_from_FldNumericBin5(value, refer, type);
+        break;
+
+      case FldNumericBinary:
+        retval = binary_from_FldNumericBinary(value, refer, type);
+        break;
+
+      case FldNumericDisplay:
+        retval = binary_from_FldNumericDisplay(value, refer, type);
+        break;
+
+      case FldPacked:
+        retval = binary_from_FldPacked(value, refer, type);
+        break;
+
+      case FldFloat:
+        retval = binary_from_FldFloat(value, refer, type);
+        break;
+
+      default:
+        gcc_unreachable();
+        break;
+      }
+    }
+  return retval;
+  }
+
+void
+get_location(tree &retval, const cbl_refer_t &refer)
+  {
+  // This routine looks at a refer and returns a UCHAR_P pointer to the data
+  // of the object.
+  retval = gg_define_variable(UCHAR_P);
+
+  if( refer_is_super_clean(refer) )
+    {
+    // Working storage, not external, no refmods or subscripts:
+    // gg_assign(retval, member(refer.field->var_decl_node,"data"));
+
+#if 0
+    /* This should work.  It doesn't.  This needs investigating.  */
+    // To prevent aliasing problems, we use a memcpy
+    gg_memcpy(gg_get_address_of(retval),
+             gg_get_address(refer.field->data_decl_node),
+              build_int_cst_type(SIZE_T, gg_sizeof(UCHAR_P)));
+
+    if( refer.field->offset )
+      {
+      tree offset = build_int_cst_type(SIZE_T, refer.field->offset);
+      gg_assign(retval, gg_add(retval, offset));
+      }
+#else
+    tree base   = gg_cast(UCHAR_P,
+                          gg_get_address(refer.field->data_decl_node));
+    if( refer.field->offset )
+      {
+      tree offset = build_int_cst_type(SIZE_T, refer.field->offset);
+      gg_assign(retval, gg_cast(UCHAR_P, gg_add(base, offset)));
+      }
+    else
+      {
+      gg_assign(retval, base);
+      }
+#endif
+    }
+  else
+    {
+    // The variable is external, or intermediate_e, or there are subscripts, or
+    // there are refmods. We use the run-time "data", and add the run-time
+    // offset to it.
+    gg_assign(retval,
+              gg_add(member(refer.field->var_decl_node,"data"),
+                     refer_offset(refer)));
+    }
+  }
+
+void
+get_length(tree &retval, const cbl_refer_t &refer)
+  {
+  if(refer_is_clean(refer))
+    {
+    if(   refer.field->attr & any_length_e
+       || refer.field->attr & intermediate_e )
+      {
+      // We need the run-time capacity.
+      retval = member(refer.field->var_decl_node, "capacity");
+      }
+    else
+      {
+      // We can use the compile-time capacity.
+      retval = build_int_cst_type(SIZE_T, refer.field->data.capacity());
+      }
+    }
+  else
+    {
+    retval = refer_size_source(refer);
+    }
+  }
+
+void
+treeplet_fill_source(TREEPLET &treeplet, const cbl_refer_t &refer)
+  {
+  if( refer_is_clean(refer) )
+    {
+    treeplet.pfield = gg_get_address_of(refer.field->var_decl_node);
+    treeplet.offset = size_t_zero_node;
+    treeplet.length = refer_size_source(refer);
+    }
+  else
+    {
+    treeplet.pfield = gg_get_address_of(refer.field->var_decl_node);
+    treeplet.offset = refer_offset(refer);
+    treeplet.length = refer_size_source(refer);
+    }
+  }
+
+tree
+data_decl_type_for(cbl_field_t *field)
+  {
+  // The idea behind this function is to provide a useful data_type for the
+  // the data_decl_node for the field.  Where we can get it right, we do, like
+  // for little-endian FldNumericBin3.  For other types of 1, 2, 4, 8, or 16
+  // bytes, we alias it to uint8_t, uint16_t, and so on.  The idea there is to
+  // be able to create efficient GENERIC for doing moves between identical
+  // types.  Otherwise we generate a type for an array of uint8_t.
+  tree retval = NULL_TREE;
+  switch(field->type)
+    {
+    case FldGroup:
+      break;
+    case FldAlphanumeric:
+      break;
+    case FldNumericBinary:
+      break;
+    case FldFloat:
+      if( field->attr & ieeedec_e )
+        {
+        cbl_internal_error("%s: called with the unimplemented %s flag for %s",
+                            __func__,
+                            "IEEE",
+                            field->name);
+        }
+      switch(field->data.capacity())
+        {
+        case 4:
+          retval = FLOAT;
+          break;
+        case 8:
+          retval = DOUBLE;
+          break;
+        case 16:
+          retval = FLOAT128;
+          break;
+        }
+      break;
+    case FldPacked:
+      break;
+    case FldNumericBin5:
+      if( field->attr & signable_e )
+        {
+        // Because it is signable, we handle it here.  Unsigned fall through
+        // to the default handler
+        switch(field->data.capacity())
+          {
+          case 1:
+            retval = CHAR;
+            break;
+          case 2:
+            retval = SHORT;
+            break;
+          case 4:
+            retval = INT;
+            break;
+          case 8:
+            retval = LONG;
+            break;
+          case 16:
+            retval = INT128;
+            break;
+          default:
+            cbl_internal_error("%s: called with type %s but strange byte count for %s",
+                                __func__,
+                                cbl_field_type_str(field->type),
+                                field->name);
+            retval = NULL_TREE;
+            break;
+          }
+        }
+      break;
+    case FldNumericDisplay:
+      break;
+    case FldNumericEdited:
+      break;
+    case FldAlphaEdited:
+      break;
+    case FldClass:
+      // Doesn't actually need storage, but we give it one character to avoid
+      // having a NULL data pointer.
+      retval = UCHAR;
+      break;
+    case FldIndex:
+      break;
+    case FldPointer:
+      break;
+    default:
+      cbl_internal_error("%s: called with type %s for %s",
+                          __func__,
+                          cbl_field_type_str(field->type),
+                          field->name);
+      retval = NULL_TREE;
+      break;
+    }
+  // At this point, if there isn't already an assigned type, we specify an
+  // unsigned integer scalar if we can, and otherwise an array of uint8_t.
+
+  if( !retval )
+    {
+    size_t bytes_needed = std::max(field->data.memsize,
+                                                 field->data.capacity());
+    switch(bytes_needed)
+      {
+      case 1:
+        retval = UCHAR;
+        break;
+      case 2:
+        retval = USHORT;
+        break;
+      case 4:
+        retval = UINT;
+        break;
+      case 8:
+        retval = ULONG;
+        break;
+      case 16:
+        retval = UINT128;
+        break;
+      default:
+        retval = build_array_type_nelts(UCHAR, bytes_needed);
+        break;
+      }
+    }
+
+  return retval;
+  }
+
+void
+attribute_bit_clear(struct cbl_field_t *var, cbl_field_attr_t bits)
+  {
+  gg_assign(  member(var, "attr"),
+              gg_bitwise_and( member(var, "attr"),
+                              gg_bitwise_not( build_int_cst_type(SIZE_T, bits) )));
+  }
+
+tree
+attribute_bit_get(struct cbl_field_t *var, cbl_field_attr_t bits)
+  {
+  tree retval = gg_bitwise_and( member(var, "attr"),
+                                build_int_cst_type(SIZE_T, bits) );
+  return retval;
+  }
+
+void
+attribute_bit_set(struct cbl_field_t *var, cbl_field_attr_t bits)
+  {
+  gg_assign(  member(var, "attr"),
+              gg_bitwise_or(member(var, "attr"),
+                            build_int_cst_type(SIZE_T, bits)));
+  }
+

@@ -442,8 +442,8 @@ compute_object_offset (tree expr, const_tree var)
 
       t = TREE_OPERAND (expr, 1);
       tree low_bound, unit_size;
-      low_bound = array_ref_low_bound (CONST_CAST_TREE (expr));
-      unit_size = array_ref_element_size (CONST_CAST_TREE (expr));
+      low_bound = array_ref_low_bound (const_cast<tree> (expr));
+      unit_size = array_ref_element_size (const_cast<tree> (expr));
       if (! integer_zerop (low_bound))
 	t = fold_build2 (MINUS_EXPR, TREE_TYPE (t), t, low_bound);
       if (TREE_CODE (t) == INTEGER_CST && tree_int_cst_sgn (t) < 0)
@@ -1197,7 +1197,7 @@ gimplify_size_expressions (object_size_info *osi)
 				 object_size_type))
 	    {
 	      /* Record the SSAs we're overwriting to propagate the
-		 unknwons.  */
+		 unknowns.  */
 	      tree oldval = object_sizes_get (osi, i);
 	      tree old_wholeval = object_sizes_get (osi, i, true);
 
@@ -2379,7 +2379,7 @@ object_sizes_execute (function *fun, bool early)
 	  if (!SSA_NAME_OCCURS_IN_ABNORMAL_PHI (lhs))
 	    {
 	      replace_uses_by (lhs, result);
-	      /* Mark lhs as being possiblely DCEd. */
+	      /* Mark lhs as being possibly DCEd. */
 	      bitmap_set_bit (sdce_worklist, SSA_NAME_VERSION (lhs));
 	    }
 	  else

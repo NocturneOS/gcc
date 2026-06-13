@@ -44,8 +44,12 @@ CompileTraitItem::visit (HIR::TraitItemConst &constant)
 			     resolved_type, canonical_path, const_value_expr,
 			     constant.get_locus (),
 			     const_value_expr.get_locus ());
-  ctx->push_const (const_expr);
-  ctx->insert_const_decl (constant.get_mappings ().get_hirid (), const_expr);
+  if (const_expr != error_mark_node)
+    {
+      ctx->push_const (const_expr);
+      ctx->insert_const_decl (constant.get_mappings ().get_hirid (),
+			      const_expr);
+    }
 
   reference = const_expr;
 }
@@ -92,7 +96,7 @@ CompileTraitItem::visit (HIR::TraitItemFunc &func)
     = nr_ctx.to_canonical_path (func.get_mappings ().get_nodeid ());
 
   // FIXME: How do we get the proper visibility here?
-  auto vis = HIR::Visibility (HIR::Visibility::VisType::PUBLIC);
+  auto vis = HIR::Visibility (HIR::Visibility::VisType::Public);
   HIR::TraitFunctionDecl &function = func.get_decl ();
   tree fndecl
     = compile_function (false, function.get_function_name ().as_string (),

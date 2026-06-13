@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -257,25 +257,18 @@ extern "C"
 void
 __gg__pow(  cbl_arith_format_t,
             size_t,
+      const cblc_referlet_t *A,
             size_t,
+      const cblc_referlet_t *B,
             size_t,
+      const cblc_referlet_t *C,
       const cbl_round_t  *rounded,
             int           on_error_flag,
             int          *compute_error
             )
   {
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-        cblc_field_t **B  = __gg__treeplet_2f;
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
-  GCOB_FP128 avalue = __gg__float128_from_qualified_field(A[0], A_o[0], A_s[0]);
-  GCOB_FP128 bvalue = __gg__float128_from_qualified_field(B[0], B_o[0], B_s[0]);
+  GCOB_FP128 avalue = __gg__float128_from_qualified_field(A[0].field, A[0].offset, A[0].size);
+  GCOB_FP128 bvalue = __gg__float128_from_qualified_field(B[0].field, B[0].offset, B[0].size);
   GCOB_FP128 tgt_value;
 
   if( avalue == 0 && bvalue == 0 )
@@ -304,15 +297,15 @@ __gg__pow(  cbl_arith_format_t,
       *compute_error |= compute_error_exp_minus_by_frac;
       // This kind of error doesn't overwrite the target, so the returned
       // value is not relevant.  Make it zero to avoid overheating the
-      // converstion routine
+      // conversion routine
       tgt_value = 0;
       }
     }
   if( !(*compute_error & compute_error_exp_minus_by_frac) )
     {
-    *compute_error |= conditional_stash(C[0],
-                                        C_o[0],
-                                        C_s[0],
+    *compute_error |= conditional_stash(C[0].field,
+                                        C[0].offset,
+                                        C[0].size,
                                         (on_error_flag & ON_SIZE_ERROR),
                                         tgt_value,
                                         *rounded);
@@ -361,6 +354,15 @@ typedef struct int256
     };
   }int256;
 
+typedef struct int128
+  {
+  union
+    {
+    uint64_t       i64 [2];
+    uint128        i128;
+    };
+  }int128;
+
 static int
 multiply_int256_by_int64(int256 &product, const uint64_t multiplier)
   {
@@ -368,11 +370,13 @@ multiply_int256_by_int64(int256 &product, const uint64_t multiplier)
   // a factor of ten.  This is effectively left-shifting by decimal
   // digits.  See scale_int256_by_digits
   uint64_t overflows[5] = {};
+  int128 temp;
   for(int i=0; i<4; i++)
     {
-    uint128 temp = (uint128)product.i64[i] * multiplier;
-    product.i64[i] = *PTRCAST(uint64_t, &temp);
-    overflows[i+1] = *PTRCAST(uint64_t, PTRCAST(uint8_t, &temp) + 8);
+    //  cppcheck-suppress unreadVariable  // cppcheck is dumb about unions???
+    temp.i128 = (uint128)product.i64[i] * multiplier;
+    product.i64[i] = temp.i64[0];
+    overflows[i+1] = temp.i64[1];
     }
 
   for(int i=1; i<4; i++)
@@ -450,21 +454,20 @@ static void
 divide_int256_by_int64(int256 &val, uint64_t divisor)
   {
   // val needs to be a positive number
-  uint128 temp = 0;
+  int128 temp = {};
   for( int i=3; i>=0; i-- )
     {
     // Left shift temp 64 bits:
-    *PTRCAST(uint64_t, ((PTRCAST(uint8_t, &temp))+8))
-                          = *PTRCAST(uint64_t, ((PTRCAST(uint8_t, &temp))+0));
+    temp.i64[1] = temp.i64[0];
 
     // Put the high digit of val into the bottom of temp
-    *PTRCAST(uint64_t, ((PTRCAST(uint8_t, &temp))+0)) = val.i64[i];
+    temp.i64[0] = val.i64[i];
 
     // Divide that combinary by divisor to get the new digits
-    val.i64[i] = temp / divisor;
+    val.i64[i] = temp.i128 / divisor;
 
     // And the new temp is that combination modulo divisor
-    temp = temp % divisor;
+    temp.i128 = temp.i128 % divisor;
     }
   }
 
@@ -574,8 +577,11 @@ extern "C"
 void
 __gg__add_fixed_phase1( cbl_arith_format_t ,
                         size_t nA,
+                  const cblc_referlet_t *AA,
                         size_t ,
+                        cblc_referlet_t *,
                         size_t ,
+                        cblc_referlet_t *,
                   const cbl_round_t  *,
                         int           ,
                         int          *compute_error
@@ -585,12 +591,8 @@ __gg__add_fixed_phase1( cbl_arith_format_t ,
 
   // The result goes into the temporary phase1_result.
 
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-
   // Let us prime the pump with the first value of A[]
-  get_int256_from_qualified_field(phase1_result, phase1_rdigits, A[0], A_o[0], A_s[0]);
+  get_int256_from_qualified_field(phase1_result, phase1_rdigits, AA[0].field, AA[0].offset, AA[0].size);
 
   // We now go into a loop adding each of the A[] values to phase1_result:
 
@@ -598,7 +600,7 @@ __gg__add_fixed_phase1( cbl_arith_format_t ,
     {
     int temp_rdigits;
     int256 temp = {};
-    get_int256_from_qualified_field(temp, temp_rdigits, A[i], A_o[i], A_s[i]);
+    get_int256_from_qualified_field(temp, temp_rdigits, AA[i].field, AA[i].offset, AA[i].size);
 
     // We have to scale the one with fewer rdigits to match the one with greater
     // rdigits:
@@ -630,23 +632,22 @@ extern "C"
 void
 __gg__addf1_fixed_phase2( cbl_arith_format_t ,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                    const cblc_referlet_t *C,
                     const cbl_round_t  *rounded,
                           int           on_error_flag,
                           int          *compute_error
                           )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   // This is the assignment phase of an ADD Format 1
 
   // We take phase1_result and accumulate it into C
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
-  if( C[0]->type == FldFloat)
+  if( C[0].field->type == FldFloat)
     {
     // The target we need to accumulate into is a floating-point number, so we
     // need to convert our fixed-point intermediate into floating point and
@@ -657,12 +658,16 @@ __gg__addf1_fixed_phase2( cbl_arith_format_t ,
     value_a /= __gg__power_of_ten(phase1_rdigits);
 
     // Pick up the target
-    GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+    GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[0].field,
+                                                             C[0].offset,
+                                                             C[0].size);
 
     value_a += value_b;
 
     // At this point, we assign running_sum to *C.
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field,
+                                        C[0].offset,
+                                        C[0].size,
                                         on_size_error,
                                         value_a,
                                         *rounded++);
@@ -677,10 +682,14 @@ __gg__addf1_fixed_phase2( cbl_arith_format_t ,
     int256 value_b = {};
     int rdigits_b;
 
-    get_int256_from_qualified_field(value_b, rdigits_b, C[0], C_o[0], C_s[0]);
+    get_int256_from_qualified_field(value_b,
+                                    rdigits_b,
+                                    C[0].field,
+                                    C[0].offset,
+                                    C[0].size);
 
-    // We have to scale the one with fewer rdigits to match the one with greater
-    // rdigits:
+    // We have to scale the one with fewer rdigits to match the one with
+    // greater rdigits:
     if( rdigits_a > rdigits_b )
       {
       scale_int256_by_digits(value_b, rdigits_a - rdigits_b);
@@ -702,7 +711,9 @@ __gg__addf1_fixed_phase2( cbl_arith_format_t ,
       }
 
       // At this point, we assign running_sum to *C.
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field,
+                                        C[0].offset,
+                                        C[0].size,
                                         on_size_error,
                                         value_a.i128[0],
                                         rdigits_a,
@@ -714,24 +725,22 @@ extern "C"
 void
 __gg__fixed_phase2_assign_to_c( cbl_arith_format_t ,
                                 size_t ,
+                                cblc_referlet_t *,
                                 size_t ,
+                                cblc_referlet_t *,
                                 size_t ,
+                          const cblc_referlet_t *CC,
                           const cbl_round_t  *rounded,
                                 int           on_error_flag,
                                 int          *compute_error
                                 )
   {
-  // This is the assignment phase of an ADD Format 2
-
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
+  // This is the assignment phase of an ADD or SUBTRACT Format 2
 
   // We take phase1_result and put it into C
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
-  if( C[0]->type == FldFloat)
+  if( CC[0].field->type == FldFloat)
     {
     // The target we need to accumulate into is a floating-point number, so we
     // need to convert our fixed-point intermediate into floating point and
@@ -741,7 +750,7 @@ __gg__fixed_phase2_assign_to_c( cbl_arith_format_t ,
     GCOB_FP128 value_a = (GCOB_FP128)phase1_result.i128[0];
     value_a /= __gg__power_of_ten(phase1_rdigits);
 
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(CC[0].field, CC[0].offset, CC[0].size,
                                         on_size_error,
                                         value_a,
                                        *rounded++);
@@ -759,8 +768,17 @@ __gg__fixed_phase2_assign_to_c( cbl_arith_format_t ,
       *compute_error |= compute_error_overflow;
       }
 
+    if( CC[0].field->type == FldPointer )
+      {
+      // In case somebody does pointer arithmetic that goes negative, we need
+      // to make the top 64 bits positive.  Otherwise, the conditional stash
+      // will see that FldPointer is not signable, and force the value
+      // positive with a two's complement.
+      value_a.i128[0] &= 0xFFFFFFFFFFFFFFFFUL;
+      }
+
       // At this point, we assign that value to *C.
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(CC[0].field, CC[0].offset, CC[0].size,
                                         on_size_error,
                                         value_a.i128[0],
                                         rdigits_a,
@@ -772,8 +790,11 @@ extern "C"
 void
 __gg__add_float_phase1( cbl_arith_format_t ,
                         size_t nA,
+                  const cblc_referlet_t *A,
                         size_t ,
+                        cblc_referlet_t *,
                         size_t ,
+                        cblc_referlet_t *,
                   const cbl_round_t  *,
                         int           ,
                         int          *compute_error
@@ -783,18 +804,14 @@ __gg__add_float_phase1( cbl_arith_format_t ,
 
   // The result goes into the temporary phase1_result_ffloat.
 
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-
   // Let us prime the pump with the first value of A[]
-  phase1_result_float = __gg__float128_from_qualified_field(A[0], A_o[0], A_s[0]);
+  phase1_result_float = __gg__float128_from_qualified_field(A[0].field, A[0].offset, A[0].size);
 
   // We now go into a loop adding each of the A[] values to phase1_result_flt:
 
   for( size_t i=1; i<nA; i++ )
     {
-    GCOB_FP128 temp = __gg__float128_from_qualified_field(A[i], A_o[i], A_s[i]);
+    GCOB_FP128 temp = __gg__float128_from_qualified_field(A[i].field, A[i].offset, A[i].size);
     phase1_result_float = addition_helper_float(phase1_result_float,
                                                 temp,
                                                 compute_error);
@@ -805,24 +822,23 @@ extern "C"
 void
 __gg__addf1_float_phase2( cbl_arith_format_t ,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                    const cblc_referlet_t *C,
                     const cbl_round_t  *rounded,
                           int           on_error_flag,
                           int          *compute_error
                           )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   // This is the assignment phase of an ADD Format 2
   // We take phase1_result and accumulate it into C
 
-  GCOB_FP128 temp = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+  GCOB_FP128 temp = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
   temp = addition_helper_float(temp, phase1_result_float, compute_error);
-  *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+  *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                       on_size_error,
                                       temp,
                                      *rounded++);
@@ -832,22 +848,21 @@ extern "C"
 void
 __gg__float_phase2_assign_to_c( cbl_arith_format_t ,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                          cblc_referlet_t *,
                           size_t ,
+                    const cblc_referlet_t *C,
                     const cbl_round_t  *rounded,
                           int           on_error_flag,
                           int          *compute_error
                           )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   // This is the assignment phase of an ADD Format 2
     // We take phase1_result and put it into C
 
-  *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+  *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                       on_size_error,
                                       phase1_result_float,
                                      *rounded++);
@@ -857,8 +872,11 @@ extern "C"
 void
 __gg__addf3(cbl_arith_format_t ,
             size_t nA,
+       const cblc_referlet_t *A,
             size_t ,
+            cblc_referlet_t *,
             size_t ,
+       const cblc_referlet_t *C,
       const cbl_round_t  *rounded,
             int           on_error_flag,
             int          *compute_error
@@ -867,27 +885,19 @@ __gg__addf3(cbl_arith_format_t ,
   // This is an ADD Format 3.  Each A[i] gets accumulated into each C[i].  When
   // both are fixed, we do fixed arithmetic.  When either is a FldFloat, we
   // do floating-point arithmetic.
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
   for(size_t i=0; i<nA; i++)
     {
-    if( A[i]->type == FldFloat || C[i]->type == FldFloat )
+    if( A[i].field->type == FldFloat || C[i].field->type == FldFloat )
       {
-      GCOB_FP128 value_a = __gg__float128_from_qualified_field(A[i], A_o[i], A_s[i]);
-      GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[i], C_o[i], C_s[i]);
+      GCOB_FP128 value_a = __gg__float128_from_qualified_field(A[i].field, A[i].offset, A[i].size);
+      GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[i].field, C[i].offset, C[i].size);
 
       value_a = addition_helper_float(value_a, value_b, compute_error);
 
         // At this point, we assign the sum to *C.
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           value_a,
                                           *rounded++);
@@ -901,8 +911,8 @@ __gg__addf3(cbl_arith_format_t ,
       int256 value_b;
       int rdigits_b;
 
-      get_int256_from_qualified_field(value_a, rdigits_a, A[i], A_o[i], A_s[i]);
-      get_int256_from_qualified_field(value_b, rdigits_b, C[i], C_o[i], C_s[i]);
+      get_int256_from_qualified_field(value_a, rdigits_a, A[i].field, A[i].offset, A[i].size);
+      get_int256_from_qualified_field(value_b, rdigits_b, C[i].field, C[i].offset, C[i].size);
 
       // We have to scale the one with fewer rdigits to match the one with greater
       // rdigits:
@@ -927,7 +937,7 @@ __gg__addf3(cbl_arith_format_t ,
         }
 
         // At this point, we assign the sum to *C.
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           value_a.i128[0],
                                           rdigits_a,
@@ -940,23 +950,22 @@ extern "C"
 void
 __gg__subtractf1_fixed_phase2(cbl_arith_format_t ,
                               size_t ,
+                              cblc_referlet_t *,
                               size_t ,
+                              cblc_referlet_t *,
                               size_t ,
+                        const cblc_referlet_t *C,
                         const cbl_round_t  *rounded,
                               int           on_error_flag,
                               int          *compute_error
                               )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   // This is the assignment phase of an ADD Format 1
 
   // We take phase1_result and subtrace it from C
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
-  if( C[0]->type == FldFloat)
+  if( C[0].field->type == FldFloat)
     {
     // The target we need to accumulate into is a floating-point number, so we
     // need to convert our fixed-point intermediate into floating point and
@@ -967,12 +976,12 @@ __gg__subtractf1_fixed_phase2(cbl_arith_format_t ,
     value_a /= __gg__power_of_ten(phase1_rdigits);
 
     // Pick up the target
-    GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+    GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
 
     value_b -= value_a;
 
     // At this point, we assign the difference to *C.
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                         on_size_error,
                                         value_b,
                                         *rounded++);
@@ -987,7 +996,7 @@ __gg__subtractf1_fixed_phase2(cbl_arith_format_t ,
     int256 value_b = {};
     int rdigits_b;
 
-    get_int256_from_qualified_field(value_b, rdigits_b, C[0], C_o[0], C_s[0]);
+    get_int256_from_qualified_field(value_b, rdigits_b, C[0].field, C[0].offset, C[0].size);
 
     // We have to scale the one with fewer rdigits to match the one with greater
     // rdigits:
@@ -1012,7 +1021,7 @@ __gg__subtractf1_fixed_phase2(cbl_arith_format_t ,
       }
 
       // At this point, we assign running_sum to *C.
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                         on_size_error,
                                         value_b.i128[0],
                                         rdigits_b,
@@ -1024,8 +1033,11 @@ extern "C"
 void
 __gg__subtractf2_fixed_phase1(cbl_arith_format_t ,
                               size_t nA,
+                        const cblc_referlet_t *AA,
                               size_t ,
+                        const cblc_referlet_t *BB,
                               size_t ,
+                              cblc_referlet_t *,
                         const cbl_round_t  *rounded,
                               int           on_error_flag,
                               int          *compute_error
@@ -1033,20 +1045,19 @@ __gg__subtractf2_fixed_phase1(cbl_arith_format_t ,
   {
   // This is the calculation phase of a fixed-point SUBTRACT Format 2
 
-        cblc_field_t **B  = __gg__treeplet_2f;
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-
   // Add up all the A values
   __gg__add_fixed_phase1( not_expected_e ,
                           nA,
+                          AA,
                           0,
+                          NULL,
                           0,
+                          NULL,
                           rounded,
                           on_error_flag,
                           compute_error);
 
-  // Subtract that from the B value:
+  // Subtract the phase1_result from the B value:
 
   int256 value_a   = phase1_result;
   int    rdigits_a = phase1_rdigits;
@@ -1054,7 +1065,7 @@ __gg__subtractf2_fixed_phase1(cbl_arith_format_t ,
   int256 value_b = {};
   int rdigits_b;
 
-  get_int256_from_qualified_field(value_b, rdigits_b, B[0], B_o[0], B_s[0]);
+  get_int256_from_qualified_field(value_b, rdigits_b, BB[0].field, BB[0].offset, BB[0].size);
 
   // We have to scale the one with fewer rdigits to match the one with greater
   // rdigits:
@@ -1068,8 +1079,8 @@ __gg__subtractf2_fixed_phase1(cbl_arith_format_t ,
     scale_int256_by_digits(value_a, rdigits_b - rdigits_a);
     }
 
-  // The two numbers have the same number of rdigits.  It's now safe to add
-  // them.
+  // The two numbers have the same number of rdigits.  It's now safe to take
+  // the difference.
   subtract_int256_from_int256(value_b, value_a);
 
   int overflow = squeeze_int256(value_b, rdigits_b);
@@ -1085,24 +1096,23 @@ extern "C"
 void
 __gg__subtractf1_float_phase2(cbl_arith_format_t ,
                               size_t ,
+                              cblc_referlet_t *,
                               size_t ,
+                              cblc_referlet_t *,
                               size_t ,
+                        const cblc_referlet_t *C,
                         const cbl_round_t  *rounded,
                               int           on_error_flag,
                               int          *compute_error
                               )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   // This is the assignment phase of an SUBTRACT Format 2
   // We take phase1_result and subtract it from C
 
-  GCOB_FP128 temp = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+  GCOB_FP128 temp = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
   temp = subtraction_helper_float(temp, phase1_result_float, compute_error);
-  *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+  *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                       on_size_error,
                                       temp,
                                      *rounded++);
@@ -1112,8 +1122,11 @@ extern "C"
 void
 __gg__subtractf2_float_phase1(cbl_arith_format_t ,
                               size_t nA,
+                        const cblc_referlet_t *A,
                               size_t ,
+                        const cblc_referlet_t *B,
                               size_t ,
+                              cblc_referlet_t *,
                         const cbl_round_t  *rounded,
                               int           on_error_flag,
                               int          *compute_error
@@ -1121,24 +1134,21 @@ __gg__subtractf2_float_phase1(cbl_arith_format_t ,
   {
   // This is the calculation phase of a fixed-point SUBTRACT Format 2
 
-        cblc_field_t **B  = __gg__treeplet_2f;
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-
   // Add up all the A values
   __gg__add_float_phase1( not_expected_e ,
                           nA,
+                          A,
                           0,
+                          NULL,
                           0,
+                          NULL,
                           rounded,
                           on_error_flag,
                           compute_error
                           );
 
   // Subtract that subtotal from the B value:
-  GCOB_FP128 value_b = __gg__float128_from_qualified_field(B[0], B_o[0], B_s[0]);
-
-
+  GCOB_FP128 value_b = __gg__float128_from_qualified_field(B[0].field, B[0].offset, B[0].size);
   phase1_result_float = subtraction_helper_float(value_b, phase1_result_float, compute_error);
   }
 
@@ -1146,8 +1156,11 @@ extern "C"
 void
 __gg__subtractf3( cbl_arith_format_t ,
                   size_t nA,
+            const cblc_referlet_t *A,
                   size_t ,
+                  cblc_referlet_t *,
                   size_t ,
+            const cblc_referlet_t *C,
             const cbl_round_t  *rounded,
                   int           on_error_flag,
                   int          *compute_error
@@ -1156,26 +1169,19 @@ __gg__subtractf3( cbl_arith_format_t ,
   // This is an ADD Format 3.  Each A[i] gets accumulated into each C[i].  Each
   // SUBTRACTION is treated separately.
 
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
   for(size_t i=0; i<nA; i++)
     {
-    if( A[i]->type == FldFloat || C[i]->type == FldFloat)
+    if( A[i].field->type == FldFloat || C[i].field->type == FldFloat)
       {
-      GCOB_FP128 value_a = __gg__float128_from_qualified_field(A[i], A_o[i], A_s[i]);
-      GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[i], C_o[i], C_s[i]);
+      GCOB_FP128 value_a = __gg__float128_from_qualified_field(A[i].field, A[i].offset, A[i].size);
+      GCOB_FP128 value_b = __gg__float128_from_qualified_field(C[i].field, C[i].offset, C[i].size);
 
       value_b = subtraction_helper_float(value_b, value_a, compute_error);
 
         // At this point, we assign the sum to *C.
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           value_b,
                                           *rounded++);
@@ -1189,8 +1195,8 @@ __gg__subtractf3( cbl_arith_format_t ,
       int256 value_b;
       int rdigits_b;
 
-      get_int256_from_qualified_field(value_a, rdigits_a, A[i], A_o[i], A_s[i]);
-      get_int256_from_qualified_field(value_b, rdigits_b, C[i], C_o[i], C_s[i]);
+      get_int256_from_qualified_field(value_a, rdigits_a, A[i].field, A[i].offset, A[i].size);
+      get_int256_from_qualified_field(value_b, rdigits_b, C[i].field, C[i].offset, C[i].size);
 
       // We have to scale the one with fewer rdigits to match the one with greater
       // rdigits:
@@ -1216,7 +1222,7 @@ __gg__subtractf3( cbl_arith_format_t ,
         }
 
         // At this point, we assign the sum to *C.
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           value_b.i128[0],
                                           rdigits_b,
@@ -1234,8 +1240,11 @@ extern "C"
 void
 __gg__multiplyf1_phase1(cbl_arith_format_t ,
                         size_t ,
+                  const cblc_referlet_t *A,
                         size_t ,
+                        cblc_referlet_t *,
                         size_t ,
+                        cblc_referlet_t *,
                   const cbl_round_t  *,
                         int           ,
                         int          *)
@@ -1243,25 +1252,21 @@ __gg__multiplyf1_phase1(cbl_arith_format_t ,
   // We are getting just the one value, which we are converting to the necessary
   // intermediate form
 
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-
-  if( A[0]->type == FldFloat )
+  if( A[0].field->type == FldFloat )
     {
     multiply_intermediate_is_float = true;
-    multiply_intermediate_float = __gg__float128_from_qualified_field(A[0],
-                                                                      A_o[0],
-                                                                      A_s[0]);
+    multiply_intermediate_float = __gg__float128_from_qualified_field(A[0].field,
+                                                                      A[0].offset,
+                                                                      A[0].size);
     }
   else
     {
     multiply_intermediate_is_float = false;
     multiply_intermediate_int128 =
          __gg__binary_value_from_qualified_field(&multiply_intermediate_rdigits,
-                                                 A[0],
-                                                 A_o[0],
-                                                 A_s[0]);
+                                                 A[0].field,
+                                                 A[0].offset,
+                                                 A[0].size);
     }
   }
 
@@ -1287,10 +1292,10 @@ void multiply_int128_by_int128(int256 &ABCD,
   uint128 BD;
 
   // Let's extract the digits.
-  uint64_t a = *PTRCAST(uint64_t, (PTRCAST(unsigned char, (&ab_value))+8));
-  uint64_t b = *PTRCAST(uint64_t, (PTRCAST(unsigned char, (&ab_value))+0));
-  uint64_t c = *PTRCAST(uint64_t, (PTRCAST(unsigned char, (&cd_value))+8));
-  uint64_t d = *PTRCAST(uint64_t, (PTRCAST(unsigned char, (&cd_value))+0));
+  uint64_t a = ab_value>>64;
+  uint64_t b = ab_value;
+  uint64_t c = cd_value>>64;
+  uint64_t d = cd_value;
 
   // multiply (a0 + b) * (c0 + d)
 
@@ -1329,17 +1334,16 @@ extern "C"
 void
 __gg__multiplyf1_phase2(cbl_arith_format_t ,
                         size_t ,
+                        cblc_referlet_t *,
                         size_t ,
+                        cblc_referlet_t *,
                         size_t ,
+                  const cblc_referlet_t *C,
                   const cbl_round_t  *rounded,
                         int           on_error_flag,
                         int          *compute_error
                         )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   int error_this_time=0;
 
@@ -1349,21 +1353,21 @@ __gg__multiplyf1_phase2(cbl_arith_format_t ,
   if( multiply_intermediate_is_float )
     {
     a_value = multiply_intermediate_float;
-    if( C[0]->type == FldFloat )
+    if( C[0].field->type == FldFloat )
       {
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
       goto float_float;
       }
     else
       {
       // float times fixed
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
       goto float_float;
       }
     }
   else
     {
-    if( C[0]->type == FldFloat )
+    if( C[0].field->type == FldFloat )
       {
       // fixed * float
       a_value = (GCOB_FP128) multiply_intermediate_int128;
@@ -1371,7 +1375,7 @@ __gg__multiplyf1_phase2(cbl_arith_format_t ,
         {
         a_value /= (GCOB_FP128)__gg__power_of_ten(multiply_intermediate_rdigits);
         }
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field, C[0].offset, C[0].size);
       goto float_float;
       }
     else
@@ -1383,7 +1387,7 @@ __gg__multiplyf1_phase2(cbl_arith_format_t ,
 
       int cd_rdigits;
       __int128 ab_value = multiply_intermediate_int128;
-      __int128 cd_value = __gg__binary_value_from_qualified_field(&cd_rdigits, C[0], C_o[0], C_s[0]);
+      __int128 cd_value = __gg__binary_value_from_qualified_field(&cd_rdigits, C[0].field, C[0].offset, C[0].size);
 
       int256 ABCD;
       int rdigits = multiply_intermediate_rdigits + cd_rdigits;
@@ -1396,7 +1400,7 @@ __gg__multiplyf1_phase2(cbl_arith_format_t ,
         *compute_error |= compute_error_overflow;
         }
         // At this point, we assign running_sum to *C.
-      *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+      *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                           on_size_error,
                                           ABCD.i128[0],
                                           rdigits,
@@ -1415,7 +1419,7 @@ __gg__multiplyf1_phase2(cbl_arith_format_t ,
     }
   else
     {
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                         on_size_error,
                                         a_value,
                                         *rounded);
@@ -1428,23 +1432,16 @@ extern "C"
 void
 __gg__multiplyf2( cbl_arith_format_t ,
                   size_t ,
+            const cblc_referlet_t *A,
                   size_t ,
+            const cblc_referlet_t *B,
                   size_t nC,
+            const cblc_referlet_t *C,
             const cbl_round_t  *rounded,
                   int           on_error_flag,
                   int          *compute_error
                   )
   {
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-        cblc_field_t **B  = __gg__treeplet_2f;
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
 
   bool      got_float = false;
@@ -1452,10 +1449,10 @@ __gg__multiplyf2( cbl_arith_format_t ,
   int256    product_fix;
   int       product_fix_digits;
 
-  if( A[0]->type == FldFloat || B[0]->type == FldFloat )
+  if( A[0].field->type == FldFloat || B[0].field->type == FldFloat )
     {
-    GCOB_FP128 a_value = __gg__float128_from_qualified_field(A[0], A_o[0], A_s[0]);
-    GCOB_FP128 b_value = __gg__float128_from_qualified_field(B[0], B_o[0], B_s[0]);
+    GCOB_FP128 a_value = __gg__float128_from_qualified_field(A[0].field, A[0].offset, A[0].size);
+    GCOB_FP128 b_value = __gg__float128_from_qualified_field(B[0].field, B[0].offset, B[0].size);
     product_float = multiply_helper_float(a_value, b_value, compute_error);
     got_float = true;
     }
@@ -1463,8 +1460,8 @@ __gg__multiplyf2( cbl_arith_format_t ,
     {
     int a_rdigits;
     int b_rdigits;
-    __int128 a_value = __gg__binary_value_from_qualified_field(&a_rdigits, A[0], A_o[0], A_s[0]);
-    __int128 b_value = __gg__binary_value_from_qualified_field(&b_rdigits, B[0], B_o[0], B_s[0]);
+    __int128 a_value = __gg__binary_value_from_qualified_field(&a_rdigits, A[0].field, A[0].offset, A[0].size);
+    __int128 b_value = __gg__binary_value_from_qualified_field(&b_rdigits, B[0].field, B[0].offset, B[0].size);
     product_fix_digits = a_rdigits + b_rdigits;
     multiply_int128_by_int128(product_fix, a_value, b_value);
     int overflow = squeeze_int256(product_fix, product_fix_digits);
@@ -1478,14 +1475,14 @@ __gg__multiplyf2( cbl_arith_format_t ,
     {
     if( got_float )
       {
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           product_float,
                                           *rounded++);
       }
     else
       {
-      *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+      *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                           on_size_error,
                                           product_fix.i128[0],
                                           product_fix_digits,
@@ -1703,27 +1700,28 @@ divide_int128_by_int128(int256   &quotient,
 
       // Now we multiply our 64-bit guess by the 128-bit CD to get the
       // three-place value we are going to subtract from the numerator area.
-
-      uint64_t subber[3];
-      subber[2] = 0;
+      // We use the bottom three i64[] places of an int256 structure to hold
+      // that three-place value
+      int256 subber;
+      subber.i64[2] = 0;
 
       // Start with the bottom 128 bits of the "subber"
-      *PTRCAST(uint128, subber) = (uint128) divisor64[0] * quotient.i64[q_place];
+      subber.i128[0] = (uint128) divisor64[0] * quotient.i64[q_place];
 
       // Get the next 128 bits of subber
       temp = (uint128) divisor64[1] * quotient.i64[q_place];
 
       // Add the top of the first product to the bottom of the second:
-      subber[1] += temp64[0];
+      subber.i64[1] += temp64[0];
 
       // See if there was an overflow:
-      if( subber[1] < temp64[0] )
+      if( subber.i64[1] < temp64[0] )
         {
         // There was an overflow
-        subber[2] = 1;
+        subber.i64[2] = 1;
         }
       // And now put the top of the second product into place:
-      subber[2] += temp64[1];
+      subber.i64[2] += temp64[1];
 
       // "subber" is now the three-place product of the two-place divisor times
       // the one-place guess
@@ -1738,13 +1736,13 @@ divide_int128_by_int128(int256   &quotient,
           {
           // We are subtracting from zero and we have a borrow.  Leave the
           // borrow on and just do the subtraction:
-          numerator.i64[q_place + j] -= subber[j];
+          numerator.i64[q_place + j] -= subber.i64[j];
           }
         else
           {
           uint64_t stash = numerator.i64[q_place + j];
           numerator.i64[q_place + j] -= borrow;
-          numerator.i64[q_place + j] -= subber[j];
+          numerator.i64[q_place + j] -= subber.i64[j];
           if( numerator.i64[q_place + j] > stash )
             {
             // After subtracting, the value got bigger, which means we have
@@ -1775,14 +1773,14 @@ divide_int128_by_int128(int256   &quotient,
             {
             // We are at the top and have a carry.  Just leave the carry on
             // and do the addition:
-            numerator.i64[q_place + ii] += subber[ii];
+            numerator.i64[q_place + ii] += subber.i64[ii];
             }
           else
             {
             // We are not at the top.
             uint64_t stash = numerator.i64[q_place + ii];
             numerator.i64[q_place + ii] += carry;
-            numerator.i64[q_place + ii] += subber[ii];
+            numerator.i64[q_place + ii] += subber.i64[ii];
             if( numerator.i64[q_place + ii] < stash )
               {
               // The addition caused the result to get smaller, meaning that
@@ -1809,17 +1807,16 @@ extern "C"
 void
 __gg__dividef1_phase2(cbl_arith_format_t ,
                       size_t ,
+                      cblc_referlet_t *,
                       size_t ,
+                      cblc_referlet_t *,
                       size_t ,
+                const cblc_referlet_t *C,
                 const cbl_round_t  *rounded,
                       int           on_error_flag,
                       int          *compute_error
                       )
   {
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   int error_this_time=0;
 
@@ -1829,21 +1826,25 @@ __gg__dividef1_phase2(cbl_arith_format_t ,
   if( multiply_intermediate_is_float )
     {
     a_value = multiply_intermediate_float;
-    if( C[0]->type == FldFloat )
+    if( C[0].field->type == FldFloat )
       {
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field,
+                                                    C[0].offset,
+                                                    C[0].size);
       goto float_float;
       }
     else
       {
       // float times fixed
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field,
+                                                    C[0].offset,
+                                                    C[0].size);
       goto float_float;
       }
     }
   else
     {
-    if( C[0]->type == FldFloat )
+    if( C[0].field->type == FldFloat )
       {
       // gixed * float
       a_value = (GCOB_FP128) multiply_intermediate_int128;
@@ -1851,7 +1852,9 @@ __gg__dividef1_phase2(cbl_arith_format_t ,
         {
         a_value /= (GCOB_FP128)__gg__power_of_ten(multiply_intermediate_rdigits);
         }
-      b_value = __gg__float128_from_qualified_field(C[0], C_o[0], C_s[0]);
+      b_value = __gg__float128_from_qualified_field(C[0].field,
+                                                    C[0].offset,
+                                                    C[0].size);
       goto float_float;
       }
     else
@@ -1862,7 +1865,11 @@ __gg__dividef1_phase2(cbl_arith_format_t ,
       // 64-bit "digits".  We need to multiply them to create a 256-bit result
 
       int dividend_rdigits;
-      __int128 dividend = __gg__binary_value_from_qualified_field(&dividend_rdigits, C[0], C_o[0], C_s[0]);
+      __int128 dividend = __gg__binary_value_from_qualified_field(
+                                                  &dividend_rdigits,
+                                                  C[0].field,
+                                                  C[0].offset,
+                                                  C[0].size);
 
       int quotient_rdigits;
       int256 quotient;
@@ -1881,7 +1888,7 @@ __gg__dividef1_phase2(cbl_arith_format_t ,
         *compute_error |= compute_error_overflow;
         }
         // At this point, we assign the quotient to *C.
-      *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+      *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                           on_size_error,
                                           quotient.i128[0],
                                           quotient_rdigits,
@@ -1901,7 +1908,7 @@ __gg__dividef1_phase2(cbl_arith_format_t ,
     }
   else
     {
-    *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+    *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                         on_size_error,
                                         b_value,
                                         *rounded);
@@ -1914,33 +1921,30 @@ extern "C"
 void
 __gg__dividef23(cbl_arith_format_t ,
                 size_t ,
+          const cblc_referlet_t *A,
                 size_t ,
+          const cblc_referlet_t *B,
                 size_t nC,
+          const cblc_referlet_t *C,
           const cbl_round_t  *rounded,
                 int           on_error_flag,
                 int          *compute_error
                 )
   {
-        cblc_field_t **A  = __gg__treeplet_1f;
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-        cblc_field_t **B  = __gg__treeplet_2f;
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-        cblc_field_t **C  = __gg__treeplet_3f;
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   int error_this_time=0;
 
-  if( A[0]->type == FldFloat ||  B[0]->type == FldFloat  )
+  if( A[0].field->type == FldFloat ||  B[0].field->type == FldFloat  )
     {
     GCOB_FP128 a_value;
     GCOB_FP128 b_value;
     GCOB_FP128 c_value;
-    a_value = __gg__float128_from_qualified_field(A[0], A_o[0], A_s[0]);
-    b_value = __gg__float128_from_qualified_field(B[0], B_o[0], B_s[0]);
+    a_value = __gg__float128_from_qualified_field(A[0].field,
+                                                  A[0].offset,
+                                                  A[0].size);
+    b_value = __gg__float128_from_qualified_field(B[0].field,
+                                                  B[0].offset,
+                                                  B[0].size);
     c_value = divide_helper_float(a_value, b_value, &error_this_time);
 
     *compute_error |= error_this_time;
@@ -1948,7 +1952,7 @@ __gg__dividef23(cbl_arith_format_t ,
       {
       for(size_t i=0; i<nC; i++)
         {
-        *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+        *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                             on_size_error,
                                             c_value,
                                             *rounded++);
@@ -1959,11 +1963,18 @@ __gg__dividef23(cbl_arith_format_t ,
     {
     // fixed divided by fixed
     int dividend_rdigits;
-    __int128 dividend = __gg__binary_value_from_qualified_field(&dividend_rdigits, A[0], A_o[0], A_s[0]);
+    __int128 dividend = __gg__binary_value_from_qualified_field(
+                                                    &dividend_rdigits,
+                                                    A[0].field,
+                                                    A[0].offset,
+                                                    A[0].size);
 
     int divisor_rdigits;
-    __int128 divisor = __gg__binary_value_from_qualified_field(&divisor_rdigits, B[0], B_o[0], B_s[0]);
-
+    __int128 divisor = __gg__binary_value_from_qualified_field(
+                                                    &divisor_rdigits,
+                                                    B[0].field,
+                                                    B[0].offset,
+                                                    B[0].size);
     int quotient_rdigits;
     int256 quotient;
 
@@ -1981,7 +1992,7 @@ __gg__dividef23(cbl_arith_format_t ,
         // At this point, we assign the quotient to *C.
       for(size_t i=0; i<nC; i++)
         {
-        *compute_error |= conditional_stash(C[i], C_o[i], C_s[i],
+        *compute_error |= conditional_stash(C[i].field, C[i].offset, C[i].size,
                                             on_size_error,
                                             quotient.i128[0],
                                             quotient_rdigits,
@@ -1995,40 +2006,37 @@ extern "C"
 void
 __gg__dividef45(cbl_arith_format_t ,
                 size_t ,
+          const cblc_referlet_t *A,
                 size_t ,
+          const cblc_referlet_t *B,
                 size_t ,
+          const cblc_referlet_t *C,
                 cbl_round_t  *rounded_p,
                 int           on_error_flag,
                 int          *compute_error
                 )
   {
-        cblc_field_t **A  = __gg__treeplet_1f;  // Numerator
-  const size_t       *A_o = __gg__treeplet_1o;
-  const size_t       *A_s = __gg__treeplet_1s;
-        cblc_field_t **B  = __gg__treeplet_2f;  // Denominator
-  const size_t       *B_o = __gg__treeplet_2o;
-  const size_t       *B_s = __gg__treeplet_2s;
-        cblc_field_t **C  = __gg__treeplet_3f;  // Has remainder, then quotient
-  const size_t       *C_o = __gg__treeplet_3o;
-  const size_t       *C_s = __gg__treeplet_3s;
-
   bool on_size_error = !!(on_error_flag & ON_SIZE_ERROR);
   int error_this_time=0;
 
-  if( A[0]->type == FldFloat ||  B[0]->type == FldFloat  )
+  if( A[0].field->type == FldFloat ||  B[0].field->type == FldFloat  )
     {
     GCOB_FP128 a_value;
     GCOB_FP128 b_value;
     GCOB_FP128 c_value;
-    a_value = __gg__float128_from_qualified_field(A[0], A_o[0], A_s[0]);
-    b_value = __gg__float128_from_qualified_field(B[0], B_o[0], B_s[0]);
+    a_value = __gg__float128_from_qualified_field(A[0].field,
+                                                  A[0].offset,
+                                                  A[0].size);
+    b_value = __gg__float128_from_qualified_field(B[0].field,
+                                                  B[0].offset,
+                                                  B[0].size);
     c_value = divide_helper_float(a_value, b_value, &error_this_time);
 
     *compute_error |= error_this_time;
 
     if( !error_this_time )
       {
-      *compute_error |= conditional_stash(C[1], C_o[1], C_s[1],
+      *compute_error |= conditional_stash(C[1].field, C[1].offset, C[1].size,
                                           on_size_error,
                                           c_value,
                                           *rounded_p++);
@@ -2037,7 +2045,7 @@ __gg__dividef45(cbl_arith_format_t ,
       if( !*compute_error )
         {
         c_value = 0;
-        *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+        *compute_error |= conditional_stash(C[0].field, C[0].offset, C[0].size,
                                             on_size_error,
                                             c_value,
                                             *rounded_p++);
@@ -2048,10 +2056,18 @@ __gg__dividef45(cbl_arith_format_t ,
     {
     // fixed divided by fixed
     int dividend_rdigits;
-    __int128 dividend = __gg__binary_value_from_qualified_field(&dividend_rdigits, A[0], A_o[0], A_s[0]);
+    __int128 dividend = __gg__binary_value_from_qualified_field(
+                                              &dividend_rdigits,
+                                              A[0].field,
+                                              A[0].offset,
+                                              A[0].size);
 
     int divisor_rdigits;
-    __int128 divisor = __gg__binary_value_from_qualified_field(&divisor_rdigits, B[0], B_o[0], B_s[0]);
+    __int128 divisor = __gg__binary_value_from_qualified_field(
+                                              &divisor_rdigits,
+                                              B[0].field,
+                                              B[0].offset,
+                                              B[0].size);
 
     int quotient_rdigits;
     int256 quotient;
@@ -2076,28 +2092,36 @@ __gg__dividef45(cbl_arith_format_t ,
         {
         case truncation_e:
           {
-          *compute_error |= conditional_stash(C[1], C_o[1], C_s[1],
+          *compute_error |= conditional_stash(C[1].field,
+                                              C[1].offset,
+                                              C[1].size,
                                               on_size_error,
                                               quotient.i128[0],
                                               quotient_rdigits,
                                               *rounded_p++);
           unrounded_quotient = __gg__binary_value_from_qualified_field(
-                                                        &unrounded_quotient_digits,
-                                                        C[1], C_o[1], C_s[1]);
+                                                  &unrounded_quotient_digits,
+                                                  C[1].field,
+                                                  C[1].offset,
+                                                  C[1].size);
           break;
           }
         default:
           {
-          conditional_stash(C[1], C_o[1], C_s[1],
+          conditional_stash(C[1].field, C[1].offset, C[1].size,
                             false,
                             quotient.i128[0],
                             quotient_rdigits,
                             truncation_e);
           unrounded_quotient = __gg__binary_value_from_qualified_field(
-                                                        &unrounded_quotient_digits,
-                                                        C[1], C_o[1], C_s[1]);
+                                                  &unrounded_quotient_digits,
+                                                  C[1].field,
+                                                  C[1].offset,
+                                                  C[1].size);
           // At this point, we assign the rounded quotient to *C.
-          *compute_error |= conditional_stash(C[1], C_o[1], C_s[1],
+          *compute_error |= conditional_stash(C[1].field,
+                                              C[1].offset,
+                                              C[1].size,
                                               on_size_error,
                                               quotient.i128[0],
                                               quotient_rdigits,
@@ -2151,7 +2175,9 @@ __gg__dividef45(cbl_arith_format_t ,
 
         if( !*compute_error )
           {
-          *compute_error |= conditional_stash(C[0], C_o[0], C_s[0],
+          *compute_error |= conditional_stash(C[0].field,
+                                              C[0].offset,
+                                              C[0].size,
                                               on_size_error,
                                               odividend.i128[0],
                                               temp_rdigits,

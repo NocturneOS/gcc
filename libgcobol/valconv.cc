@@ -1,6 +1,6 @@
 // This file is included in both the libgcobol and gcc/cobol compilations
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -231,10 +231,10 @@ __gg__string_to_numeric_edited( char * const dest,
 
   int dlength = expand_picture(dest, picture);
 
-  // At the present time, I am taking a liberty. In principle, a 'V'
-  // character is supposed to be logical decimal place rather than a physical
-  // one.  In practice, I am not sure what that would mean in a numeric edited
-  // value.  So, I am treating V as a decimal point.
+  // We need to treat 'V' as a decimal point in order to handle
+  //    01 foo pic 999v999 BLANK WHEN ZERO.
+  // The "BLANK WHEN ZERO" turns the field into a numeric-edited type, but the
+  // 'V' is still in the picture string.
 
   for(int i=0; i<dlength; i++)
     {
@@ -1361,7 +1361,7 @@ ec_descr_t __gg__exception_table[] = {
   { ec_argument_imp_command_e,   uc_category_implementor_e,
    "EC-ARGUMENT-IMP-COMMAND", "COMMAND-LINE Subscript out of bounds" },
   { ec_argument_imp_environment_e, uc_category_implementor_e,
-   "EC-ARGUMENT-IMP-ENVIRONMENT", "Envrionment Variable is not defined" },
+   "EC-ARGUMENT-IMP-ENVIRONMENT", "Environment Variable is not defined" },
 
   { ec_bound_e,                  ec_category_none_e,
    "EC-BOUND", "Boundary violation" },
@@ -1452,6 +1452,11 @@ ec_descr_t __gg__exception_table[] = {
   { ec_function_ptr_null_e,      uc_category_fatal_e,
    "EC-FUNCTION-PTR-NULL",
     "Function pointer used in calling a function is NULL" },
+
+  { ec_imp_e,                     ec_category_none_e,
+   "EC-IMP", "GCC-defined exception" },
+  { ec_imp_iconv_open_e,          uc_category_fatal_e,
+   "EC-IMP-ICONV-OPEN", "Encoding conversion unavailable for requested pair" },
 
   { ec_io_e,                     ec_category_none_e,
    "EC-IO", "Input-output exception" },

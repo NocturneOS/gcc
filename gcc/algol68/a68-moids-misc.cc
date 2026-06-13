@@ -710,7 +710,7 @@ a68_is_firm (MOID_T *p, MOID_T *q)
    NO_MOID if P cannot be widened to Q.
 
    This means that if P is known to widen to Q (a68_is_widenable (P,Q) return
-   true) this function can be invoked repeteadly and it will eventually return
+   true) this function can be invoked repeatedly and it will eventually return
    Q.  */
 
 MOID_T *
@@ -1012,7 +1012,7 @@ a68_is_coercible_series (MOID_T *p, MOID_T *q, int c, int deflex)
 
 /* Whether P can be coerced to Q in a C context.
 
-   If P is a STOWED modes serie (A, B, ...) and Q is a routine mode like `proc
+   If P is a STOWED modes series (A, B, ...) and Q is a routine mode like `proc
    (X, Y, ...)' then this routine determines whether A can be coerced to X, B
    to Y, etc.  */
 
@@ -1193,7 +1193,7 @@ a68_determine_unique_mode (SOID_T *z, int deflex)
    metaproduction rule 561B in ga68.vw.  */
 
 bool
-a68_is_c_mode (MOID_T *m)
+a68_is_c_mode (MOID_T *m, int level)
 {
   if (m == M_VOID || m == M_BOOL || m == M_CHAR)
     return true;
@@ -1204,14 +1204,23 @@ a68_is_c_mode (MOID_T *m)
   else if (IS_REAL (m))
     return true;
   else if (IS_REF (m))
-    return a68_is_c_mode (SUB (m));
+    return a68_is_c_mode (SUB (m), level + 1);
   else if (IS (m, PROC_SYMBOL))
     {
-      bool yielded_mode_valid = a68_is_c_mode (SUB (m));
+      bool yielded_mode_valid =
+	((level == 0
+	  && (SUB (m) == M_STRING
+	      || (IS_REF (SUB (m)) && SUB (SUB (m)) == M_STRING)))
+	 || a68_is_c_mode (SUB (m), level + 1));
       bool params_valid = true;
 
       for (PACK_T *z = PACK (m); z != NO_PACK; FORWARD (z))
-	params_valid &= a68_is_c_mode (MOID (z));
+	{
+	  if (level == 0 && MOID (z) == M_STRING)
+	    ;
+	  else
+	    params_valid &= a68_is_c_mode (MOID (z), level + 1);
+	}
 
       return yielded_mode_valid && params_valid;
     }
@@ -1220,7 +1229,7 @@ a68_is_c_mode (MOID_T *m)
       bool fields_valid = true;
 
       for (PACK_T *z = PACK (m); z != NO_PACK; FORWARD (z))
-	fields_valid &= a68_is_c_mode (MOID (z));
+	fields_valid &= a68_is_c_mode (MOID (z), level + 1);
       return fields_valid;
     }
 

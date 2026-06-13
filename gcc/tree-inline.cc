@@ -575,7 +575,7 @@ remap_type_1 (tree type, copy_body_data *id)
       gcc_unreachable ();
     }
 
-  /* All variants of type share the same size, so use the already remaped data.  */
+  /* All variants of type share the same size, so use the already remapped data.  */
   if (TYPE_MAIN_VARIANT (new_tree) != new_tree)
     {
       tree s = TYPE_SIZE (type);
@@ -2749,6 +2749,9 @@ copy_edges_for_bb (basic_block bb, profile_count num, profile_count den,
 	      make_single_succ_edge (copy_stmt_bb, abnormal_goto_dest,
 				     EDGE_ABNORMAL);
 	      gimple_call_set_ctrl_altering (copy_stmt, true);
+	      if (is_a <gcall *> (copy_stmt)
+		  && (gimple_call_flags (copy_stmt) & ECF_NORETURN))
+		fixup_noreturn_call (copy_stmt);
 	    }
 	}
 
@@ -3369,7 +3372,9 @@ copy_debug_stmts (copy_body_data *id)
     return;
 
   for (gdebug *stmt : id->debug_stmts)
-    copy_debug_stmt (stmt, id);
+    /* But avoid re-processing debug stmts that have been elided.  */
+    if (gimple_bb (stmt))
+      copy_debug_stmt (stmt, id);
 
   id->debug_stmts.release ();
 }
@@ -3967,7 +3972,7 @@ declare_return_variable (copy_body_data *id, tree return_slot, tree modify_dest,
 }
 
 /* Determine if the function can be copied.  If so return NULL.  If
-   not return a string describng the reason for failure.  */
+   not return a string describing the reason for failure.  */
 
 const char *
 copy_forbidden (struct function *fun)
@@ -4145,7 +4150,7 @@ inline_forbidden_p (tree fndecl)
     return true;
 
   /* Next, walk the statements of the function looking for
-     constraucts we can't handle, or are non-optimal for inlining.  */
+     constructs we can't handle, or are non-optimal for inlining.  */
   hash_set<tree> visited_nodes;
   memset (&wi, 0, sizeof (wi));
   wi.info = (void *) fndecl;
@@ -4540,7 +4545,7 @@ estimate_num_insns (gimple *stmt, eni_weights *weights)
 	    if ((node = cgraph_node::get (decl))
 		&& node->definition)
 	      ;
-	    /* For buitins that are likely expanded to nothing or
+	    /* For builtins that are likely expanded to nothing or
 	       inlined do not account operand costs.  */
 	    else if (is_simple_builtin (decl))
 	      return 0;
@@ -5333,7 +5338,20 @@ expand_call_inline (basic_block bb, gimple *stmt, copy_body_data *id,
   if (use_retvar && gimple_call_lhs (stmt))
     {
       gimple *old_stmt = stmt;
-      stmt = gimple_build_assign (gimple_call_lhs (stmt), use_retvar);
+      tree lhs = gimple_call_lhs (stmt);
+      if (!is_gimple_reg (lhs)
+	  && !is_gimple_reg (use_retvar)
+	  && is_gimple_reg_type (TREE_TYPE (lhs)))
+	{
+	  /* If both lhs and use_retvar aren't gimple regs, yet have
+	     gimple reg type, copy through a temporary SSA_NAME.  */
+	  gimple *g = gimple_build_assign (make_ssa_name (TREE_TYPE (lhs)),
+					   use_retvar);
+	  gimple_set_location (g, gimple_location (old_stmt));
+	  gsi_insert_before (&stmt_gsi, g, GSI_SAME_STMT);
+	  use_retvar = gimple_assign_lhs (g);
+	}
+      stmt = gimple_build_assign (lhs, use_retvar);
       gimple_set_location (stmt, gimple_location (old_stmt));
       gsi_replace (&stmt_gsi, stmt, false);
       maybe_clean_or_replace_eh_stmt (old_stmt, stmt);
@@ -6039,24 +6057,6 @@ copy_gimple_seq_and_replace_locals (gimple_seq seq)
 }
 
 
-/* Allow someone to determine if SEARCH is a child of TOP from gdb.  */
-
-static tree
-debug_find_tree_1 (tree *tp, int *walk_subtrees ATTRIBUTE_UNUSED, void *data)
-{
-  if (*tp == data)
-    return (tree) data;
-  else
-    return NULL;
-}
-
-DEBUG_FUNCTION bool
-debug_find_tree (tree top, tree search)
-{
-  return walk_tree_without_duplicates (&top, debug_find_tree_1, search) != 0;
-}
-
-
 /* Declare the variables created by the inliner.  Add all the variables in
    VARS to BIND_EXPR.  */
 
@@ -6133,7 +6133,7 @@ copy_decl_for_dup_finish (copy_body_data *id, tree decl, tree copy)
   return copy;
 }
 
-/* Create a new VAR_DECL that is indentical in all respect to DECL except that
+/* Create a new VAR_DECL that is identical in all respect to DECL except that
    DECL can be either a VAR_DECL, a PARM_DECL or RESULT_DECL.  The original
    DECL must come from ID->src_fn and the copy will be part of ID->dst_fn.  */
 

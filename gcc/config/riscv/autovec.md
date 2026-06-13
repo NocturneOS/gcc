@@ -419,9 +419,18 @@
    (match_operand 1 "")]
   "TARGET_VECTOR"
   {
-    /* Expand into a QImode vector.  */
-    machine_mode qimode = riscv_vector::get_vector_mode
+    /* Expand into a QImode vector.
+       For XTheadVector which does not have fractional-LMUL modes, we use
+       a full-size vector instead.  */
+    bool fractional_p = known_lt (GET_MODE_NUNITS (<MODE>mode),
+				  BYTES_PER_RISCV_VECTOR);
+    machine_mode qimode;
+    if (!TARGET_XTHEADVECTOR || !fractional_p)
+      qimode = riscv_vector::get_vector_mode
 	(QImode, GET_MODE_NUNITS (<MODE>mode)).require ();
+    else
+      qimode = riscv_vector::get_m1_mode
+	(QImode, GET_MODE_NUNITS (<MODE>mode).is_constant ()).require ();
     rtx tmp = gen_reg_rtx (qimode);
     riscv_vector::expand_vec_init (tmp, operands[1]);
 
@@ -433,7 +442,12 @@
     riscv_vector::emit_vlmax_insn (icode, riscv_vector::BINARY_OP, ops);
 
     /* Compare against zero.  */
-    riscv_vector::expand_vec_cmp (operands[0], NE, tmp2, CONST0_RTX (qimode));
+    rtx op0;
+    if (!TARGET_XTHEADVECTOR || !fractional_p)
+      op0 = operands[0];
+    else
+      op0 = gen_lowpart (riscv_vector::get_mask_mode (qimode), operands[0]);
+    riscv_vector::expand_vec_cmp (op0, NE, tmp2, CONST0_RTX (qimode));
     DONE;
   }
 )
@@ -1057,7 +1071,7 @@
 [(set_attr "type" "vfncvtitof")])
 
 ;; This operation can be performed in the loop vectorizer but unfortunately
-;; not applicable for now. We can remove this pattern after loop vectorizer
+;; not applicable for now.  We can remove this pattern after loop vectorizer
 ;; is able to take care of INT64 to FP16 conversion.
 (define_expand "<float_cvt><mode><vnnconvert>2"
   [(set (match_operand:<VNNCONVERT>  0 "register_operand")
@@ -1355,7 +1369,7 @@
    (match_operand	     2 "nonmemory_operand")]
   "TARGET_VECTOR"
 {
-  /* If we set the first element, emit an v(f)mv.s.[xf].  */
+  /* If we set the first element, emit a v(f)mv.s.[xf].  */
   if (operands[2] == const0_rtx)
     {
       rtx ops[] = {operands[0], operands[0], operands[1]};
@@ -1449,15 +1463,30 @@
 	 [(match_operand	  2 "nonmemory_operand")])))]
   "TARGET_VECTOR"
 {
-  /* Create an empty byte vector and set it to one under mask.  */
-  machine_mode qimode = riscv_vector::get_vector_mode
-      (QImode, GET_MODE_NUNITS (<MODE>mode)).require ();
+  /* Create an empty byte vector and set it to one under mask.
+     For XTheadVector which does not have fractional-LMUL modes, we use
+     a full-size vector instead.  */
+  bool fractional_p = known_lt (GET_MODE_NUNITS (<MODE>mode),
+				BYTES_PER_RISCV_VECTOR);
+  machine_mode qimode;
+  if (!TARGET_XTHEADVECTOR || !fractional_p)
+    qimode = riscv_vector::get_vector_mode
+	(QImode, GET_MODE_NUNITS (<MODE>mode)).require ();
+  else
+    qimode = riscv_vector::get_m1_mode
+	(QImode, GET_MODE_NUNITS (<MODE>mode).is_constant ()).require ();
 
   rtx tmp1 = gen_reg_rtx (qimode);
   emit_move_insn (tmp1, gen_const_vec_duplicate (qimode, GEN_INT (0)));
   rtx ones = gen_const_vec_duplicate (qimode, GEN_INT (1));
 
-  rtx ops1[] = {tmp1, tmp1, ones, operands[1]};
+  rtx op1;
+  if (!TARGET_XTHEADVECTOR || !fractional_p)
+    op1 = operands[1];
+  else
+    op1 = gen_lowpart (riscv_vector::get_mask_mode (qimode), operands[1]);
+
+  rtx ops1[] = {tmp1, tmp1, ones, op1};
   riscv_vector::emit_vlmax_insn (code_for_pred_merge (qimode),
 				 riscv_vector::MERGE_OP, ops1);
 
@@ -2987,83 +3016,6 @@
     operands[2] = const0_rtx;
   }
 )
-
-;; Implement cond_len_vec_cbranch_any and cond_len_vec_cbranch_all
-;; Vector comparison with length and mask, then branch for integer types.
-(define_expand "<cbranch_optab><mode>"
-  [(set (pc)
-	(unspec:V_VLSI
-	  [(if_then_else
-	    (match_operator 0 "riscv_cbranch_comparison_operator"
-	      [(match_operand:<VM> 1 "register_operand")
-	       (match_operand:V_VLSI 2 "register_operand")
-	       (match_operand:V_VLSI 3 "nonmemory_operand")
-	       (match_operand 4 "autovec_length_operand")
-	       (match_operand 5 "const_0_operand")])
-	    (label_ref (match_operand 6 ""))
-	    (pc))]
-	 COND_LEN_CBRANCH_CMP))]
-  "TARGET_VECTOR"
-{
-  rtx_code code = GET_CODE (operands[0]);
-  rtx mask = gen_reg_rtx (<VM>mode);
-
-  /* Generate the masked comparison.  */
-  rtx maskoff = CONST0_RTX (<VM>mode);
-  riscv_vector::expand_vec_cmp (mask, code, operands[2], operands[3],
-				operands[1], maskoff);
-
-  /* Use vcpop to count the number of active elements.  */
-  rtx count = gen_reg_rtx (Pmode);
-  rtx cpop_ops[] = {count, mask};
-  riscv_vector::emit_vlmax_insn (code_for_pred_popcount (<VM>mode, Pmode),
-				 riscv_vector::CPOP_OP, cpop_ops);
-
-  /* Branch based on whether count is zero or non-zero.  */
-  riscv_expand_conditional_branch (operands[6], <cbranch_op>, count,
-				   const0_rtx);
-  DONE;
-})
-
-;; Floating-point version with length and mask
-(define_expand "<cbranch_optab><mode>"
-  [(set (pc)
-	(unspec:V_VLSF
-	  [(if_then_else
-	    (match_operator 0 "riscv_cbranch_comparison_operator"
-	      [(match_operand:<VM> 1 "register_operand")
-	       (match_operand:V_VLSF 2 "register_operand")
-	       (match_operand:V_VLSF 3 "register_operand")
-	       (match_operand 4 "autovec_length_operand")
-	       (match_operand 5 "const_0_operand")])
-	    (label_ref (match_operand 6 ""))
-	    (pc))]
-	 COND_LEN_CBRANCH_CMP))]
-  "TARGET_VECTOR"
-{
-  rtx_code code = GET_CODE (operands[0]);
-  rtx mask = gen_reg_rtx (<VM>mode);
-
-  rtx tmp = gen_reg_rtx (<VM>mode);
-  riscv_vector::expand_vec_cmp_float (tmp, code, operands[2], operands[3],
-				      false);
-
-  /* Combine with the incoming mask using AND.  */
-  rtx ops[] = {mask, operands[1], tmp};
-  riscv_vector::emit_vlmax_insn (code_for_pred (AND, <VM>mode),
-				 riscv_vector::BINARY_MASK_OP, ops);
-
-  /* Use vcpop to count the number of active elements.  */
-  rtx count = gen_reg_rtx (Pmode);
-  rtx cpop_ops[] = {count, mask};
-  riscv_vector::emit_vlmax_insn (code_for_pred_popcount (<VM>mode, Pmode),
-				 riscv_vector::CPOP_OP, cpop_ops);
-
-  /* Branch based on whether count is zero or non-zero.  */
-  riscv_expand_conditional_branch (operands[6], <cbranch_op>, count,
-				   const0_rtx);
-  DONE;
-})
 
 ;; -------------------------------------------------------------------------
 ;; - vrol.vv vror.vv

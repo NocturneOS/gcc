@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -44,6 +44,8 @@ int  ftoupper(int c);
 bool fisprint(int c);
 
 void cobol_set_pp_option(int opt);
+void cobol_trunc_binary( int cobol_trunc_binary );
+bool cobol_trunc_binary();
 
 void cobol_filename_restore();
 const char * cobol_lineno( int );

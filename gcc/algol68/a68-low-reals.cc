@@ -97,7 +97,7 @@ a68_real_maxval (tree type)
   return build_real (type, max);
 }
 
-/* Given a real type, build the minimum value expressable with that type.  */
+/* Given a real type, build the minimum value expressible with that type.  */
 
 tree
 a68_real_minval (tree type)
@@ -108,7 +108,7 @@ a68_real_minval (tree type)
 }
 
 /* Given a real type, build the smallest value which can be meaningfully added
-   to or substracted from 1.  */
+   to or subtracted from 1.  */
 
 tree
 a68_real_smallval (tree type)
@@ -127,34 +127,6 @@ a68_real_smallval (tree type)
   REAL_VALUE_TYPE res;
   real_from_string (&res, buf);
   return build_real (type, res);
-}
-
-/* Given a real type, build an INT with the number of decimal digits required
-   to represent a mantissa, such that a real is not reglected in comparison
-   with 1, not including sign.  */
-
-tree
-a68_real_width (tree type)
-{
-  const machine_mode mode = TYPE_MODE (type);
-  const struct real_format *fmt = REAL_MODE_FORMAT (mode);
-  return build_int_cst (a68_int_type, fmt->p);
-}
-
-/* Given a real type, build an INT with the number of decimal digits required
-   to represent a decimal exponent, such that a real can be correctly
-   represented, not including sign.  */
-
-tree
-a68_real_exp_width (tree type ATTRIBUTE_UNUSED)
-{
-  const machine_mode mode = TYPE_MODE (type);
-  const struct real_format *fmt = REAL_MODE_FORMAT (mode);
-  const double log10_2 = .30102999566398119521;
-  double log10_b = log10_2;
-  int max_10_exp = fmt->emax * log10_b;
-
-  return build_int_cst (a68_int_type, 1 + log10 (max_10_exp));
 }
 
 /* Given a real value VAL, return -1 if it is less than zero, 0 if it is zero

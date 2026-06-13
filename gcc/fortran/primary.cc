@@ -2715,6 +2715,19 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 		primary->value.compcall.actual = NULL;
 	      else
 		{
+		  /* Before erroring, check whether there is also a data
+		     component with this name.  Use noaccess=true so
+		     that private components are also found.  */
+		  if (sym && gfc_find_component (sym, name, true, true, NULL))
+		    {
+		      /* Restore expr to EXPR_VARIABLE and let the data
+			 component path below handle it.  */
+		      primary->expr_type = EXPR_VARIABLE;
+		      gfc_free_actual_arglist (primary->value.compcall.actual);
+		      primary->value.compcall.actual = NULL;
+		      tbp = NULL;
+		      goto try_data_component;
+		    }
 		  gfc_error ("Expected argument list at %C");
 		  return MATCH_ERROR;
 		}
@@ -2723,17 +2736,29 @@ gfc_match_varspec (gfc_expr *primary, int equiv_flag, bool sub_flag,
 	  break;
 	}
 
+    try_data_component:
+
       previous = component;
 
       if (!inquiry && !intrinsic)
-	component = gfc_find_component (sym, name, false, false, &tmp);
+	{
+	  component = gfc_find_component (sym, name, false, false, &tmp);
+	  /* For inferred-type ASSOCIATE names the parse-time candidate type
+	     may not be the final type; a private component in the candidate
+	     type may correspond to a public component in the correct type.
+	     Accept it tentatively so that resolution can fix up the type.  */
+	  if (!component && !tbp
+	      && primary->symtree && primary->symtree->n.sym->assoc
+	      && primary->symtree->n.sym->assoc->inferred_type)
+	    component = gfc_find_component (sym, name, true, false, &tmp);
+	}
       else
 	component = NULL;
 
       if (previous && inquiry
 	  && (previous->attr.pdt_kind || previous->attr.pdt_len))
 	{
-	  gfc_error_now ("R901: A type parameter ref is not a designtor and "
+	  gfc_error_now ("R901: A type parameter ref is not a designator and "
 		     "cannot be followed by the type inquiry ref at %C");
 	  return MATCH_ERROR;
 	}
@@ -3604,6 +3629,7 @@ gfc_convert_to_structure_constructor (gfc_expr *e, gfc_symbol *sym, gfc_expr **c
 	  && this_comp->ts.u.cl && this_comp->ts.u.cl->length
 	  && this_comp->ts.u.cl->length->expr_type == EXPR_CONSTANT
 	  && this_comp->ts.u.cl->length->ts.type == BT_INTEGER
+	  && actual->expr
 	  && actual->expr->ts.type == BT_CHARACTER
 	  && actual->expr->expr_type == EXPR_CONSTANT)
 	{
@@ -3668,27 +3694,27 @@ gfc_convert_to_structure_constructor (gfc_expr *e, gfc_symbol *sym, gfc_expr **c
 	  goto cleanup;
 	}
 
-          /* If not explicitly a parent constructor, gather up the components
-             and build one.  */
-          if (comp && comp == sym->components
-                && sym->attr.extension
-		&& comp_tail->val
-                && (!gfc_bt_struct (comp_tail->val->ts.type)
-                      ||
-                    comp_tail->val->ts.u.derived != this_comp->ts.u.derived))
-            {
-              bool m;
+	  /* If not explicitly a parent constructor, gather up the components
+	     and build one.  */
+	  if (comp && comp == sym->components
+	      && sym->attr.extension
+	      && comp_tail->val
+	      && (!gfc_bt_struct (comp_tail->val->ts.type)
+		  || comp_tail->val->ts.u.derived != this_comp->ts.u.derived))
+	    {
+	      bool m;
 	      gfc_actual_arglist *arg_null = NULL;
 
 	      actual->expr = comp_tail->val;
 	      comp_tail->val = NULL;
+#define shorter gfc_convert_to_structure_constructor
+	      m = shorter (NULL, comp->ts.u.derived, &comp_tail->val,
+			   comp->ts.u.derived->attr.zero_comp ? &arg_null :
+								&actual, true);
+#undef shorter
 
-              m = gfc_convert_to_structure_constructor (NULL,
-					comp->ts.u.derived, &comp_tail->val,
-					comp->ts.u.derived->attr.zero_comp
-					  ? &arg_null : &actual, true);
-              if (!m)
-                goto cleanup;
+	      if (!m)
+		goto cleanup;
 
 	      if (comp->ts.u.derived->attr.zero_comp)
 		{

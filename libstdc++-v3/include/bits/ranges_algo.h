@@ -1073,7 +1073,7 @@ namespace ranges
     template<input_iterator _Iter, sentinel_for<_Iter> _Sent,
 	     typename _Proj = identity,
 	     typename _Tp1 _GLIBCXX26_RANGE_ALGO_DEF_VAL_T(_Iter, _Proj),
-	     typename _Tp2 _GLIBCXX26_DEF_VAL_T(_Tp1)>
+	     typename _Tp2 _GLIBCXX26_DEF_VAL_T(iter_value_t<_Iter>)>
       requires indirectly_writable<_Iter, const _Tp2&>
 	&& indirect_binary_predicate<ranges::equal_to, projected<_Iter, _Proj>,
 				     const _Tp1*>
@@ -1091,7 +1091,7 @@ namespace ranges
     template<input_range _Range, typename _Proj = identity,
 	     typename _Tp1
 	       _GLIBCXX26_RANGE_ALGO_DEF_VAL_T(iterator_t<_Range>, _Proj),
-	     typename _Tp2 _GLIBCXX26_DEF_VAL_T(_Tp1)>
+	     typename _Tp2 _GLIBCXX26_DEF_VAL_T(range_value_t<_Range>)>
       requires indirectly_writable<iterator_t<_Range>, const _Tp2&>
 	&& indirect_binary_predicate<ranges::equal_to,
 				     projected<iterator_t<_Range>, _Proj>,
@@ -1112,7 +1112,7 @@ namespace ranges
   {
     template<input_iterator _Iter, sentinel_for<_Iter> _Sent,
 	     typename _Proj = identity,
-	     typename _Tp _GLIBCXX26_RANGE_ALGO_DEF_VAL_T(_Iter, _Proj),
+	     typename _Tp _GLIBCXX26_DEF_VAL_T(iter_value_t<_Iter>),
 	     indirect_unary_predicate<projected<_Iter, _Proj>> _Pred>
       requires indirectly_writable<_Iter, const _Tp&>
       constexpr _Iter
@@ -1127,7 +1127,7 @@ namespace ranges
 
     template<input_range _Range, typename _Proj = identity,
 	     typename _Tp
-	       _GLIBCXX26_RANGE_ALGO_DEF_VAL_T(iterator_t<_Range>, _Proj),
+	       _GLIBCXX26_DEF_VAL_T(range_value_t<_Range>),
 	     indirect_unary_predicate<projected<iterator_t<_Range>, _Proj>>
 	       _Pred>
       requires indirectly_writable<iterator_t<_Range>, const _Tp&>
@@ -1850,8 +1850,7 @@ namespace ranges
 	    using __distrib_type = uniform_int_distribution<_Size>;
 	    using __param_type = typename __distrib_type::param_type;
 	    using _USize = __detail::__make_unsigned_like_t<_Size>;
-	    using __uc_type
-	      = common_type_t<typename remove_reference_t<_Gen>::result_type, _USize>;
+	    using __uc_type = common_type_t<decltype(__g()), _USize>;
 
 	    if (__first == __last)
 	      return __out;
@@ -1964,9 +1963,7 @@ namespace ranges
 	using __ud_type = __detail::__make_unsigned_like_t<_DistanceType>;
 	using __distr_type = std::uniform_int_distribution<__ud_type>;
 	using __p_type = typename __distr_type::param_type;
-
-	using __uc_type
-	  = common_type_t<typename remove_reference_t<_Gen>::result_type, __ud_type>;
+	using __uc_type = common_type_t<decltype(__g()), __ud_type>;
 
 	if constexpr (sized_sentinel_for<_Sent, _Iter>)
 	  {

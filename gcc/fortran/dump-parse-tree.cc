@@ -164,6 +164,16 @@ gfc_debug_code (gfc_code *c)
 }
 
 DEBUG_FUNCTION void
+gfc_debug_code_node (gfc_code *c)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_code_node (1, c);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+DEBUG_FUNCTION void
 debug (gfc_symbol *sym)
 {
   FILE *tmp = dumpfile;
@@ -545,6 +555,14 @@ show_expr (gfc_expr *p)
 
     case EXPR_ARRAY:
       fputs ("(/ ", dumpfile);
+      if (p->ts.type == BT_CHARACTER
+	  && p->ts.u.cl
+	  && p->ts.u.cl->length_from_typespec
+	  && p->ts.u.cl->length)
+	{
+	  show_typespec (&p->ts);
+	  fputs (" :: ", dumpfile);
+	}
       show_constructor (p->value.constructor);
       fputs (" /)", dumpfile);
 
@@ -922,6 +940,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" CAF-TOKEN", dumpfile);
   if (attr->select_type_temporary)
     fputs (" SELECT-TYPE-TEMPORARY", dumpfile);
+  if (attr->select_rank_temporary)
+    fputs (" SELECT-RANK-TEMPORARY", dumpfile);
   if (attr->associate_var)
     fputs (" ASSOCIATE-VAR", dumpfile);
   if (attr->pdt_kind)
@@ -936,6 +956,8 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" PDT-STRING", dumpfile);
   if (attr->omp_udr_artificial_var)
     fputs (" OMP-UDR-ARTIFICIAL-VAR", dumpfile);
+  if (attr->omp_udm_artificial_var)
+    fputs (" OMP-UDM-ARTIFICIAL-VAR", dumpfile);
   if (attr->omp_declare_target)
     fputs (" OMP-DECLARE-TARGET", dumpfile);
   if (attr->omp_declare_target_link)
@@ -994,7 +1016,7 @@ show_attr (symbol_attribute *attr, const char * module)
   if (attr->recursive)
     fputs (" RECURSIVE", dumpfile);
   if (attr->unmaskable)
-    fputs (" UNMASKABKE", dumpfile);
+    fputs (" UNMASKABLE", dumpfile);
   if (attr->masked)
     fputs (" MASKED", dumpfile);
   if (attr->contained)
@@ -1013,6 +1035,52 @@ show_attr (symbol_attribute *attr, const char * module)
     fputs (" ALWAYS-EXPLICIT", dumpfile);
   if (attr->is_main_program)
     fputs (" IS-MAIN-PROGRAM", dumpfile);
+  if (attr->referenced)
+    fputs (" REFERENCED", dumpfile);
+
+  switch (attr->value_set)
+    {
+    case VALUE_UNSET:
+      break;
+    case VALUE_ARG:
+      fputs (" VALUE-SET(ARG)", dumpfile);
+      break;
+    case VALUE_INTENT_OUT:
+      fputs (" VALUE-SET(INTENT-OUT)", dumpfile);
+      break;
+    case VALUE_READ:
+      fputs (" VALUE-SET(READ)", dumpfile);
+      break;
+    case VALUE_VARDEF:
+      fputs (" VALUE-SET(VARDEF)", dumpfile);
+      break;
+    default:
+      gfc_internal_error ("Wrong value for value_set");
+    }
+
+  if (attr->allocated)
+    fputs (" ALLOCATED", dumpfile);
+
+  switch (attr->value_used)
+    {
+    case VALUE_UNUSED:
+      break;
+    case VALUE_MAYBE_USED:
+      fputs (" VALUE-USED(MAYBE-USED)", dumpfile);
+      break;
+    case VALUE_USED:
+      fputs (" VALUE-USED(USED)", dumpfile);
+      break;
+    case VALUE_INTENT_IN:
+      fputs (" VALUE-USED(INTENT-IN)", dumpfile);
+      break;
+    case VALUE_VALUE_ARG:
+      fputs (" VALUE-USED(VALUE-ARG)", dumpfile);
+	break;
+    default:
+      gfc_internal_error ("Wrong value for value_used");
+    }
+
   if (attr->oacc_routine_nohost)
     fputs (" OACC-ROUTINE-NOHOST", dumpfile);
   if (attr->temporary)
@@ -1475,7 +1543,9 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
   for (; n; n = n->next)
     {
       gfc_current_ns = ns_curr;
-      if (list_type == OMP_LIST_AFFINITY || list_type == OMP_LIST_DEPEND)
+      if (list_type == OMP_LIST_AFFINITY || list_type == OMP_LIST_DEPEND
+	  || list_type == OMP_LIST_MAP
+	  || list_type == OMP_LIST_TO || list_type == OMP_LIST_FROM)
 	{
 	  gfc_current_ns = n->u2.ns ? n->u2.ns : ns_curr;
 	  if (n->u2.ns != ns_iter)
@@ -1487,8 +1557,16 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
 		    fputs ("AFFINITY (", dumpfile);
 		  else if (n->u.depend_doacross_op == OMP_DOACROSS_SINK_FIRST)
 		    fputs ("DOACROSS (", dumpfile);
-		  else
+		  else if (list_type == OMP_LIST_DEPEND)
 		    fputs ("DEPEND (", dumpfile);
+		  else if (list_type == OMP_LIST_MAP)
+		    fputs ("MAP (", dumpfile);
+		  else if (list_type == OMP_LIST_TO)
+		    fputs ("TO (", dumpfile);
+		  else if (list_type == OMP_LIST_FROM)
+		    fputs ("FROM (", dumpfile);
+		  else
+		    gcc_unreachable ();
 		}
 	      if (n->u2.ns)
 		{
@@ -1620,6 +1698,7 @@ show_omp_namelist (int list_type, gfc_omp_namelist *n)
 	    fputs ("always,present,tofrom:", dumpfile); break;
 	  case OMP_MAP_DELETE: fputs ("delete:", dumpfile); break;
 	  case OMP_MAP_RELEASE: fputs ("release:", dumpfile); break;
+	  case OMP_MAP_UNSET: fputs ("unset:", dumpfile); break;
 	  default: break;
 	  }
       else if (list_type == OMP_LIST_LINEAR && n->u.linear.old_modifier)
@@ -4112,8 +4191,8 @@ gfc_dump_parse_tree (gfc_namespace *ns, FILE *file)
   show_namespace (ns);
 }
 
-/* This part writes BIND(C) prototypes and declatations, and prototypes
-   for EXTERNAL preocedures, for use in a C programs.  */
+/* This part writes BIND(C) prototypes and declarations, and prototypes
+   for EXTERNAL procedures, for use in a C programs.  */
 
 static void write_interop_decl (gfc_symbol *);
 static void write_proc (gfc_symbol *, bool);
@@ -4505,7 +4584,12 @@ write_formal_arglist (gfc_symbol *sym, bool bind_c)
 {
   gfc_formal_arglist *f;
 
-  for (f = sym->formal; f != NULL; f = f->next)
+  if (sym->ts.interface)
+    f = sym->ts.interface->formal;
+  else
+    f = sym->formal;
+
+  for (; f != NULL; f = f->next)
     {
       enum type_return rok;
       const char *intent_in;
@@ -4703,6 +4787,28 @@ debug (gfc_array_ref *ar)
   FILE *tmp = dumpfile;
   dumpfile = stderr;
   show_array_ref (ar);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+/* Dump OpenMP data structures.  */
+
+DEBUG_FUNCTION void
+debug (gfc_omp_namelist *n)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_omp_namelist (OMP_LIST_MAP, n);
+  fputc ('\n', dumpfile);
+  dumpfile = tmp;
+}
+
+DEBUG_FUNCTION void
+debug (gfc_omp_clauses *clauses)
+{
+  FILE *tmp = dumpfile;
+  dumpfile = stderr;
+  show_omp_clauses (clauses);
   fputc ('\n', dumpfile);
   dumpfile = tmp;
 }

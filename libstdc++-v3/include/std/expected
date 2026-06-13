@@ -37,6 +37,7 @@
 #define __glibcxx_want_freestanding_expected
 #define __glibcxx_want_constrained_equality
 #define __glibcxx_want_constexpr_exceptions
+#define __glibcxx_want_hardened_expected
 #include <bits/version.h>
 
 #ifdef __cpp_lib_expected // C++ >= 23 && __cpp_concepts >= 202002L
@@ -367,7 +368,7 @@ namespace __expected
 /// @endcond
 
   template<typename _Tp, typename _Er>
-    class expected
+    class [[nodiscard]] expected
     {
       static_assert( ! is_reference_v<_Tp> );
       static_assert( ! is_function_v<_Tp> );
@@ -1360,7 +1361,7 @@ namespace __expected
 
   // Partial specialization for std::expected<cv void, E>
   template<typename _Tp, typename _Er> requires is_void_v<_Tp>
-    class expected<_Tp, _Er>
+    class [[nodiscard]] expected<_Tp, _Er>
     {
       static_assert( __expected::__can_be_unexpected<_Er> );
 

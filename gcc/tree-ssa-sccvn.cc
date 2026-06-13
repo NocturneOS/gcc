@@ -42,7 +42,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-iterator.h"
 #include "gimple-fold.h"
 #include "tree-eh.h"
-#include "gimplify.h"
 #include "flags.h"
 #include "dojump.h"
 #include "explow.h"
@@ -280,12 +279,22 @@ print_vn_reference_ops (FILE *outfile, const vec<vn_reference_op_s> ops)
 	      closebrace = true;
 	    }
 	}
+      if (vro->opcode == MEM_REF || vro->opcode == TARGET_MEM_REF)
+	fprintf (outfile, "(A%d)", TYPE_ALIGN (vro->type));
       if (vro->op0 || vro->opcode == CALL_EXPR)
 	{
 	  if (!vro->op0)
 	    fprintf (outfile, internal_fn_name ((internal_fn)vro->clique));
 	  else
-	    print_generic_expr (outfile, vro->op0);
+	    {
+	      if (vro->opcode == MEM_REF || vro->opcode == TARGET_MEM_REF)
+		{
+		  fprintf (outfile, "(");
+		  print_generic_expr (outfile, TREE_TYPE (vro->op0));
+		  fprintf (outfile, ")");
+		}
+	      print_generic_expr (outfile, vro->op0);
+	    }
 	  if (vro->op1)
 	    {
 	      fprintf (outfile, ",");
@@ -711,7 +720,7 @@ vn_reference_op_compute_hash (const vn_reference_op_t vro1, inchash::hash &hstat
 
 /* Compute a hash for the reference operation VR1 and return it.  */
 
-static hashval_t
+hashval_t
 vn_reference_compute_hash (const vn_reference_t vr1)
 {
   inchash::hash hstate;
@@ -764,10 +773,12 @@ vn_reference_compute_hash (const vn_reference_t vr1)
 }
 
 /* Return true if reference operations VR1 and VR2 are equivalent.  This
-   means they have the same set of operands and vuses.  */
+   means they have the same set of operands and vuses.  If LEXICAL
+   is true then the full access path has to be the same.  */
 
 bool
-vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
+vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2,
+		 bool lexical)
 {
   unsigned i, j;
 
@@ -828,7 +839,7 @@ vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
       /* Vector boolean types can have padding, verify we are dealing with
 	 the same number of elements, aka the precision of the types.
 	 For example, In most architecture the precision_size of vbool*_t
-	 types are caculated like below:
+	 types are calculated like below:
 	 precision_size = type_size * 8
 
 	 Unfortunately, the RISC-V will adjust the precision_size for the
@@ -864,7 +875,7 @@ vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
 	  else if (vro1->opcode == VIEW_CONVERT_EXPR && vro1->reverse)
 	    return false;
 	  reverse1 |= vro1->reverse;
-	  if (known_eq (vro1->off, -1))
+	  if (lexical || known_eq (vro1->off, -1))
 	    break;
 	  off1 += vro1->off;
 	}
@@ -876,7 +887,7 @@ vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
 	  else if (vro2->opcode == VIEW_CONVERT_EXPR && vro2->reverse)
 	    return false;
 	  reverse2 |= vro2->reverse;
-	  if (known_eq (vro2->off, -1))
+	  if (lexical || known_eq (vro2->off, -1))
 	    break;
 	  off2 += vro2->off;
 	}
@@ -904,6 +915,27 @@ vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
 	return false;
       if (!vn_reference_op_eq (vro1, vro2))
 	return false;
+      /* Both alignment and alias set are not relevant for the produced
+	 value but need to be included when doing lexical comparison.
+	 We also need to make sure that the access path ends in an
+	 access of the same size as otherwise we might assume an access
+	 may not trap while in fact it might.  */
+      if (lexical
+	  && (vro1->opcode == MEM_REF
+	      || vro1->opcode == TARGET_MEM_REF)
+	  && (TYPE_ALIGN (vro1->type) != TYPE_ALIGN (vro2->type)
+	      || (TYPE_SIZE (vro1->type) != TYPE_SIZE (vro2->type)
+		  && (! TYPE_SIZE (vro1->type)
+		      || ! TYPE_SIZE (vro2->type)
+		      || ! operand_equal_p (TYPE_SIZE (vro1->type),
+					    TYPE_SIZE (vro2->type))))
+	      || (get_deref_alias_set (vro1->opcode == MEM_REF
+				       ? TREE_TYPE (vro1->op0)
+				       : TREE_TYPE (vro1->op2))
+		  != get_deref_alias_set (vro2->opcode == MEM_REF
+					  ? TREE_TYPE (vro2->op0)
+					  : TREE_TYPE (vro2->op2)))))
+	return false;
       ++j;
       ++i;
     }
@@ -916,7 +948,7 @@ vn_reference_eq (const_vn_reference_t const vr1, const_vn_reference_t const vr2)
 /* Copy the operations present in load/store REF into RESULT, a vector of
    vn_reference_op_s's.  */
 
-static void
+void
 copy_reference_ops_from_ref (tree ref, vec<vn_reference_op_s> *result)
 {
   /* For non-calls, store the information that makes up the address.  */
@@ -2317,7 +2349,7 @@ vn_walk_cb_data::push_partial_def (pd_data pd,
      access size.  */
   if (INTEGRAL_TYPE_P (vr->type) && maxsizei != TYPE_PRECISION (vr->type))
     {
-      if (TREE_CODE (vr->type) == BITINT_TYPE
+      if (BITINT_TYPE_P (vr->type)
 	  && maxsizei > MAX_FIXED_MODE_SIZE)
 	type = build_bitint_type (maxsizei, TYPE_UNSIGNED (type));
       else
@@ -3251,8 +3283,14 @@ vn_reference_lookup_3 (ao_ref *ref, tree vuse, void *data_,
 		     covering the whole access size.  */
 		  if (INTEGRAL_TYPE_P (vr->type)
 		      && maxsizei != TYPE_PRECISION (vr->type))
-		    type = build_nonstandard_integer_type (maxsizei,
-							   TYPE_UNSIGNED (type));
+		    {
+		      bool uns = TYPE_UNSIGNED (type);
+		      if (BITINT_TYPE_P (vr->type)
+			  && maxsizei > MAX_FIXED_MODE_SIZE)
+			type = build_bitint_type (maxsizei, uns);
+		      else
+			type = build_nonstandard_integer_type (maxsizei, uns);
+		    }
 		  if (BYTES_BIG_ENDIAN)
 		    {
 		      /* For big-endian native_encode_expr stored the rhs
@@ -4318,7 +4356,7 @@ vn_reference_lookup_call (gcall *call, vn_reference_t *vnresult,
   vr->vuse = vuse ? SSA_VAL (vuse) : NULL_TREE;
   vr->operands = valueize_shared_reference_ops_from_call (call);
   tree lhs = gimple_call_lhs (call);
-  /* For non-SSA return values the referece ops contain the LHS.  */
+  /* For non-SSA return values the reference ops contain the LHS.  */
   vr->type = ((lhs && TREE_CODE (lhs) == SSA_NAME)
 	      ? TREE_TYPE (lhs) : NULL_TREE);
   vr->punned = false;
@@ -4506,7 +4544,7 @@ vn_nary_op_eq (const_vn_nary_op_t const vno1, const_vn_nary_op_t const vno2)
     if (!expressions_equal_p (vno1->op[i], vno2->op[i]))
       return false;
 
-  /* BIT_INSERT_EXPR has an implict operand as the type precision
+  /* BIT_INSERT_EXPR has an implicit operand as the type precision
      of op1.  Need to check to make sure they are the same.  */
   if (vno1->opcode == BIT_INSERT_EXPR
       && TREE_CODE (vno1->op[1]) == INTEGER_CST
@@ -4813,7 +4851,7 @@ vn_nary_op_insert_into (vn_nary_op_t vno, vn_nary_op_table_type *table)
 	return *slot;
     }
 
-  /* ???  There's also optimistic vs. previous commited state merging
+  /* ???  There's also optimistic vs. previous committed state merging
      that is problematic for the case of unwinding.  */
 
   /* ???  We should return NULL if we do not use 'vno' and have the
@@ -5740,9 +5778,10 @@ visit_nary_op (tree lhs, gassign *stmt)
     case BIT_FIELD_REF:
       if (TREE_CODE (TREE_OPERAND (rhs1, 0)) == SSA_NAME)
 	{
-	  tree op0 = TREE_OPERAND (rhs1, 0);
-	  gassign *ass = dyn_cast <gassign *> (SSA_NAME_DEF_STMT (op0));
-	  if (ass
+	  tree op0 = vn_valueize (TREE_OPERAND (rhs1, 0));
+	  gassign *ass;
+	  if (TREE_CODE (op0) == SSA_NAME
+	      && (ass = dyn_cast <gassign *> (SSA_NAME_DEF_STMT (op0)))
 	      && !gimple_has_volatile_ops (ass)
 	      && vn_get_stmt_kind (ass) == VN_REFERENCE)
 	    {
@@ -5890,7 +5929,7 @@ visit_reference_op_call (tree lhs, gcall *stmt)
 	   && summary->load_accesses < accesses_limit)
 	  || gimple_call_flags (stmt) & ECF_CONST))
     {
-      /* First search if we can do someting useful and build a
+      /* First search if we can do something useful and build a
 	 vector of all loads we have to check.  */
       bool unknown_memory_access = false;
       auto_vec<ao_ref, accesses_limit> accesses;
@@ -6437,7 +6476,7 @@ visit_phi (gimple *phi, bool *inserted, bool backedges_varying_p)
        the hashes.  */
     result = PHI_RESULT (phi);
   /* If none of the edges was executable keep the value-number at VN_TOP,
-     if only a single edge is exectuable use its value.  */
+     if only a single edge is executable use its value.  */
   else if (n_executable <= 1)
     result = seen_undef ? seen_undef : sameval;
   /* If we saw only undefined values and VN_TOP use one of the
@@ -7355,7 +7394,7 @@ eliminate_dom_walker::eliminate_stmt (basic_block b, gimple_stmt_iterator *gsi)
 	      || !DECL_BIT_FIELD_TYPE (TREE_OPERAND (lhs, 1)))
 	  && !type_has_mode_precision_p (TREE_TYPE (lhs)))
 	{
-	  if (TREE_CODE (TREE_TYPE (lhs)) == BITINT_TYPE
+	  if (BITINT_TYPE_P (TREE_TYPE (lhs))
 	      && TYPE_PRECISION (TREE_TYPE (lhs)) > MAX_FIXED_MODE_SIZE)
 	    lookup_lhs = NULL_TREE;
 	  else if (TREE_CODE (lhs) == COMPONENT_REF
@@ -7520,7 +7559,7 @@ eliminate_dom_walker::eliminate_stmt (basic_block b, gimple_stmt_iterator *gsi)
       gsi_prev (&prev);
       if (fold_stmt (gsi, follow_all_ssa_edges))
 	{
-	  /* fold_stmt may have created new stmts inbetween
+	  /* fold_stmt may have created new stmts in between
 	     the previous stmt and the folded stmt.  Mark
 	     all defs created there as varying to not confuse
 	     the SCCVN machinery as we're using that even during
@@ -7877,7 +7916,7 @@ eliminate_dom_walker::eliminate_cleanup (bool region_p)
 
   /* Fixup stmts that became noreturn calls.  This may require splitting
      blocks and thus isn't possible during the dominator walk.  Do this
-     in reverse order so we don't inadvertedly remove a stmt we want to
+     in reverse order so we don't inadvertently remove a stmt we want to
      fixup by visiting a dominating now noreturn call first.  */
   while (!to_fixup.is_empty ())
     {
@@ -8491,7 +8530,7 @@ process_bb (rpo_elim &avail, basic_block bb,
 	    tree val = gimple_simplify (cmpcode,
 					boolean_type_node, lhs, rhs,
 					NULL, vn_valueize);
-	    /* If the condition didn't simplfy see if we have recorded
+	    /* If the condition didn't simplify see if we have recorded
 	       an expression from sofar taken edges.  */
 	    if (! val || TREE_CODE (val) != INTEGER_CST)
 	      {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -57,6 +57,14 @@
 
   struct label_pair_t {
     cbl_label_t *from, *to;
+  };
+
+  struct linage_t {
+      cbl_refer_t *footing, *top, *bottom;
+  };
+  struct linage_value_t {
+      int token;
+      cbl_refer_t *value;
   };
   
 class locale_tgt_t {
@@ -727,7 +735,7 @@ class locale_tgt_t {
 
 %type	<field>		log_term rel_expr rel_abbr eval_abbr
 %type   <refer>		num_value num_term value factor
-%type   <refer>         simple_cond bool_expr
+%type   <refer>         simple_cond bool_expr until_expr
 %type	<log_expr_t>	log_expr rel_abbrs eval_abbrs
 %type   <rel_term_t>	rel_term rel_term1
 
@@ -741,11 +749,12 @@ class locale_tgt_t {
 			perform_inline perform_except
 
 %type   <refer>         eval_subject1
-%type   <vargs>         vargs disp_vargs;
+%type   <vargs>         vargs disp_vargs trim_expr
 %type   <field>         level_name
-%type   <string>        fd_name picture_sym name66 paragraph_name
+%type   <number>        fd_name
+%type   <string>        picture_sym name66 paragraph_name
 %type   <literal>       literalism
-%type   <number>        bound advance_when org_clause1 read_next
+%type   <number>        bound advance_when org_clause1 read_next top_bot
 %type   <number>        access_mode multiple lock_how lock_mode org_is
 %type   <select_clauses> select_clauses
 %type   <select_clause> select_clause  access_clause alt_key_clause
@@ -754,6 +763,8 @@ class locale_tgt_t {
                         record_delim_clause record_key_clause
                         relative_key_clause reserve_clause sharing_clause
 
+%type   <linage>        with_linage with_footings
+%type   <linage_value>  with_footing
 %type   <file>          filename read_body write_body delete_body
 %type   <label>         delete_file_body
 %type   <error>         delete_error delete_except delete_excepts
@@ -770,9 +781,9 @@ class locale_tgt_t {
 %type   <refer>         varg varg1 varg1a start_after start_pos
 %type   <refer>         expr expr_term compute_expr free_tgt by_value_arg
 %type   <refer>         move_tgt selected_name read_key read_into vary_by
-%type   <refer>         accept_refer num_operand envar search_expr any_arg
+%type   <refer>         num_operand envar search_expr any_arg
 %type   <accept_func>	accept_body
-%type   <refers>        subscript_exprs subscripts arg_list free_tgts
+%type   <refers>        subscript_exprs subscripts arg_list free_tgts 
 %type   <targets>       move_tgts set_tgts
 %type   <field>         search_varying
 %type   <field>         search_term search_terms
@@ -802,15 +813,15 @@ class locale_tgt_t {
 %type   <arith>         add_cond subtract_cond multiply_cond divide_cond
 %type   <arith>         divide_into divide_by
 
-%type   <refer>         intrinsic_call
+%type   <refer>         function_call
 %type   <field>         intrinsic intrinsic_locale
 
 %type   <field>         intrinsic0
 %type   <number>        intrinsic_v intrinsic_I intrinsic_N intrinsic_X
 %type   <number>        intrinsic_I2 intrinsic_N2 intrinsic_X2
 %type   <number>        lopper_case 
-%type   <number>        return_body return_file
-%type   <field>         trim_trailing function_udf
+%type   <number>        return_body return_file trim_trailing 
+%type   <field>         function_udf
 
 %type   <refer>         str_input str_size
 %type   <refer2>        str_into
@@ -844,7 +855,7 @@ class locale_tgt_t {
 %type   <ffi_impl>      call_body call_impl
 
 %type   <ffi_arg>       procedure_use
-%type   <ffi_args>      procedure_uses
+%type   <ffi_args>      procedure_uses procedure_args
 
 %type   <comminit>      comminit comminits program_attrs
 
@@ -961,6 +972,8 @@ class locale_tgt_t {
     struct sort_key_t *sort_key;
     struct sort_keys_t *sort_keys;
     struct file_sort_io_t *sort_io;
+           linage_t linage;
+           linage_value_t linage_value;
     struct arith_t *arith;
     struct { size_t ntgt; cbl_num_result_t *tgts;
              cbl_refer_t *expr; } compute_body_t;
@@ -1025,10 +1038,11 @@ class locale_tgt_t {
 %printer { fprintf(yyo, "%s", $$->field? name_of($$->field) : "[omitted]"); } alloc_ret
 %printer { fprintf(yyo, "clauses: 0x%04x", $$); } data_clauses
                         
-%printer { fprintf(yyo, "%s{%u/%u} %s '%s' (%s)",
+%printer { fprintf(yyo, "%s{%u/%u} %c%s '%s' (%s)",
                         refer_type_str($$),
                         $$ && $$->field? $$->field->char_capacity() : 0,
-                        $$ && $$->field? $$->field->data.capacity() : 0, 
+                        $$ && $$->field? $$->field->data.capacity() : 0,
+                        $$ && $$->addr_of? '^' : ' ', 
                         $$? $$->name() : "<none>",
                         $$ && $$->field? $$->field->data.original()?
                                          $$->field->data.original() : "<nil>" : "",
@@ -1046,6 +1060,7 @@ class locale_tgt_t {
 %printer { fprintf(yyo, "%c %s",
                         $$.invert? '!' : ' ',
 		        $$.term? name_of($$.term->field) : "<none>"); } <rel_term_t>
+%printer { fprintf(yyo, "%s", $$->dbgstr()); } <log_expr_t>
 
 %printer { fprintf(yyo, "%s (token %d)", keyword_str($$), $$ ); } relop
 %printer { fprintf(yyo, "'%s'", $$? $$ : "" ); } NAME <string>
@@ -1079,6 +1094,16 @@ class locale_tgt_t {
                         (fmt_size_t)$$.using_params->elems.size()); } call_body
 %printer { fprintf(yyo, "%s <- %s", data_category_str($$.category),
                                     name_of($$.replacement->field)); } init_by
+
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } IDENTIFICATION_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } ENVIRONMENT_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } DATA_DIV
+%printer { fprintf(yyo, "(%s)", mode_syntax_only()?
+                        "syntax-only mode" : "compiling" ); } PROCEDURE_DIV
+
 
                         /* CDF (COPY and >> defined here but used in cdf.y) */
 %left                   BASIS CBL CONSTANT COPY
@@ -1533,16 +1558,35 @@ top:            programs
                   if( ! goodnight_gracie() ) {
                     YYABORT;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                 }
         |       programs end_program
                 {
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                 }
                 ;
 programs:       program
         |       programs end_program program
                 ;
+                /*
+                 * 10.6.2 Syntax rules 
+                 * 4) The following restrictions apply to program prototypes,
+                 *    function prototypes, and method prototypes:
+                 *    a) The identification division shall not contain an
+                 *       ARITHMETIC clause.
+                 *    b) The environment division shall not contain an
+                 *       object-computer paragraph.
+                 *    c) The only clauses that may be specified in the
+                 *       SPECIAL-NAMES paragraph are the ALPHABET clause, the
+                 *       CURRENCY clause, the DECIMAL-POINT clause, the LOCALE
+                 *       clause, and the SYMBOLIC-CHARACTERS clause.
+                 *    d) The environment division shall not contain an
+                 *       input-output section.
+                 *    e) The data division may contain only a linkage section.
+                 *    f) The procedure division shall contain only a procedure
+                 *       division header.
+                 */
+
 program:	id_div options_para env_div data_div
                 {
                   if( ! data_division_ready() ) {
@@ -1556,14 +1600,15 @@ program:	id_div options_para env_div data_div
                 }
                 ;
 
-id_div:         cdf_words IDENTIFICATION_DIV '.' program_id
-        |	cdf_words                        program_id
-        |       cdf_words IDENTIFICATION_DIV '.' function_id
+id_div:         cdf_words id_division  program_id
+        |       cdf_words id_division function_id
+                ;
+id_division:    %empty
+        |       IDENTIFICATION_DIV '.'
                 ;
 
 cdf_words:	%empty
 	|	cobol_words
-	/* |	error { error_msg(@1, "not a COBOL-WORD"); } */
 		;
 cobol_words:	cobol_words1
 	|	cobol_words cobol_words1
@@ -1584,31 +1629,50 @@ cobol_words1:	COBOL_WORDS EQUATE NAME[keyword] WITH NAME[name] {
 
 program_id:     PROGRAM_ID dot namestr[name] program_as program_attrs[attr] dot
                 {
+                  const char *name = string_of($name);
                   internal_ebcdic_lock();
                   current_division = identification_div_e;
-                  parser_division( identification_div_e, NULL, 0, NULL );
                   location_set(@1);
-                  int main_error=0;
-                  const char *name = string_of($name);
-                  parser_enter_program( name, false, &main_error );
-                  if( main_error ) {
-                    error_msg(@name, "PROGRAM-ID 'main' is invalid with %<-main%> option");
-                    YYERROR;
-                  }
 
                   if( symbols_begin() == symbols_end() ) {
                     symbol_table_init();
                   }
                   if( !current.new_program(@name, LblProgram, name,
 		                           $program_as.data,
-                                           $attr.common, $attr.initial) ) {
+                                           $attr.common,
+                                           $attr.initial,
+                                           $attr.recursive) ) {
                     auto L = symbol_program(current_program_index(), name);
                     assert(L);
                     error_msg(@name, "PROGRAM-ID %s already defined on line %d",
                              name, L->line);
                     YYERROR;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
+
+                  parser_division( identification_div_e, NULL, 0, NULL );
+                  int main_error=0;
+                  parser_enter_program( name, false, &main_error );
+                  if( main_error ) {
+                    error_msg(@name, "PROGRAM-ID 'main' is invalid with %<-main%> option");
+                    YYERROR;
+                  }
+                }
+        |       PROGRAM_ID dot namestr[name] program_as is PROTOTYPE '.'
+                {
+                  current_division = identification_div_e;
+                  location_set(@1);
+                  const char *name = string_of($name);
+                  if( symbols_begin() == symbols_end() ) {
+                    symbol_table_init();
+                  }
+                  if( !current.new_program(@name, LblProgram, name,
+		                           $program_as.data,
+                                           false, false, false, true) ){
+                    auto L = symbol_program(current_program_index(), name);
+                    assert(L);
+                    dbgmsg("PROGRAM-ID %s defined on line %d", name, L->line);
+                  }
                 }
                 ;
 dot:            %empty
@@ -1618,26 +1682,20 @@ program_as:     %empty     { static const literal_t empty {}; $$ = empty; }
         |       AS LITERAL { $$ = $2; }
                 ;
 
-function_id:    FUNCTION NAME program_as program_attrs[attr] '.'
+function_id:    FUNCTION dot  NAME program_as program_attrs[attr] '.'
                 {
                   internal_ebcdic_lock();
                   current_division = identification_div_e;
-                  parser_division( identification_div_e, NULL, 0, NULL );
                   location_set(@1);
 
-                  int main_error = 0;
-                  parser_enter_program( $NAME, true, &main_error );
-                  if( main_error ) {
-                    error_msg(@NAME, "FUNCTION-ID %<main%> is invalid "
-                              "with %<-main%> option");
-                    YYERROR;
-                  }
                   if( symbols_begin() == symbols_end() ) {
                     symbol_table_init();
                   }
                   if( !current.new_program(@NAME, LblFunction, $NAME,
-		                      $program_as.data,
-                                      $attr.common, $attr.initial) ) {
+                                           $program_as.data,
+                                           $attr.common,
+                                           $attr.initial,
+                                           $attr.recursive) ) {
                     auto e = symbol_function(current_program_index(), $NAME);
                     auto L = cbl_label_of(e);
                     error_msg(@NAME, "FUNCTION %s already defined on line %d",
@@ -1649,12 +1707,35 @@ function_id:    FUNCTION NAME program_as program_attrs[attr] '.'
 			      $NAME);
                     YYERROR;
                   }
-                  current.udf_add(current_program_index());
-                  if( nparse_error > 0 ) YYABORT;
+                  current.udf_add(current_program_index(), false);
+                  if( ! successful_parse() ) YYABORT;
+
+                  parser_division( identification_div_e, NULL, 0, NULL );
+                  int main_error = 0;
+                  parser_enter_program( $NAME, true, &main_error );
+                  if( main_error ) {
+                    error_msg(@NAME, "FUNCTION-ID %<main%> is invalid "
+                              "with %<-main%> option");
+                    YYERROR;
+                  }
                 }
-        |       FUNCTION NAME program_as is PROTOTYPE '.'
+        |       FUNCTION dot NAME[name] program_as is PROTOTYPE '.'
                 {
-                  cbl_unimplemented("FUNCTION PROTOTYPE");
+                  current_division = identification_div_e;
+                  location_set(@1);
+
+                  if( symbols_begin() == symbols_end() ) {
+                    symbol_table_init();
+                  }
+                  if( !current.new_program(@name, LblFunction, $name,
+		                           $program_as.data,
+                                           false, false, false, true) ) {
+                    auto L = symbol_program(current_program_index(), $name);
+                    assert(L);
+                    dbgmsg("FUNCTION-ID %s defined on line %d", $name, L->line);
+                  }
+
+                  current.udf_add(current_program_index(), true);
                 }
                 ;
 
@@ -1666,15 +1747,17 @@ options_para:   %empty
 opt_clauses:    opt_clause
         |       opt_clauses opt_clause
                 ;
-opt_clause:     opt_arith
-        |       opt_round
-        |       opt_entry
-        |       opt_binary
+opt_clause:     opt_arith   { prototype_ok(@1, dspc_arithmetic_clause_e); }
+        |       opt_round   { prototype_ok(@1, dspc_default_rounded_clause_e); }
+        |       opt_entry   { prototype_ok(@1, dspc_entry_convention_clause_e); }
+        |       opt_binary  { prototype_ok(@1, dspc_float_binary_clause_e); }
         |       opt_decimal {
 		  cbl_unimplemented("type FLOAT-DECIMAL");
 		}
-        |       opt_intermediate
-        |       opt_init
+        |       opt_intermediate {
+                  prototype_ok(@1, dspc_intermediate_rounding_clause_e);
+                }
+        |       opt_init    { prototype_ok(@1, dspc_initialize_clause_e); }
                 ;
 
 opt_arith:      ARITHMETIC is opt_arith_type {
@@ -1894,10 +1977,17 @@ comminit:       COMMON     {
                 ;
 
 
-env_div:        %empty              { current_division = environment_div_e; }
-        |       ENVIRONMENT_DIV '.' { current_division = environment_div_e; }
+env_div:        %empty {
+                  current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
+                }
         |       ENVIRONMENT_DIV '.' {
                   current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
+                }
+        |       ENVIRONMENT_DIV '.' {
+                  current_division = environment_div_e;
+                  parser_division( environment_div_e, NULL, 0, NULL );
                 } env_sections
                 ;
 
@@ -1905,9 +1995,15 @@ env_sections:   env_section
         |       env_sections env_section
                 ;
 
-env_section:    INPUT_OUTPUT_SECT '.'
-        |       INPUT_OUTPUT_SECT '.' io_sections
-        |       INPUT_OUTPUT_SECT '.' selects { /* IBM requires FILE CONTROL.  */ }
+env_section:    INPUT_OUTPUT_SECT '.' {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                }
+        |       INPUT_OUTPUT_SECT '.' io_sections {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                }
+        |       INPUT_OUTPUT_SECT '.' selects {
+                  prototype_ok(@1, dspc_i_o_section_e); 
+                } /* IBM requires FILE CONTROL.  */ 
         |       CONFIGURATION_SECT '.'
         |       CONFIGURATION_SECT '.' config_paragraphs
         |       cdf
@@ -2669,9 +2765,12 @@ special_names:  special_name
         |       special_names special_name
                 ;
 
-special_name:   dev_mnemonic
+special_name:   dev_mnemonic {
+                  prototype_ok(@1, dspc_device_clause_e); 
+                }
         |       ALPHABET NAME[name] is alphabet_name[abc]
                 {
+                  prototype_ok(@1, dspc_alphabet_name_clause_e);                     
                   if( !$abc ) YYERROR;
                   assert($abc); // already in symbol table
                   if( !namcpy(@name, $abc->name, $name) ) YYERROR;
@@ -2679,6 +2778,7 @@ special_name:   dev_mnemonic
                 }
         |       ALPHABET NAME[name] for alphanational is alphabet_name[abc]
                 {
+                  prototype_ok(@1, dspc_alphabet_name_clause_e);                     
                   if( !$abc ) YYERROR;
                   assert($abc); // already in symbol table
                   if( !namcpy(@name, $abc->name, $name) ) YYERROR;
@@ -2696,6 +2796,7 @@ special_name:   dev_mnemonic
                 }
         |       CLASS NAME is domains
                 {
+                  prototype_ok(@1, dspc_class_clause_e);                     
                   struct cbl_field_t field = { FldClass, 0, {}, 0, $NAME };
                   if( !namcpy(@NAME, field.name, $2) ) YYERROR;
 
@@ -2736,6 +2837,7 @@ special_name:   dev_mnemonic
                 // symbol_currency_add (symbol, sign-string). 'symbol' is the
                 // character in the PICTURE string, and 'sign' is the substitution
                 // that gets made in memory.
+                  prototype_ok(@1, dspc_currency_sign_clause_e);                     
                   if( ! string_of($lit) ) {
                     error_msg(@lit, "'%s' has embedded NUL", $lit.data);
                     YYERROR;
@@ -2744,10 +2846,12 @@ special_name:   dev_mnemonic
                 }
         |       DECIMAL_POINT is COMMA
                 {
+                  prototype_ok(@1, dspc_decimal_point_is_comma_clause_e); 
                   symbol_decimal_point_set(',');
                 }
         |       LOCALE NAME is locale_spec[spec]
                 {
+                  prototype_ok(@1, dspc_locale_clause_e); 
                   cbl_locale_t locale($NAME, $spec);
                   if( locale.encoding == no_encoding_e ) {
                     error_msg(@NAME, "invalid iconv LOCALE name %qs", $spec);
@@ -2762,9 +2866,12 @@ special_name:   dev_mnemonic
                   }
                 }
                 ;
-        |       upsi
+        |       upsi {
+                  prototype_ok(@1, dspc_switch_clause_e); 
+                }
         |       SYMBOLIC characters symbolic is_alphabet
                 {
+                  prototype_ok(@1, dspc_symbolic_characters_clause_e); 
                   cbl_unimplemented("SYMBOLIC syntax");
                 }
                 ;
@@ -2875,7 +2982,7 @@ alphabet_name:  STANDARD_ALPHABET  { $$ = alphabet_add(@1, CP1252_e); }
                 }
         |       alphabet_seqs
                 {
-                  $1->reencode();
+                  $1->reencode(@1);
                   $$ = cbl_alphabet_of(symbol_alphabet_add(PROGRAM, $1));
                 }
         |       error
@@ -3159,12 +3266,14 @@ when_set_to:    %empty
         |       WHEN SET TO
         ;
 
-data_div:       %empty 
-        |       DATA_DIV
-        |       DATA_DIV { current_division = data_div_e; } data_sections
-                {
+data_div:       %empty   { parser_division( data_div_e, NULL, 0, NULL ); }
+        |       DATA_DIV { parser_division( data_div_e, NULL, 0, NULL ); }
+        |       DATA_DIV {
+                  current_division = data_div_e;
+                  parser_division( data_div_e, NULL, 0, NULL ); 
+                }
+                data_sections {
                   current_data_section = not_data_datasect_e;
-                  parser_division( data_div_e, NULL, 0, NULL );
                 }
                 ;
 
@@ -3174,18 +3283,23 @@ data_sections:  data_section
 
 data_section:   FILE_SECT '.'
         |       FILE_SECT '.' {
+                  prototype_ok(@1, dspc_file_section_e); 
                   current_data_section_set(@1, file_datasect_e);
                 } file_descrs
         |       WORKING_STORAGE_SECT '.' {
+                  prototype_ok(@1, dspc_working_storage_section_e); 
                   current_data_section_set(@1, working_storage_datasect_e);
                 } fields_maybe
         |       LOCAL_STORAGE_SECT '.' {
+                  prototype_ok(@1, dspc_local_storage_section_e); 
                   current_data_section_set(@1, local_storage_datasect_e);
                 } fields_maybe
         |       LINKAGE_SECT '.' {
+                  prototype_ok(@1, dspc_linkage_section_e);
                   current_data_section_set(@1, linkage_datasect_e);
                 } fields_maybe
 	|	SCREEN SECTION '.' {
+                  prototype_ok(@1, dspc_screen_section_e); 
 		  cbl_unimplemented("SCREEN SECTION");
 		}
                 ;
@@ -3194,11 +3308,12 @@ file_descrs:    file_descr
         |       file_descrs file_descr
                 ;
 file_descr:     fd_name            '.' { field_done(); } fields
-        |       fd_name fd_clauses '.' { field_done(); } fields
+        |       fd_name fd_clauses '.' { field_done(); }
+                fields
                 ;
 
-fd_name:        FD NAME { $$ = $2; file_section_fd_set(fd_e, $2, @2); }
-	|       SD NAME { $$ = $2; file_section_fd_set(sd_e, $2, @2); }
+fd_name:        FD NAME { $$ = file_section_fd_set(fd_e, $2, @2); }
+	|       SD NAME { $$ = file_section_fd_set(sd_e, $2, @2); }
         ;
 
 fd_clauses:     fd_clause
@@ -3293,7 +3408,11 @@ fd_clause:      record_desc
                 {
                   error_msg(@1, "invalid FD phrase");
                 }
-        |       fd_linage { cbl_unimplemented("LINAGE"); }
+        |       fd_linage
+                {
+                  cbl_unimplemented("LINAGE");
+                  
+                }
         |       fd_report {
                   cbl_unimplemented("REPORT WRITER");
                   YYERROR;
@@ -3490,17 +3609,81 @@ depending:      %empty
                 }
                 ;
 
-fd_linage:      LINAGE is num_value with_footings
-        |       LINAGE is num_value lines
+		/*
+                 * All integers must be unsigned. All data-names must be
+                 * described as unsigned integer data items. 
+                 * 
+                 * data-name-5 , integer-8 The number of lines that can be
+                 * written or spaced on this logical page. The area of the page
+                 * that these lines represent is called the page body. The
+                 * value must be greater than zero.
+                 * 
+                 * WITH FOOTING AT integer-9 or the value of the data item in
+                 * data-name-6 specifies the first line number of the footing
+                 * area within the page body. The footing line number must be
+                 * greater than zero, and not greater than the last line of the
+                 * page body. The footing area extends between those two lines.
+                 *
+                 * LINES AT TOP integer-10 or the value of the data item in
+                 * data-name-7 specifies the number of lines in the top margin
+                 * of the logical page. The value can be zero.
+                 *
+                 * LINES AT BOTTOM integer-11 or the value of the data item in
+                 * data-name-8 specifies the number of lines in the bottom
+                 * margin of the logical page. The value can be zero.
+                 */
+
+fd_linage:      LINAGE is num_value lines with_linage[with]
+                {
+                  assert(file_section_fd > 0);
+                  symbol_elem_t *e = symbol_at(file_section_fd);
+                  auto file = cbl_file_of(e);
+                  auto& linage = file->linage;
+                  linage.nline = $num_value;
+                  linage.footing = $with.footing;
+                  linage.top     = $with.top;
+                  linage.bottom  = $with.bottom;
+                } 
         ;
-with_footings:  with_footing
-        |       with_footings with_footing
+with_linage:    %empty { $$ = linage_t(); }
+        |       with_footings
                 ;
-with_footing:   lines with FOOTING at num_value
-        |       lines at top_bot num_value
+with_footings:  with_footing[with]
+                {
+                  $$ = linage_t();
+                  switch($with.token) {
+                    case FOOTING:
+                      $$.footing = $with.value;
+                      break;
+                    case TOP:
+                      $$.top = $with.value;
+                      break;
+                    case BOTTOM:
+                      $$.bottom = $with.value;
+                      break;
+                  }
+                }
+        |       with_footings with_footing[with]
+                {
+                  $$ = $1;
+                  switch($with.token) {
+                    case FOOTING:
+                      $$.footing = $with.value;
+                      break;
+                    case TOP:
+                      $$.top = $with.value;
+                      break;
+                    case BOTTOM:
+                      $$.bottom = $with.value;
+                      break;
+                  }
+                }
                 ;
-top_bot:        TOP
-        |       BOTTOM
+with_footing:   with FOOTING at num_value { $$.token = FOOTING;  $$.value = $num_value; }
+        |       at top_bot num_value      { $$.token = $top_bot; $$.value = $num_value; }
+                ;
+top_bot:        TOP     { $$ = TOP; }
+        |       BOTTOM  { $$ = BOTTOM; }
                 ;
 
 fd_report:      REPORT
@@ -4091,8 +4274,9 @@ data_descr1:    level_name
                   if( $field->has_attr(blank_zero_e) ) {
                     switch($field->type) {
                     case FldNumericEdited:
-                      if( $field->has_attr(signable_e) ) {
-                        error_msg(@2,  "%s has 'S' in PICTURE, cannot be BLANK WHEN ZERO",
+                      // Test appears to be invalid.
+                      if( false && $field->has_attr(signable_e) ) {
+                        error_msg(@2,  "%s has signed PICTURE, cannot be BLANK WHEN ZERO",
                                   $field->name );
                       }
                       break;
@@ -4142,7 +4326,7 @@ data_descr1:    level_name
 
                   // Check COMP-5 capacity
 		  // No capacity means no PICTURE, valid only for a (potential) group
-                  if( $field->type == FldNumericBin5 ) {
+                  if( is_among( $field->type, {FldNumericBinary, FldNumericBin5} ) ) {
                     if( $field->data.capacity() == 0 ) {
                       if(  has_clause ($data_clauses, usage_clause_e) &&
                           !has_clause ($data_clauses, picture_clause_e) ) {
@@ -4273,6 +4457,8 @@ data_clauses:   data_clause
                       YYERROR;
                     }
                   }
+                data_clause_t clause = data_clause_t($1);
+                proto_field.add_clause(clause);
                 }
         |       data_clauses data_clause {
                   const char *clause = "data";
@@ -4318,6 +4504,7 @@ data_clauses:   data_clause
                   }
 
                   $$ |= $2;
+                  proto_field.add_clause(data_clause_t($$));
 
                   // If any implied TYPE bits are on in addition to
                   // type_clause_e, they're in conflict.
@@ -4446,6 +4633,10 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                   if( field->has_attr(signable_e) && ! $signed ) {
                     dbgmsg("%s PICTURE must be signed for SIGN IS", field->name);
                   }
+                  if( field->type == FldNumericEdited && $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
                   field->attr |= $signed;
                   field->data.digits = $nines;
                   auto nchar = type_capacity(field->type, $nines);
@@ -4474,6 +4665,10 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                   }
                   field->data.digits = $left + $rdigits;
                   field->attr |= $signed;
+                  if( field->type == FldNumericEdited && $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
 
                   if( field->is_binary_integer() ) {
                     field->set_capacity(type_capacity(field->type,
@@ -4511,6 +4706,10 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                   }
                   ERROR_IF_CAPACITY(@PIC, field);
                   field->attr |= $signed;
+                  if( $signed ) {
+                    gcc_assert(field->has_attr(blank_zero_e));
+                    error_msg(@signed, "%<S%> in PICTURE invalid with BLANK WHEN ZERO");
+                  }
                   field->data.digits = size;
                   field->set_capacity(++size);
                   field->data.rdigits = $rdigits;
@@ -4545,11 +4744,11 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
 		  }
                   assert(0 < $nchar);
                   field->data.picture = nullptr;
-                  auto nchar = std::min($nchar, MAXIMUM_ALPHA_LENGTH);
-                  if( nchar < $nchar ) {
+                  auto nchar = std::min(size_t($nchar), MAXIMUM_ALPHA_LENGTH);
+                  if( nchar < size_t($nchar) ) {
                     error_msg(@2, "alphanumeric data-item size (%d) "
-                                   "exceeds maximum of %d bytes",
-                              $nchar, MAXIMUM_ALPHA_LENGTH);
+                                   "exceeds maximum of %lu bytes",
+                              $nchar, (unsigned long)MAXIMUM_ALPHA_LENGTH);
                   }
                   field->set_initial(nchar, @nchar);
                 }
@@ -4573,6 +4772,7 @@ picture_clause: PIC signed nps[fore] nines nps[aft]
                   field->data.digits   =  digits_of_picture($picture, false);
                   field->data.rdigits  = rdigits_of_picture($picture);
                   if( is_picture_scaled($picture) ) field->attr |= scaled_e;
+                  field->set_signable();
                   auto nchar = length_of_picture($picture);
                   field->set_capacity(nchar);
                   field->blank_initial(nchar);
@@ -4753,15 +4953,21 @@ usage_clause1:  usage BIT
         |       usage BINARY_INTEGER [comp] is_signed
                 {
                   bool signable = $is_signed? $comp.signable : false;
-
+                  if( proto_field.has_clause(picture_clause_e) ) {
+                    error_msg(@comp, "USAGE is incompatible with PICTURE" );
+                  }
                   $$ = field_binary_usage( @comp, current_field(), 
                                            $comp.type, $comp.capacity,
                                            signable );
                 }
 
 	|	usage COMPUTATIONAL[comp] native
-                { 
-                  $$ = field_binary_usage( @comp, current_field(), 
+                {
+                  auto field = current_field();
+                  if( proto_field.has_clause(picture_clause_e) && field->type == FldFloat ) {
+                    error_msg(@comp, "USAGE is incompatible with PICTURE" );
+                  }
+                  $$ = field_binary_usage( @comp, field, 
                                            $comp.type, $comp.capacity,
                                            $comp.signable );
                 } 
@@ -4875,7 +5081,7 @@ value_clause:   VALUE all LITERAL[lit] {
                     }
                   }
                 }
-        |       VALUE all cce_expr[cce] {
+        |       VALUE all const_value[cce] {
 		  /*
                    * cce has two parts: 
 		   * cce.r) Host binary value
@@ -4927,7 +5133,11 @@ value_clause:   VALUE all LITERAL[lit] {
                 }
         |       VALUE error
                 {
-                  error_msg(@2, "invalid VALUE");
+                  if( 0 < yychar ) {
+                    error_msg(@2, "invalid VALUE at %qs", keyword_str(yychar));
+                  } else {
+                    error_msg(@2, "invalid VALUE");
+                  }
                 }
                 ;
 
@@ -4964,21 +5174,21 @@ redefines_clause: REDEFINES NAME[orig]
                     error_msg(@2, "%s may not REDEFINE %s",
                             field->name, orig->name);
 		  }
-                  cbl_field_t *super = symbol_redefines(orig);
-                  if( super ) {
-                    error_msg(@2, "%s may not REDEFINE %s, "
-                            "which redefines %s",
-                            field->name, orig->name, super->name);
-                  }
-                  if( field->level != orig->level ) {
+                  // Resolve chained REDEFINES:
+                  //   treat "C REDEFINES B"
+                  //   with  "B REDEFINES A"
+                  // as "C" redefining the same storage as "A".
+
+                  cbl_field_t *root = symbol_redefines_root(orig);
+                  if( field->level != root->level ) {
                     error_msg(@2, "cannot redefine %s %s as %s %s "
                              "because they have different levels",
-			    orig->level_str(), name_of(orig),
+			    root->level_str(), name_of(root),
 			    field->level_str(), name_of(field));
                   }
 		  // ISO 13.18.44.3
-		  auto parent( symbol_index(e) );
-		  auto p = std::find_if( symbol_elem_of(orig) + 1,
+		  auto parent( symbol_index(symbol_elem_of(root)) );
+		  auto p = std::find_if( symbol_elem_of(root) + 1,
 					 symbol_elem_of(field),
 					 [parent, level = field->level]( const auto& elem ) {
 					   if( elem.type == SymField ) {
@@ -4993,17 +5203,17 @@ redefines_clause: REDEFINES NAME[orig]
 		    auto mid( cbl_field_of(p) );
                     error_msg(@2, "cannot redefine %s %s as %s %s "
 			    "because %s %s intervenes",
-			    orig->level_str(), name_of(orig),
+			    root->level_str(), name_of(root),
 			    field->level_str(), name_of(field),
 			    mid->level_str(), name_of(mid));
                   }
 
-                  if( valid_redefine(@2, field, orig) ) {
+                  if( valid_redefine(@2, field, root) ) {
                     /*
                      * Defer "inheriting" the parent's description until the
                      * redefine is complete.
                      */
-                    current_field()->parent = symbol_index(e);
+                    current_field()->parent = symbol_index(symbol_elem_of(root));
                   }
                 }
                 ;
@@ -5038,18 +5248,23 @@ based_clause:   BASED
                 }
                 ;
 
-blank_zero_clause: blank_when_zero
-                { cbl_field_t *field = current_field();
-                  // the BLANK WHEN ZERO clause defines the item as numeric-edited.
+blank_zero_clause: BLANK when ZERO
+                { // BLANK WHEN ZERO defines the item as numeric-edited.
+                  cbl_field_t *field = current_field();
+                  auto attr = blank_zero_e;
                   if( !field_type_update(field, FldNumericEdited, @1) ) {
-                    YYERROR;
+                    attr = none_e;
+                    if( field->type == FldNumericDisplay ) {
+                      assert(field->has_attr(signable_e));
+                      error_msg(@$, "signed NUMERIC DISPLAY type "
+                                    "cannot have BLANK WHEN ZERO");
+                    } else {
+                      assert(is_numeric(field));
+                      error_msg(@$, "NUMERIC type cannot have BLANK WHEN ZERO");
+                    }                      
                   }
-                  field->attr |= blank_zero_e;
+                  field->set_attr(attr);
                 }
-                ;
-blank_when_zero:
-                BLANK WHEN ZERO
-        |       BLANK      ZERO
                 ;
 
 synched_clause: SYNCHRONIZED
@@ -5197,16 +5412,44 @@ volatile_clause:
 procedure_div:  %empty {
 		  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
                 }
-        |       PROCEDURE_DIV '.' {
-                  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
-                } declaratives sentences
-        |       PROCEDURE_DIV procedure_args '.' declaratives sentences
-        |       PROCEDURE_DIV procedure_args '.'
+        |       PROCEDURE_DIV procedure_args[args] '.'
+                {
+                  static const std::list<cbl_ffi_arg_t> empty;
+                  prototype_ok(@1, dspc_procedure_header_e); // of course it is
+                  prototype_add( @2, $args? $args->elems : empty );
+                  // if there is a prior incarnation, check, against that
+                  auto L = cbl_label_of(symbol_at(PROGRAM));
+                  auto p = prototype_args(L->name, PROGRAM);
+                  if( p.second ) { // no body: this is a prototype
+                    const auto& args = $args? $args->elems : empty;
+                    std::vector<cbl_ffi_arg_t> argv( args.begin(), args.end() );
+                    verify_args(@2, L->name, argv.size(), argv.data() );
+                  }
+                }
+        |       PROCEDURE_DIV procedure_args[args] '.'  {
+                  static const std::list<cbl_ffi_arg_t> empty;
+                  prototype_ok(@1, dspc_procedure_body_e); 
+                  prototype_add( @2, $args? $args->elems : empty );
+                  // if there is a prior incarnation, check, against that
+                  auto L = cbl_label_of(symbol_at(PROGRAM));
+                  auto p = prototype_args(L->name, PROGRAM);
+                  if( p.second ) {
+                    const auto& args = $args? $args->elems : empty;
+                    std::vector<cbl_ffi_arg_t> argv( args.begin(), args.end() );
+                    verify_args(@2, L->name, argv.size(), argv.data() );
+                  }
+                } // body: this is a definition
+                declaratives sentences
                 ;
 
-procedure_args: USING procedure_uses[args]
+procedure_args: %empty {
+                  if( !procedure_division_ready(@$, NULL, NULL) ) YYABORT;
+                  $$ = nullptr;
+                }
+        |       USING procedure_uses[args]
                 {
                   if( !procedure_division_ready(@args, NULL, $args) ) YYABORT;
+                  $$ = $args;
                 }
         |       USING procedure_uses[args] RETURNING name[ret]
                 {
@@ -5215,6 +5458,7 @@ procedure_args: USING procedure_uses[args]
                     error_msg(@ret, "RETURNING %s is not defined in LINKAGE SECTION",
 			      $ret->name);
                   }
+                  $$ = $args;
                 }
         |                                  RETURNING name[ret]
                 {
@@ -5223,6 +5467,7 @@ procedure_args: USING procedure_uses[args]
                     error_msg(@ret, "RETURNING %s is not defined in LINKAGE SECTION",
 			      $ret->name);
                   }
+                  $$ = nullptr;
                 }
                 ;
 procedure_uses: procedure_use { $$ = new ffi_args_t($1); }
@@ -5329,7 +5574,7 @@ sentence:       statements  '.'
                   if( ! goodnight_gracie() ) {
                     YYABORT;
                   }
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                   YYACCEPT;
                 }
         |       program END_SUBPROGRAM namestr[name] '.'
@@ -5355,7 +5600,7 @@ sentence:       statements  '.'
                 }
         |       program YYEOF
                 { // a contained program (no prior END PROGRAM) is a "sentence"
-                  if( nparse_error > 0 ) YYABORT;
+                  if( ! successful_parse() ) YYABORT;
                   do {
 		    if( ! goodnight_gracie() ) YYABORT; // no recovery
                   } while( current.program_level() > 0 );
@@ -5363,8 +5608,14 @@ sentence:       statements  '.'
                 }
                 ;
 
-statements:                statement { $$ = $1; }
-        |       statements statement { $$ = $2; }
+statements:     statement {
+                  $$ = $1;
+                  parser_statement_end( symbol_temporary_alphanumerics() );
+                }
+        |       statements statement {
+                  $$ = $2;
+                  parser_statement_end( symbol_temporary_alphanumerics() );
+                }
                 ;
 
 statement:      error {
@@ -5497,96 +5748,116 @@ end_accept:     %empty %prec ACCEPT
         |       END_ACCEPT
                 ;
 
-accept_body:    accept_refer
+accept_body:    ACCEPT scalar[r]
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept(*$1, CONSOLE_e, nullptr, nullptr);
+                  parser_accept(*$r, CONSOLE_e, nullptr, nullptr);
                 }
-        |       accept_refer FROM DATE
+        |       ACCEPT scalar[r] FROM DATE
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_yymmdd($1->field);
+                  parser_accept_date_yymmdd($r->field);
                 }
-        |       accept_refer FROM DATE YYYYMMDD
+        |       ACCEPT scalar[r] FROM DATE YYYYMMDD
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_yyyymmdd($1->field);
+                  parser_accept_date_yyyymmdd($r->field);
                 }
-        |       accept_refer FROM DAY
+        |       ACCEPT scalar[r] FROM DAY
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_yyddd($1->field);
+                  parser_accept_date_yyddd($r->field);
                 }
-        |       accept_refer FROM DAY YYYYDDD
+        |       ACCEPT scalar[r] FROM DAY YYYYDDD
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_yyyyddd($1->field);
+                  parser_accept_date_yyyyddd($r->field);
                 }
-        |       accept_refer FROM DAY_OF_WEEK
+        |       ACCEPT scalar[r] FROM DAY_OF_WEEK
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_dow($1->field);
+                  parser_accept_date_dow($r->field);
                 }
 
-        |       accept_refer FROM TIME
+        |       ACCEPT scalar[r] FROM TIME
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  if( $1->is_reference() ) {
+                  if( $r->is_reference() ) {
                     error_msg(@1, "subscripts are unsupported here");
                     YYERROR;
                   }
-                  parser_accept_date_hhmmssff($1->field);
+                  parser_accept_date_hhmmssff($r->field);
                 }
-        |       accept_refer FROM acceptable
+        |       ACCEPT scalar[r] FROM acceptable
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_e;
-                  $$.into = $1;
+                  $$.into = $r;
                   $$.special = $acceptable->id;
                 }
-        |       accept_refer FROM ENVIRONMENT envar
+        |       ACCEPT scalar[r] FROM ENVIRONMENT envar
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_envar_e;
-		  $$.into = $1;
+		  $$.into = $r;
 		  $$.from = $envar;
                 }
-        |       accept_refer FROM COMMAND_LINE
+        |       ACCEPT scalar[r] FROM COMMAND_LINE
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept_command_line(*$1, NULL, NULL, NULL );
+                  parser_accept_command_line(*$r, NULL, NULL, NULL );
                 }
-        |       accept_refer FROM COMMAND_LINE '(' expr ')'
+        |       ACCEPT scalar[r] FROM COMMAND_LINE '(' expr ')'
                 {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_command_line_e;
-		  $$.into = $1;
+		  $$.into = $r;
 		  $$.from = $expr;
                 }
-        |       accept_refer FROM COMMAND_LINE_COUNT {
+        |       ACCEPT scalar[r] FROM COMMAND_LINE_COUNT
+                {
+                  statement_begin(@1, ACCEPT);
 		  $$.func = accept_done_e;
-                  parser_accept_command_line_count(*$1);
+                  parser_accept_command_line_count(*$r);
                 }
-                ;
-
-accept_refer:   ACCEPT scalar { statement_begin(@1, ACCEPT); $$ = $2; }
+        |       ACCEPT OMITTED
+                {
+                  static const cbl_refer_t nothing(literally_zero);
+                  statement_begin(@1, ACCEPT);
+		  $$.func = accept_done_e;
+                  // Pass the literal as a destination.  This is odd, but
+                  // __gg__accept() knows it's coming, and will just wait for
+                  // a newline and ignore the refer.
+                  parser_accept(nothing, CONSOLE_e, nullptr, nullptr);
+                }
                 ;
 
 accept_excepts:	accept_excepts[a] accept_except[b] statements %prec ACCEPT
@@ -6156,6 +6427,7 @@ end_program:    end_program1[end] '.'
                 }
 	|	end_program1[end] error
 		{
+                  resume_parsing(); // start normal parsing for next program
 		  const char *token_name = "???";
                   switch($end.token) {
                   case END_PROGRAM:
@@ -6240,11 +6512,6 @@ exit_with:      %empty
 		   *  as specified in the rules."
 		   */
                   $$ = cbl_refer_t::empty();
-		  if( dialect_ibm() ) {
-		    static auto rt = cbl_field_of(symbol_at(return_code_register()));
-		    static cbl_refer_t status(rt);
-		    $$ = &status;
-		  }
 		  const auto prog = cbl_label_of(symbol_at(current_program_index()));
 		  if( prog->returning ) {
 		    $$ = new cbl_refer_t( cbl_field_of(symbol_at(prog->returning)) );
@@ -6355,8 +6622,8 @@ simple_cond:    kind_of_name
                   $$ = new_reference(new_temporary(FldConditional));
                   parser_relop($$->field, lhs, eq_op, rhs);
                 }
-        |       expr NOT OMITTED
-                {
+        |       expr /* IS */ NOT OMITTED
+	        { // IS captured by lexer
                   auto lhs = cbl_refer_t($expr->field);
                   lhs.addr_of = true;
                   auto rhs = cbl_field_of(symbol_field(0,0, "NULLS"));
@@ -6367,6 +6634,12 @@ simple_cond:    kind_of_name
                   $$ = new_reference(new_temporary(FldConditional));
                   relop_t op = static_cast<relop_t>($op);
                   cbl_field_t *zero = constant_of(constant_index(ZERO));
+                  if( $1->field->type == FldPointer ) {
+                    error_msg(@expr, "cannot compare %qs (%s) to zero",
+                              nice_name_of($1->field),
+                              cbl_field_type_name($1->field->type));
+                    YYERROR;
+                  }
                   parser_relop($$->cond(), *$1, op, zero);
                 }
         |       scalar88 {
@@ -6393,6 +6666,13 @@ kind_of_name:   expr might_be variable_type
                   if( $2 == NOT ) {
                     parser_logop($$, NULL, not_op, $$);
                   }
+                }
+                ;
+
+until_expr:     bool_expr
+        |       EXIT {
+                  auto e = symbol_at(very_false_register());
+                  $$ = new_reference(cbl_field_of(e));
                 }
                 ;
 
@@ -6457,6 +6737,10 @@ rel_expr:	rel_lhs rel_term[rhs]
 		    op = relop_invert(op);
 		    ante.invert = false;
 		  }
+                  if( ! valid_pointer_relop(@1, @1, @2,
+                                            ante.operand, op, $rhs.term) ){
+                    YYERROR;
+                  }
 		  auto cond = new_temporary(FldConditional);
 		  parser_relop( cond, *ante.operand, op, *$rhs.term );
 		  $$ = cond;
@@ -6510,6 +6794,10 @@ rel_abbr:	rel_term {
 		  assert(ante.has_relop);
 		  if( $rel_term.invert ) ante.relop = relop_invert(ante.relop);
 		  auto cond = new_temporary(FldConditional);
+                  if( ! valid_pointer_relop(@1, @1, @1,
+                                            ante.operand, ante.relop, $rel_term.term) ){
+                    YYERROR;
+                  }
 		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
 		}
@@ -6528,6 +6816,10 @@ rel_abbr:	rel_term {
 				name_of($rel_term.term->field) );
 		    YYERROR;
 		  }
+                  if( ! valid_pointer_relop(@1, @1, @2,
+                                            ante.operand, op, $rel_term.term) ){
+                    YYERROR;
+                  }
 		  auto cond = new_temporary(FldConditional);
 		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
@@ -6575,29 +6867,29 @@ expr:           expr_term
                 ;
 expr_term:      expr_term '+' num_term
                 {
-                  if( ($$ = ast_op($1, '+', $3)) == NULL  ) YYERROR;
+                  if( ($$ = ast_op(@$, $1, '+', $3)) == NULL  ) YYERROR;
                 }
         |       expr_term '-' num_term
                 {
-                  if( ($$ = ast_op($1, '-', $3)) == NULL  ) YYERROR;
+                  if( ($$ = ast_op(@$, $1, '-', $3)) == NULL  ) YYERROR;
                 }
         |       num_term
                 ;
 
 num_term:       num_term '*' value
                 {
-                  if( ($$ = ast_op($1, '*', $3)) == NULL  ) YYERROR;
+                  if( ($$ = ast_op(@$, $1, '*', $3)) == NULL  ) YYERROR;
                 }
         |       num_term '/' value
                 {
-                  if( ($$ = ast_op($1, '/', $3)) == NULL  ) YYERROR;
+                  if( ($$ = ast_op(@$, $1, '/', $3)) == NULL  ) YYERROR;
                 }
         |       value
         ;
 
 value:          value POW factor
                 {
-                  if( ($$ = ast_op($1, '^', $3)) == NULL  ) YYERROR;
+                  if( ($$ = ast_op(@$, $1, '^', $3)) == NULL  ) YYERROR;
                 }
         |       '-' value       %prec NEG { $$ = negate( $2 );}
         |       '+' factor %prec NEG { $$ = $2;}
@@ -6629,17 +6921,18 @@ if_test:        bool_expr then
                 }
                 ;
 
-if_body:        next_statements
+if_body:        if_statements
                 {
                   parser_else();
                 }
-        |       next_statements ELSE {
+        |       if_statements ELSE {
                   location_set(@2);
                   parser_else();
-                } next_statements
+                } if_statements
                 ;
 
-next_statements: statements   %prec ADD
+if_statements:  %empty        %prec ADD
+        |       statements    %prec ADD
         |       NEXT SENTENCE %prec ADD
                 {
                   next_sentence = label_add(LblNone, "next_sentence", 0);
@@ -6872,6 +7165,9 @@ eval_abbrs:	rel_term[a] {
 			      relop_str(relop_of($relop)),
 			     obj->name,	 3 + cbl_field_type_str(obj->type) );
 		  }
+                  cbl_refer_t lhs( ev.subject() );
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
 		  auto result = ev.compare(relop, *$a.term);
 		  if( ! result ) YYERROR;
 		  if( $a.invert ) {
@@ -6906,6 +7202,9 @@ eval_abbr:	rel_term[a] {
 		  relop_t relop(ev.object_relop());
 		  auto subj( ev.subject() );
 		  assert( subj );
+                  cbl_refer_t lhs(subj);
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @1, &lhs, relop, $a.term);
 		  $$ = ev.compare(relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
@@ -6915,6 +7214,10 @@ eval_abbr:	rel_term[a] {
 		  auto& ev( eval_stack.current() );
 		  relop_t relop(relop_of($relop));
 		  ev.object_relop(relop);
+
+                  cbl_refer_t lhs( ev.subject() );
+                  // on pointer error, emit message and continue parsing 
+                  valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
 		  $$ = ev.compare(relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
@@ -7251,16 +7554,15 @@ move:           MOVE scalar TO move_tgts[tgts]
         |       MOVE all spaces_etc[src] TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
-                  cbl_field_t *field;
                   auto p = std::find_if( $tgts->targets.begin(),
                                          $tgts->targets.end(),
-                                         [&field]( const auto& num_result ) {
+                                         []( const auto& num_result ) {
                                              const cbl_refer_t& tgt = num_result.refer;
-                                             field = tgt.field;
-                                             return is_numeric(tgt.field);
+                                             return is_numeric(tgt);
                                             } );
 
                   if( p != $tgts->targets.end() ) {
+                    cbl_field_t *field = p->refer.field;
                     error_msg(@src, "cannot MOVE %qs "
 			            "to numeric receiving field %qs",
 			      constant_of(constant_index($src))->name,
@@ -7278,7 +7580,7 @@ move:           MOVE scalar TO move_tgts[tgts]
                   if( !parser_move2($tgts, src) ) { YYERROR; }
                 }
 
-        |       MOVE intrinsic_call TO move_tgts[tgts]
+        |       MOVE function_call TO move_tgts[tgts]
                 {
                   statement_begin(@1, MOVE);
                   if( !parser_move2($tgts, *$2) ) { YYERROR; }
@@ -7500,11 +7802,11 @@ sum:                num_operand     { $$ = new refer_list_t($num_operand); }
 
 num_operand:    scalar
         |       signed_literal { $$ = new_reference($1); }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 num_value:      scalar // might actually be a string
-        |       intrinsic_call
+        |       function_call
         |       num_literal { $$ = new_reference($1); }
         |       ADDRESS OF scalar {$$ = $scalar; $$->addr_of = true; }
         |       DETAIL OF scalar {$$ = $scalar; }
@@ -7964,15 +8266,15 @@ perform_until:  test_before perform_cond
                 }
                 ;
 perform_cond:   UNTIL { parser_perform_conditional( &perform_current()->tgt); }
-                bool_expr
+                until_expr[expr]
                 {
                   parser_perform_conditional_end( &perform_current()->tgt);
-		  if( !is_conditional($bool_expr) ) {
+		  if( !is_conditional($expr) ) {
 		    error_msg(@1, "%s is not a condition expression",
-		             name_of($bool_expr->field));
+		             name_of($expr->field));
 		    YYERROR;
 		  }
-                  $$ = $bool_expr->cond();
+                  $$ = $expr->cond();
                 }
                 ;
 
@@ -8292,7 +8594,7 @@ varg1a:         ADDRESS OF scalar {
 		  $$ = $scalar;
 		  $$->addr_of = true;
 		}
-        |       intrinsic_call
+        |       function_call
         |       literal
                 {
                   $$ = new_reference($1);
@@ -9659,7 +9961,7 @@ label_name:     NAME
                 ;
 
 inspected:      scalar
-        |       intrinsic_call
+        |       function_call
                 ;
 backward:	%empty   { $$ = false; }
 	|	BACKWARD { $$ = true;  }
@@ -9960,7 +10262,7 @@ alphaval:       LITERAL { $$ = new_reference(new_literal(@1, $1, quoted_e)); }
                 {
                   $$ = new_reference( constant_of(constant_index($1)) );
                 }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 befter:         BEFORE { $$ = BEFORE; }
@@ -10210,6 +10512,13 @@ ffi_by_ref:     scalar_arg[refer]
                   cbl_refer_t *r = new_reference(new_literal(@1, $1, quoted_e));
                   $$ = new cbl_ffi_arg_t(by_content_e, r);
                 }
+        |       num_literal
+                {
+                  cbl_message(@1, MfCallLiteral,
+                              "cannot pass %qs BY REFERENCE", $1->data.initial);
+                  cbl_refer_t *r = new_reference($1);
+                  $$ = new cbl_ffi_arg_t(by_content_e, r);
+                }
         |       ADDRESS OF scalar_arg[refer]
                 {
                   $$ = new cbl_ffi_arg_t(by_reference_e, $refer, address_of_e);
@@ -10437,8 +10746,7 @@ label_1:        qname
 
                   $$ = paragraph_reference(para, isect);
                   assert($$);
-                  if( yydebug ) dbgmsg( "using procedure %s of line %d",
-                                       $$->name, $$->line );
+                  dbgmsg( "using procedure %s of line %d", $$->name, $$->line );
                 }
         |       NUMSTR
                 {
@@ -10515,7 +10823,7 @@ str_input:      scalar
                 {
                   $$ = new_reference(constant_of(constant_index($1)));
                 }
-        |       intrinsic_call
+        |       function_call
                 ;
 
 str_size:       SIZE   { $$ = new_reference(NULL); }
@@ -10622,7 +10930,7 @@ unstring_body:  unstring_src[src] uns_delimited INTO uns_into[into]
                   $$.into = $into;
                 }
 unstring_src:   scalar
-        |       intrinsic_call
+        |       function_call
         |       LITERAL
                 {
                   $$ = new_reference(new_literal(@1, $1, quoted_e));
@@ -10702,8 +11010,7 @@ uns_tgt:        scalar[tgt]
                 }
                 ;
 
-  /* intrinsics */
-intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
+function_call:  function intrinsic { // "intrinsic" includes UDFs.
                   $$ = new_reference($intrinsic);
                   $$->field->attr |= constant_e;
                 }
@@ -10715,7 +11022,7 @@ intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
                     YYERROR;
                   }
                   if( $intrinsic->type != FldAlphanumeric ) {
-                    error_msg(@ref, "'%s' only AlphaNumeric fields accept refmods",
+                    error_msg(@ref, "%qs only AlphaNumeric fields accept refmods",
                              $intrinsic->name);
                     YYERROR;
                   }
@@ -10724,13 +11031,13 @@ intrinsic_call: function intrinsic { // "intrinsic" includes UDFs.
                   $$->field->attr |= constant_e;
                 }
 	|	function NAME {
-		  error_msg(@NAME, "no such function: %s", $NAME);
+		  error_msg(@NAME, "no such function: %qs", $NAME);
 		  YYERROR;
 		}
 
                 ;
 function:       %empty   %prec FUNCTION
-                {
+                { // typed_name in scan_ante.h allows FUNCTION keywod to be ommitted.
                   statement_begin(@$, FUNCTION);
                 }
         |       FUNCTION
@@ -10740,24 +11047,34 @@ function:       %empty   %prec FUNCTION
                 ;
 
 function_udf:   FUNCTION_UDF '(' arg_list[args] ')' {
-		  std::vector<function_descr_arg_t> params;
                   auto L = cbl_label_of(symbol_at($1));
-		  if( ! current.udf_args_valid(L, $args->refers, params) ) {
-		    YYERROR;
-		  }
 		  const auto returning = cbl_field_of(symbol_at(L->returning));
                   $$ = new_temporary_clone(returning);
 		  $$->data.initial = returning->name; // user's name for the field
+                  auto proto = function_prototypes.find($1);
+                  if( yydebug && proto == function_prototypes.end() ) {
+                    dbgmsg( "function_udf:%d: %s not found by prototype_args",
+                            __LINE__, L->name );
+                  }
+                  gcc_assert(proto != function_prototypes.end()); // lexer asked parser for UDF
+                  const auto& formals = proto->second;
+                  auto  pf = formals.begin(),
+                       epf = formals.end();
                   std::vector <cbl_ffi_arg_t> args($args->refers.size());
-		  size_t i = 0;
 		  // Pass parameters as defined by the function.
-                  std::transform( $args->refers.begin(), $args->refers.end(), args.begin(),
-				  [params, &i]( const cbl_refer_t& arg ) {
-				    function_descr_arg_t param = params.at(i++);
-				    auto ar = new cbl_refer_t(arg);
-				    cbl_ffi_arg_t actual(param.crv, ar);
-				    return actual;
-				  } );
+                  std::transform( $args->refers.begin(),
+                                  $args->refers.end(), args.begin(),
+                                  [&pf, epf]( const cbl_refer_t& r ) {
+                                    auto arg = new cbl_refer_t(r);
+                                    auto crv = by_reference_e;
+                                    if( pf != epf ) {
+                                      crv = pf->crv;
+                                      pf++;
+                                    }
+                                    cbl_ffi_arg_t actual(crv, arg);
+                                    return actual;
+                                  } );
+                  verify_args(@1, L->name, args.size(), args.data());
                   // Pretend hex-encoded because that means use verbatim.
                   auto attr = cbl_field_attr_t(quoted_e | hex_encoded_e);
                   auto name = new_literal(strlen(L->name), L->name, attr);
@@ -10812,9 +11129,7 @@ intrinsic:      function_udf
                               keyword_str($1), (long)(p - args.data()), name_of(p->field) );
                     YYERROR;
                   }
-                  $$ = is_numeric(args[0].field)?
-                         new_tempnumeric_float() :
-                         new_alphanumeric();
+                  $$ = intrinsic_return_field($1, args);
 		  $$->data.initial = keyword_str($1);
                   parser_intrinsic_callv( $$, intrinsic_cname($1),
 					  args.size(), args.data() );
@@ -10842,7 +11157,7 @@ intrinsic:      function_udf
 
 	|       BASECONVERT  '(' varg[r1] varg[r2] varg[r3] ')' {
                   location_set(@1);
-                  $$ = new_tempnumeric("BASECONVERT");
+                  $$ = new_alphanumeric("BASECONVERT", $r1->field->codeset.encoding);
 		  cbl_unimplemented("BASECONVERT");
                   if( ! intrinsic_call_3($$, BASECONVERT, $r1, $r2, $r3 )) YYERROR;
                 }
@@ -10853,7 +11168,7 @@ intrinsic:      function_udf
                 }
         |       CHAR  '(' expr[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(1,"CHAR");
+                  $$ = new_alphanumeric("CHAR");
                   if( ! intrinsic_call_1($$, CHAR, $r1, @r1)) YYERROR;
                 }
                 /* convert formulations: 
@@ -10937,7 +11252,7 @@ intrinsic:      function_udf
 
         |       FORMATTED_DATE '(' DATE_FMT[r1] expr[r2] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATE, "FORMATTED-DATE");
+                  $$ = new_alphanumeric("FORMATTED-DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_2($$, FORMATTED_DATE, r1, $r2) ) YYERROR;
@@ -10947,7 +11262,7 @@ intrinsic:      function_udf
         |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] expr[r2]
                                                         expr[r3] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME, "FORMATTED-DATETIME");
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   symbol_temporary_location(r1->field, @r1);
                   static cbl_refer_t r3(literally_zero);
@@ -10957,7 +11272,7 @@ intrinsic:      function_udf
         |       FORMATTED_DATETIME '(' DATETIME_FMT[r1] expr[r2]
                                         expr[r3] expr[r4] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME, "FORMATTED-DATETIME");
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_4($$, FORMATTED_DATETIME,
@@ -10969,7 +11284,7 @@ intrinsic:      function_udf
         |       FORMATTED_TIME '(' TIME_FMT[r1] expr[r2]
                                                 expr[r3]  ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_TIME, "FORMATTED-DATETIME");
+                  $$ = new_alphanumeric("FORMATTED-DATETIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_3($$, FORMATTED_TIME,
@@ -10977,7 +11292,7 @@ intrinsic:      function_udf
                 }
         |       FORMATTED_TIME '(' TIME_FMT[r1] expr[r2]  ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_TIME, "FORMATTED-TIME");
+                  $$ = new_alphanumeric("FORMATTED-TIME");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   auto r3 = new_reference(new_constant("0"));
                   symbol_temporary_location(r1->field, @r1);
@@ -10986,7 +11301,7 @@ intrinsic:      function_udf
                 }
         |       FORMATTED_CURRENT_DATE '(' DATETIME_FMT[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_FORMATTED_DATETIME, "FORMATTED-CURRENT_DATE");
+                  $$ = new_alphanumeric("FORMATTED-CURRENT_DATE");
                   auto r1 = new_reference(new_literal(strlen($r1), $r1, quoted_e));
                   symbol_temporary_location(r1->field, @r1);
                   if( ! intrinsic_call_1($$, FORMATTED_CURRENT_DATE, r1, @r1) )
@@ -11071,13 +11386,13 @@ intrinsic:      function_udf
 		}
         |       lopper_case[func] '(' alpha_val[r1] ')' {
                   location_set(@1);
-                  $$ = new_alphanumeric($r1->field->data.capacity(), "lopper_case[func]");
+                  $$ = new_alphanumeric("lopper_case[func]");
                   if( ! intrinsic_call_1($$, $func, $r1, @r1)) YYERROR;
                 }
 
 	|	MODULE_NAME '(' module_type[type] ')'
 		{
-		  $$ = new_alphanumeric(sizeof(cbl_name_t), "MODULE-NAME");
+		  $$ = new_alphanumeric("MODULE-NAME");
 		  parser_module_name( $$, $type );
 		}
 
@@ -11154,7 +11469,11 @@ intrinsic:      function_udf
                   error_msg(@error, "invalid TRIM argument");
                   YYERROR;
                 }
-        |       TRIM '(' expr[r1] trim_trailing ')'
+                /*
+                 * TRIM (arg-1 arg-2a arg-2b) is the same as 
+                 * TRIM (TRIM (arg-1 arg-2a) arg-2b).
+                 */
+        |       TRIM '(' expr[r1] trim_trailing[how] trim_expr[args2] ')'
                 {
                   location_set(@1);
                    switch( $r1->field->type ) {
@@ -11167,16 +11486,19 @@ intrinsic:      function_udf
                    default:
                      // BLANK WHEN ZERO implies numeric-edited, so OK
                      if( $r1->field->has_attr(blank_zero_e) ) {
+                       dbgmsg("logic error: must be numeric-edited");
+                       gcc_unreachable();
                        break;
                      }
                      error_msg(@r1, "TRIM argument must be alphanumeric");
                      YYERROR;
                      break;
                   }
-		   $$ = new_alphanumeric("TRIM");
-                  cbl_refer_t * how = new_reference($trim_trailing);
-                  if( ! intrinsic_call_2($$, TRIM, $r1, how) ) YYERROR;
-                }
+                  $$ = new_alphanumeric("TRIM", $r1->field->codeset.encoding);
+                  std::vector<cbl_refer_t> args($args2->args.begin(),
+                                                $args2->args.end());
+                  parser_trim($$, *$r1, $how, args);
+                }  
 
         |       USUBSTR '(' alpha_val[r1] expr[r2] expr[r3]  ')' {
                   location_set(@1);
@@ -11238,7 +11560,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11254,7 +11576,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11280,7 +11602,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11296,7 +11618,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11322,7 +11644,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11338,7 +11660,7 @@ intrinsic:      function_udf
                   static auto one = new cbl_refer_t( new_constant("1") );
                   static auto four = new cbl_refer_t( new_constant("4") );
                   cbl_span_t year(one, four);
-                  auto r3 = new_reference(new_alphanumeric(MAXLENGTH_CALENDAR_DATE));
+                  auto r3 = new_reference(new_alphanumeric());
                   r3->refmod = year;
 
                   parser_intrinsic_call_0( r3->field, "__gg__current_date" );
@@ -11496,14 +11818,40 @@ lopper_case:    LOWER_CASE      { $$ = LOWER_CASE; }
         |       UPPER_CASE      { $$ = UPPER_CASE; }
                 ;
 
-trim_trailing:  %empty          { $$ = new_constant("0"); }  // Remove both
-        |       LEADING         { $$ = new_constant("1"); }  // Remove leading  spaces
-        |       TRAILING        { $$ = new_constant("2"); }  // Remove trailing spaces
+trim_trailing:  %empty          { $$ = 3; }  // Remove both
+        |       LEADING         { $$ = 1; }  // Remove leading  spaces
+        |       TRAILING        { $$ = 2; }  // Remove trailing spaces
         ;
+
+trim_expr:      %empty {
+                  cbl_field_t *space = constant_of(constant_index(SPACES));
+                  $$ = new vargs_t( new_reference(space) );
+                }
+        |       vargs {
+                  $$ = new vargs_t;
+                  std::copy_if( $vargs->args.begin(),
+                                $vargs->args.end(),
+                                std::back_inserter($$->args), 
+                                []( const auto& arg ) {
+                     bool is_alpha =
+                       arg.field->type == FldAlphanumeric ||
+                       arg.field->type == FldLiteralA;
+                    if( arg.addr_of || ! is_alpha ) {
+                      error_msg(arg.loc, "invalid TRIM character");
+                      return false;
+                    }
+                    if( arg.field->char_capacity() != 1 ) {
+                      error_msg(arg.loc, "TRIM argument may be only 1 character");
+                      return false;
+                    }
+                    return true;
+                  } );
+                }
+                ;
 
 intrinsic0:     CURRENT_DATE {
                   location_set(@1);
-                  $$ = new_alphanumeric(MAXLENGTH_CALENDAR_DATE, "CURRENT-DATE");
+                  $$ = new_alphanumeric("CURRENT-DATE");
                   parser_intrinsic_call_0( $$, "__gg__current_date" );
                 }
         |       E {
@@ -11546,7 +11894,7 @@ intrinsic0:     CURRENT_DATE {
 
         |       PI {
                   location_set(@1);
-                  $$ = new_tempnumeric_float("PI");
+                  $$ = new_tempnumeric("PI");
                  parser_intrinsic_call_0( $$, "__gg__pi" );
                 }
         |       SECONDS_PAST_MIDNIGHT {
@@ -11562,7 +11910,7 @@ intrinsic0:     CURRENT_DATE {
         |       WHEN_COMPILED {
                   location_set(@1);
 		  // Returns YYYYMMDDhhmmssss-0500)
-                  $$ = new_alphanumeric(MAXLENGTH_CALENDAR_DATE, "WHEN-COMPILED"); 
+                  $$ = new_alphanumeric("WHEN-COMPILED"); 
                   parser_intrinsic_call_0( $$, "__gg__when_compiled" );
                 }
                 ;
@@ -11570,9 +11918,7 @@ intrinsic0:     CURRENT_DATE {
 intrinsic_I:    BOOLEAN_OF_INTEGER     { $$ = BOOLEAN_OF_INTEGER;
 		  cbl_unimplemented("BOOLEAN-OF-INTEGER");
 		}
-        |       CHAR_NATIONAL          { $$ = CHAR_NATIONAL;
-		    cbl_unimplemented("CHAR-NATIONAL");
-		}
+        |       CHAR_NATIONAL          { $$ = CHAR_NATIONAL; }
         |       DATE_OF_INTEGER        { $$ = DATE_OF_INTEGER; }
         |       DAY_OF_INTEGER         { $$ = DAY_OF_INTEGER; }
         |       FACTORIAL              { $$ = FACTORIAL; }
@@ -11824,6 +12170,10 @@ user_default:   DEFAULT
                 }
                 ;
 
+when:           %empty
+        |       WHEN
+                ;
+
 with:           %empty
         |       WITH
                 ;
@@ -11867,7 +12217,7 @@ cdf_use_when:	USE DEBUGGING on labels
                     YYERROR;
                   }
                   static const cbl_label_t all = {
-		    LblNone, 0, 0,0,0, false, false, false, 0,0, ":all:" };
+		    LblNone, 0, 0,0,0, false, false, false, false, 0,0, ":all:" };
                   add_debugging_declarative(&all);
                  }
 
@@ -12203,11 +12553,170 @@ first_line_of( YYLTYPE loc ) {
     return loc;
 }
 
+/*
+ *  Return true if actual parameter matches formal definition.
+ *
+ * "The definition of the formal parameter and the definition of the argument
+ *  shall have the same ALIGN, BLANK WHEN ZERO, DYNAMIC LENGTH, JUSTIFIED,
+ *  PICTURE, SIGN, and USAGE clauses, [with exceptions]."
+ */
+bool
+cbl_ffi_arg_t::matches( const cbl_ffi_arg_t& that ) const {
+  if( this->refer.field == nullptr ) return optional;
+  auto formal = refer.field;
+  auto actual = that.refer.field;
+
+  dbgmsg( "%s: %s by %s", __func__,
+          nice_name_of(formal), cbl_ffi_crv_str(that.crv) );
+
+  static const size_t mask =
+      rjust_e
+    | ljust_e
+    | blank_zero_e
+    | signable_e
+    | separate_e;
+
+  switch( that.crv ) {
+  case by_default_e:
+  case by_reference_e:
+    if( crv == by_reference_e ) {
+      if( (formal->attr & mask) == (actual->attr & mask) ) {
+        if( formal->data.capacity() == actual->data.capacity() ) {
+          if( formal->type == actual->type ) { // captures USAGE except COMP-X
+            return true;
+          }
+        }
+        else if (actual->attr & any_length_e)
+          return true;
+      }
+    }
+    // If actual is by reference, so must the formal be. 
+    return false;
+    break;
+  case by_content_e:
+    break;
+  case by_value_e:
+    if( crv != by_value_e ) return false;
+    if( formal->type == FldPointer && that.refer.is_pointer() ) return true;
+    break;
+  }
+
+  assert(that.crv != by_reference_e);
+
+  if( is_numeric(formal->type) == is_numeric(actual->type) ) {
+    if( is_numeric(formal->type) ) { // for numeric types, actual must fit
+      return actual->data.capacity() <= formal->data.capacity();
+    }
+    // The actual parameter size must match.  If the caller is bigger, some
+    // input may not reach the called.  If the called updates a smaller actual,
+    // it will write beyond the end of the By Content copy.  
+    return actual->data.capacity() == formal->data.capacity()
+        && actual->codeset.encoding == formal->codeset.encoding;
+  }          
+  return false;
+}
+
+// Return the formal mismatched argument and its position.
+static const std::pair<cbl_ffi_arg_t *, size_t>
+bad_arg( const char name[],
+         size_t narg, const cbl_ffi_arg_t args[] ) 
+{
+  static cbl_ffi_arg_t output;
+  static const std::pair<cbl_ffi_arg_t *, size_t> ok(nullptr, 0);
+
+  auto proto = prototype_args(name);
+  if( proto.second ) {
+    const auto& formals = proto.first;
+    auto earg = args + std::min(narg, formals.size());
+    auto p = std::mismatch( formals.begin(), formals.end(), args, earg, 
+                            []( const cbl_ffi_arg_t& formal,
+                                const cbl_ffi_arg_t& actual ) {
+                              return formal.matches(actual);
+                            } );
+    if( p.second < earg ) {
+      output = *p.second;
+      size_t ord = p.second - args;
+      return std::make_pair(&output, ord); // bad actual
+    }
+    if( earg < args + narg ) {
+      output = *earg;
+      size_t ord = earg - args;
+      return std::make_pair(&output, ord); // too many actuals
+    }
+    if( narg < formals.size() ) { // missing actuals might be optional
+      auto p = std::find_if( formals.begin() + narg, 
+                             formals.end(),
+                             [] ( auto& arg ) {
+                               return ! arg.optional;
+                             } );
+      if( p != formals.end() ) {
+        output = *p;
+        size_t ord = p - formals.begin();
+        return std::make_pair(&output, ord); // insufficient actuals
+      }
+    }
+  } else {
+    dbgmsg("%s: no prototype for %s", __func__, name);
+  }
+  return ok;
+}  
+
+// Verify provided actual parameters against formals.
+static void
+verify_args( const YYLTYPE& loc, 
+             const char name[], size_t narg,
+             const cbl_ffi_arg_t args[] ) {
+  auto parg_pair = bad_arg(name, narg, args);
+  
+  if( parg_pair.first ) {
+    auto parg = parg_pair.first;
+    auto ord =  parg_pair.second;
+    const auto& formals = prototype_args(name).first;
+    /*
+     * Four possibilities for parg;
+     * 0.  each actual matched its formal
+     * 1.  is actual argument that does not match the formal
+     * 2.  is actual argument, but there is no formal (passed too many)
+     * 3.  is not an argument (too few)
+     */
+    if( ord < narg ) {
+      if( ord < formals.size() ) {
+        error_msg( loc, "parameter %zu %qs (%s, capacity %u, %s) "
+                   "invalid for %qs parameter %qs (%s, capacity %u, %s)",
+                   1 + ord,
+                   nice_name_of(parg->field()),
+                    cbl_field_type_name(parg->field()->type),
+                    parg->field()->data.capacity(),
+                    parg->field()->attr & signable_e ? "signed" : "unsigned",
+                   name, 
+                   nice_name_of(formals[ord].refer.field),
+                   cbl_field_type_name(formals[ord].refer.field->type),
+                   formals[ord].refer.field->data.capacity(),
+                   formals[ord].refer.field->attr & signable_e ? "signed" : "unsigned");
+      } else {
+        error_msg( loc, "parameter %zu %qs (%s) "
+                   "exceed %qs parameter count",
+                   1 + ord,
+                   nice_name_of(parg->field()),
+                   cbl_field_type_name(parg->field()->type),
+                   name);
+      }
+    } else {
+      error_msg( loc, "%qs requires %zu parameters, "
+                 "but only %zu were passed, "
+                 "parameter %zu (%qs) is required",
+                 name,
+                 formals.size(), narg, 1 + ord, 
+                 nice_name_of(formals[ord].refer.field) );
+    } 
+  }
+}
+
 void ast_call( const YYLTYPE& loc, cbl_refer_t name, const cbl_refer_t& returning,
-                  size_t narg, cbl_ffi_arg_t args[],
-                  cbl_label_t *except,
-                  cbl_label_t *not_except,
-                  bool is_function)
+               size_t narg, cbl_ffi_arg_t args[],
+               cbl_label_t *except,
+               cbl_label_t *not_except,
+               bool is_function)
 {
   if( is_literal(name.field) ) {
     cbl_field_t called = { FldLiteralA, quoted_e | constant_e,
@@ -12218,6 +12727,8 @@ void ast_call( const YYLTYPE& loc, cbl_refer_t name, const cbl_refer_t& returnin
     name.field = cbl_field_of(symbol_field_add(PROGRAM, &called));
     symbol_field_location(field_index(name.field), loc);
     parser_symbol_add(name.field);
+
+    verify_args(loc, name.field->data.initial, narg, args);
   }
 
   parser_call( name, returning, narg, args, except, not_except, is_function );
@@ -12684,6 +13195,11 @@ current_t::udf_update( const ffi_args_t *ffi_args ) {
   const auto returning = cbl_field_of(symbol_at(L->returning));
   auto key = function_descr_t::init(L->name);
   auto func = udfs.find(key);
+  if (func == udfs.end()) {
+    // Try to find it as a function prototype.
+    key = function_descr_t::init(L->name, true);
+    func = udfs.find(key);
+  }
   assert(func != udfs.end());
 
   function_descr_t udf = *func;
@@ -12705,6 +13221,7 @@ current_t::udf_update( const ffi_args_t *ffi_args ) {
   assert(result.second);
 }
 
+#if 0
 bool
 current_t::udf_args_valid( const cbl_label_t *L,
 			   const std::list<cbl_refer_t>& args,
@@ -12712,6 +13229,11 @@ current_t::udf_args_valid( const cbl_label_t *L,
 {
   auto key = function_descr_t::init(L->name);
   auto func = udfs.find(key);
+  if (func == udfs.end()) {
+    // Try to find it as a function prototype.
+    key = function_descr_t::init(L->name, true);
+    func = udfs.find(key);
+  }
   assert(func != udfs.end());
   function_descr_t udf = *func;
   params = udf.linkage_fields;
@@ -12728,12 +13250,10 @@ current_t::udf_args_valid( const cbl_label_t *L,
       auto tgt = cbl_field_of(symbol_at(udf.linkage_fields.at(i).isym));
       if( ! valid_move(tgt, arg.field) ) {
 	auto loc = current_location;
-        if( ! is_temporary(arg.field) ) {
-          loc = symbol_field_location(field_index(arg.field));
-        }
-	error_msg(loc, "FUNCTION %s argument %zu, '%s' cannot be passed to %s, type %s",
-		  L->name, i, arg.field->pretty_name(),
-		  tgt->pretty_name(), 3 + cbl_field_type_str(tgt->type) );
+	error_msg(loc, "FUNCTION %s argument %zu, '%s' (%s) cannot be passed to %s (%s)",
+		  L->name, 1 + i, arg.field->pretty_name(),
+		  cbl_field_type_str(arg.field->type),
+		  tgt->pretty_name(), cbl_field_type_str(tgt->type) );
 	return false;
       }
     }
@@ -12741,6 +13261,7 @@ current_t::udf_args_valid( const cbl_label_t *L,
   }
   return true;
 }
+#endif
 
 bool
 current_t::repository_add( const char name[]) {
@@ -12783,13 +13304,68 @@ int repository_function_tok( const char name[] ) {
 }
 
 function_descr_t
-function_descr_t::init( int isym ) {
+function_descr_t::init( int isym, bool prototype ) {
   function_descr_t descr = { FUNCTION_UDF_0 };
   descr.ret_type = FldInvalid;
   const auto L = cbl_label_of(symbol_at(isym));
   bool ok = namcpy(YYLTYPE(), descr.name, L->name);
+  descr.prototype = prototype;
   gcc_assert(ok);
   return descr;
+}
+
+static bool
+valid_pointer_relop( const cbl_loc_t& lloc,
+                     const cbl_loc_t& oloc,
+                     const cbl_loc_t& rloc, 
+                     cbl_refer_t *lhs, relop_t op, cbl_refer_t *rhs )
+{
+  static const char reference[] = "ISO 2023, 8.8.4.2.16 Comparison of pointer operands";
+  
+  if( lhs->is_pointer() || rhs->is_pointer() ) {
+    dbgmsg( "comparing %s%s (%s) to %s%s (%s)",
+            lhs->addr_of? "addr of " : "", 
+            nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+            rhs->addr_of? "addr of " : "", 
+            nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type) );
+    if( lhs->is_pointer() ) {
+      if( rhs->is_pointer() ) {
+        switch(op) {
+        case lt_op:
+        case le_op:
+        case ge_op:
+        case gt_op:
+          error_msg(oloc, "operator %qs invalid for POINTER or ADDRESS OF [%s]",
+                    relop_str(op), reference);
+          return false;
+          break;
+        case eq_op:
+        case ne_op:
+          break;
+        } 
+        return true; // end 2 pointers
+      } else {
+        // rhs not a pointer
+        error_msg(rloc, "cannot compare %s%qs (%s) to non-pointer %qs (%s) [%s]",
+                  lhs->addr_of? "addr of " : "", 
+                  nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+                  nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type),
+                  reference);
+        return false;
+      }
+      gcc_assert(rhs->is_pointer());
+      // lhs not a pointer
+      error_msg(lloc, "cannot compare non-pointer %qs (%s) to %s%qs (%s) [%s]",
+                nice_name_of(lhs->field), cbl_field_type_name(lhs->field->type),
+                rhs->addr_of? "addr of " : "", 
+                nice_name_of(rhs->field), cbl_field_type_name(rhs->field->type),
+                reference);
+      return false;
+    }
+    // pointer || pointer was handled
+    gcc_unreachable();
+  }
+  return true; // no pointers
 }
 
 arith_t::arith_t( cbl_arith_format_t format, refer_list_t * refers )
@@ -12813,7 +13389,7 @@ cbl_key_t::operator=( const sort_key_t& that ) {
 }
 
 static cbl_refer_t *
-ast_op( cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
+ast_op( YYLTYPE loc, cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
   assert(lhs);
   assert(rhs);
   if( ! (is_numeric(lhs->field) && is_numeric(rhs->field)) ) {
@@ -12828,8 +13404,7 @@ ast_op( cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
     }
 
     auto f  = !is_numeric(lhs->field)? lhs->field : rhs->field;
-    auto loc = symbol_field_location(field_index(f));
-    error_msg(loc, "'%s' is not numeric", f->name);
+    error_msg(loc, "%qs is not numeric", f->name);
     return NULL;
   }
  ok:
@@ -13384,7 +13959,9 @@ initialize_one( cbl_num_result_t target, bool with_filler,
 {
   cbl_refer_t& tgt( target.refer );
   if( ! valid_target(tgt) ) return false;
-
+#if 0
+  if( field_index(target.refer.field) == return_code_register() ) return true;
+#endif
   // Rule 1 c: is valid for VALUE, REPLACING, or DEFAULT
   // If no VALUE (category none), set to blank/zero.
   if( value_category == data_category_none && replacements.empty() ) {
@@ -13958,21 +14535,6 @@ cbl_field_t::value_str() const {
     return data.etc_type_str();
 }
 
-static const cbl_division_t not_syntax_only = cbl_division_t(-1);
-             cbl_division_t cbl_syntax_only = not_syntax_only;
-
-void
-mode_syntax_only( cbl_division_t division ) {
-  cbl_syntax_only = division;
-}
-
-// Parser moves to syntax-only mode if data-division errors preclude compilation.
-bool
-mode_syntax_only() {
-  return cbl_syntax_only != not_syntax_only
-      && cbl_syntax_only <= current_division;
-}
-
 void
 cobol_dialect_set( cbl_dialect_t dialect ) {
   switch(dialect) {
@@ -14014,12 +14576,25 @@ cobol_gcobol_feature_set( cbl_gcobol_feature_t gcobol_feature, bool on ) {
 
 static bool
 literal_refmod_valid( YYLTYPE loc, const cbl_refer_t& r ) {
-  if( r.field->has_attr(any_length_e) ) return true;
-
   unsigned int nchar = r.field->char_capacity();
-
   const cbl_span_t& refmod(r.refmod);
 
+  // Check ANY LENGTH for initial refmod FROM literal 0. A bit specific....
+  if( r.field->has_attr(any_length_e) ) {
+    if( is_literal(refmod.from->field) ) {
+      auto edge = refmod.from->field->as_integer();
+      if( edge < 1 ) {
+        error_msg(loc,"%s(%zu:%s) out of bounds, must be within 1:%u",
+                  r.field->name,
+                  size_t(refmod.from->field->as_integer()),
+                  nice_name_of(refmod.len->field),
+                  nchar );
+        return false;
+      }
+    }
+    return true;
+  }
+  
   if( ! is_literal(refmod.from->field) ) {
     if( ! refmod.len ) return true;
     if( ! is_literal(refmod.len->field) ) return true;
@@ -14038,7 +14613,7 @@ literal_refmod_valid( YYLTYPE loc, const cbl_refer_t& r ) {
   }
 
   auto edge = refmod.from->field->as_integer();
-  if( edge > 0 ) {
+  if( 0 < edge ) {
     if( --edge < nchar ) {
       if( ! refmod.len ) return true;
       if( ! is_literal(refmod.len->field) ) return true;
@@ -14058,10 +14633,11 @@ literal_refmod_valid( YYLTYPE loc, const cbl_refer_t& r ) {
       return false;
     }
   }
-  // not: 0 < from <= capacity
-  error_msg(loc,"%s(%zu) out of bounds, size is %u",
+
+  error_msg(loc,"%s(%zu:%s) out of bounds, must be within 1:%u",
 	    r.field->name,
 	    size_t(refmod.from->field->as_integer()),
+            nice_name_of(refmod.len->field),
 	    nchar );
   return false;
 }

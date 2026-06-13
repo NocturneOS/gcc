@@ -234,8 +234,7 @@ The OpenMP 4.5 specification is fully supported.
 @item Memory management routines @tab Y @tab
 @item @code{allocate} directive @tab P
       @tab C++ unsupported; see also @ref{Memory allocation}
-@item @code{allocate} clause @tab P @tab Clause has no effect on @code{target}
-      (@uref{https://gcc.gnu.org/PR113436,PR113436})
+@item @code{allocate} clause @tab Y @tab
 @item @code{use_device_addr} clause on @code{target data} @tab Y @tab
 @item @code{ancestor} modifier on @code{device} clause @tab Y @tab
 @item Implicit declare target directive @tab Y @tab
@@ -645,7 +644,8 @@ to address of matching mapped list item per 5.1, Sect. 2.21.7.2 @tab N @tab
 @item Multi-word directives now use underscore by default @tab N @tab
 @item Relaxed Fortran restrictions to the @code{aligned} clause @tab N @tab
 @item Mapping lambda captures @tab N @tab
-@item New @code{omp_pause_stop_tool} constant for omp_pause_resource @tab N @tab
+@item New @code{omp_pause_stop_tool} constant for @code{omp_pause_resource}
+      @tab Y @tab
 @item In Fortran (fixed and free source form), spaces between directive names are mandatory
       @tab N @tab
 @item Update of the map-type decay for mapping and @code{declare_mapper}
@@ -672,7 +672,7 @@ Technical Report (TR) 14 is the first preview for OpenMP 6.1.
 @item New @code{omp_default_device} identifier as conforming device number
       @tab Y @tab
 @item Clarify when @code{omp_target_is_accessible} routine returns zero
-      @tab N @tab
+      @tab Y @tab
 @end multitable
 
 @unnumberedsubsec Deprecated features, unless listed above
@@ -710,7 +710,7 @@ specification in version 5.2.
 * Event Routine::
 * Interoperability Routines::
 * Memory Management Routines::
-@c * Tool Control Routine::
+* Tool Control Routine::
 * Environment Display Routine::
 @end menu
 
@@ -2123,18 +2123,9 @@ is not supported.
 @item @emph{Description}:
 This routine tests whether storage, identified by the host pointer @var{ptr}
 is mapped to the device specified by @var{device_num}.  If so, it returns
-a nonzero value and otherwise zero.
-
-In GCC, this includes self mapping such that @code{omp_target_is_present}
-returns @emph{true} when @var{device_num} specifies the host or when the host
-and the device share memory.  If @var{ptr} is a null pointer, @var{true} is
-returned and if @var{device_num} is an invalid device number, @var{false} is
-returned.
-
-If those conditions do not apply, @emph{true} is returned if the association has
-been established by an explicit or implicit @code{map} clause, the
-@code{declare target} directive or a call to the @code{omp_target_associate_ptr}
-routine.
+a nonzero value and otherwise zero.  In particular, it always returns zero
+for the null pointer and for invalid device numbers; for the host device,
+a nonzero value is returned for all non-null pointers.
 
 Running this routine in a @code{target} region except on the initial device
 is not supported.
@@ -2155,7 +2146,7 @@ is not supported.
 @end multitable
 
 @item @emph{See also}:
-@ref{omp_target_associate_ptr}
+@ref{omp_get_mapped_ptr}, @ref{omp_target_associate_ptr}, @ref{omp_target_is_accessible}
 
 @item @emph{Reference}:
 @uref{https://www.openmp.org, OpenMP specification v5.1}, Section 3.8.3
@@ -2172,13 +2163,17 @@ and extending @var{size} bytes, is accessibly on the device specified by
 @var{device_num}.  If so, it returns a nonzero value and otherwise zero.
 
 The address given by @var{ptr} is interpreted to be in the address space of
-the device and @var{size} must be positive.
+the device and @var{size} must be positive.  NULL pointers and zero-length
+ranges always return zero.
 
 Note that GCC's current implementation assumes that @var{ptr} is a valid host
-pointer. Therefore, all addresses given by @var{ptr} are assumed to be
-accessible on the initial device. And, to err on the safe side, this memory
-is only available on a non-host device that can access all host memory
-([uniform] shared memory access).
+pointer. Therefore, all non-NULL addresses given by @var{ptr} are assumed to be
+accessible on the initial device.  The address is only reported as accessible
+on non-host devices if this is @emph{known} to be the case, or if the device
+reports that all memory is accessible (i.e. [unified] shared memory access).
+If the runtime is uncertain it may report accessible memory as inaccessible.
+For a memory range to be reported accessible, the whole range must be known to
+be accessible.
 
 Running this routine in a @code{target} region except on the initial device
 is not supported.
@@ -2201,7 +2196,7 @@ is not supported.
 @end multitable
 
 @item @emph{See also}:
-@ref{omp_target_associate_ptr}
+@ref{omp_target_is_present}
 
 @item @emph{Reference}:
 @uref{https://www.openmp.org, OpenMP specification v5.1}, Section 3.8.4
@@ -2596,7 +2591,8 @@ is not supported.
 
 @item @emph{See also}:
 @ref{omp_target_disassociate_ptr}, @ref{omp_target_is_present},
-@ref{omp_target_alloc}
+@ref{omp_get_mapped_ptr}, @ref{omp_target_alloc}
+
 
 @item @emph{Reference}:
 @uref{https://www.openmp.org, OpenMP specification v5.1}, Section 3.8.9
@@ -2654,12 +2650,19 @@ is not supported.
 @subsection @code{omp_get_mapped_ptr} -- Return device pointer to a host pointer
 @table @asis
 @item @emph{Description}:
-If the device number is refers to the initial device or to a device with
-memory accessible from the host (shared memory), the @code{omp_get_mapped_ptr}
-routines returns the value of the passed @var{ptr}.  Otherwise, if associated
+If the device number refers to the initial device, @code{omp_get_mapped_ptr}
+returns the value of the passed @var{ptr}.  Otherwise, if associated
 storage to the passed host pointer @var{ptr} exists on device associated with
 @var{device_num}, it returns that pointer. In all other cases and in cases of
 an error, a null pointer is returned.
+
+If the device number is not the initial device and the pointer points to a
+variable that is specified in a @code{declare target} directive: When
+requiring @code{unified_shared_memory} or @code{self_maps}, a null pointer is
+returned if the variable appears in a @code{link} or @code{enter} clause.
+Otherwise, the corresponding device memory is returned; with the @code{link}
+clause, GCC returns the address of the pointer-typed link variable on the device,
+not to the data that is mapped to that variable.
 
 The association of storage location is established either via an explicit or
 implicit @code{map} clause, the @code{declare target} directive or the
@@ -2682,7 +2685,7 @@ is not supported.
 @end multitable
 
 @item @emph{See also}:
-@ref{omp_target_associate_ptr}
+@ref{omp_target_is_present}, @ref{omp_target_associate_ptr}
 
 @item @emph{Reference}:
 @uref{https://www.openmp.org, OpenMP specification v5.1}, Section 3.8.11
@@ -3938,10 +3941,74 @@ was already deallocated or when the used allocator has already been destroyed.
 
 
 
-@c @node Tool Control Routine
-@c @section Tool Control Routine
-@c
-@c FIXME
+@node Tool Control Routine
+@section Tool Control Routine
+
+Routine that supports the use of the OpenMP tools interface (OMPT).
+
+@menu
+* omp_control_tool:: pass commands to a tool
+@end menu
+
+@node omp_control_tool
+@subsection @code{omp_control_tool} -- pass commands to a tool
+@table @asis
+@item @emph{Description}:
+The @code{omp_control_tool} routine can be used to pass commands to a tool. The
+values for @var{modifier} and @var{arg} are specific for the particular tool;
+for Fortran, @var{arg} is NULL.  The following predefined values for
+@var{command} are supported by all tools:
+
+@itemize
+@item @code{omp_control_tool_start}: Request that monitoring is started or resumed;
+      it has no effect if monitoring is already on or was turned off permanently.
+@item @code{omp_control_tool_pause}: Request that monitoring is temporarily paused;
+      it has no effect if monitoring is already paused or stopped.
+@item @code{omp_control_tool_flush}: Request flushing of any buffered data,
+      independently whether monitoring is currently active.
+@item @code{omp_control_tool_end}: Request that monitoring is turned off
+      permanently, flushing all output and terminating the tool.
+@end itemize
+
+For the listed standard commands, the @var{modifier} and @var{arg} arguments
+are ignored by the tool.
+
+Negative return values indicate that the tool has not processed the command;
+in particular, the return value is @code{omp_control_tool_notool} if OMPT is
+inactive and no tool is active; if it is active but no callback is registered
+for the tool-control event, @code{omp_control_tool_nocallback} is returned.
+On success, @code{omp_control_tool_success} is returned and
+@code{omp_control_tool_ignored} indicates that the tool received the command
+but ignored it. Positive return values greater than 64 are tool specific.
+
+GCC implements the OpenMP 6.0 version of this function for C and C++, which is
+not compatible with its type signature in previous versions of the OpenMP
+specification.  In older versions, the type @code{int} was used for the
+@var{command} argument in place of the enumerated type
+@code{omp_control_tool_t}; the return type likewise changed from @code{int} to
+@code{omp_control_tool_result_t}.
+
+@item @emph{C/C++}:
+@multitable @columnfractions .20 .80
+@item @emph{Prototype}: @tab @code{omp_control_tool_result_t omp_control_tool(}
+@item                   @tab @code{  omp_control_tool_t command, int modifier, void *arg)}
+@end multitable
+
+@item @emph{Fortran}:
+@multitable @columnfractions .20 .80
+@item @emph{Interface}: @tab @code{integer (kind=omp_control_tool_result_kind) &}
+@item                   @tab @code{   function omp_control_tool(command, modifier)}
+@item                   @tab @code{integer (kind=omp_control_tool_kind) command}
+@item                   @tab @code{integer :: modifier}
+@end multitable
+
+@c @item @emph{See also}:
+
+@item @emph{Reference}:
+@uref{https://www.openmp.org, OpenMP specification v6.0}, Section 31.1
+@end table
+
+
 
 @node Environment Display Routine
 @section Environment Display Routine
@@ -4093,7 +4160,7 @@ The value can either be a predefined allocator or a predefined memory space
 or a predefined memory space followed by a colon and a comma-separated list
 of memory trait and value pairs, separated by @code{=}.
 
-See @ref{Memory allocation} for a list of supported prefedined allocators,
+See @ref{Memory allocation} for a list of supported predefined allocators,
 memory spaces, and traits.
 
 Note: The corresponding device environment variables are currently not
@@ -6891,6 +6958,11 @@ The description below applies to:
       constant expression with value @code{omp_default_mem_alloc} and no
       @code{align} modifier has been specified. (In that case, the normal
       @code{malloc} allocation is used.)
+@item The @code{allocate} clause can be used in the @code{target} construct
+      to specify the memory used by @code{private} and @code{firstprivate}
+      variables on offload devices.  In the case of @code{firstprivate}, the
+      initial data is first allocated using the default memory allocator, then
+      copied to the memory region specified by the allocator.
 @item The @code{allocate} directive for variables in static memory; while
       the alignment is honored, the normal static memory is used.
 @item Using the @code{allocate} directive for automatic/stack variables, except
@@ -7164,8 +7236,10 @@ The implementation remark:
       true, in which case the runtime will attempt to set the @code{HSA_XNACK}
       environment variable to @samp{1} automatically (user-set values are not
       overridden, and the setting only affects the executable itself and any
-      child processes).  If any AMD GPU device is not supported, all AMD GPUs
-      are removed from the list of available devices (``host fallback'').
+      child processes).  If any AMD GPU device does not support unified-shared
+      memory, all AMD GPUs are removed from the list of available devices
+      (``host fallback''); consider using @code{ROCR_VISIBLE_DEVICES} to only
+      enable devices supporting it.
 @item The available stack size can be changed using the @code{GCN_STACK_SIZE}
       environment variable; the default is 32 kiB per thread.
 @item Low-latency memory (@code{omp_low_lat_mem_space}) is supported when the
@@ -7183,10 +7257,9 @@ The implementation remark:
       pool is exhausted.
 @item Pinned memory allocated using @code{omp_alloc} with the
       @code{ompx_gnu_pinned_mem_alloc} allocator or the @code{pinned} trait is
-      obtained via the CUDA API when an NVPTX device is present.  This provides
-      a performance boost for NVPTX offload code and also allows unlimited use
-      of pinned memory regardless of the OS @code{ulimit}/@code{rlimit}
-      settings.
+      obtained via the CUDA API when an NVPTX device is present (even when
+      the primary device is AMD).  This allows unlimited use of pinned memory
+      regardless of the OS @code{ulimit}/@code{rlimit} settings.
 @item Managed memory allocated on the host with the
       @code{ompx_gnu_managed_mem_alloc} allocator or in the
       @code{ompx_gnu_managed_mem_space} (both GNU extensions) allocate memory
@@ -7258,8 +7331,8 @@ Available properties for an HIP interop object:
 @headitem Property          @tab C data type             @tab API routine @tab value (if constant)
 @item @code{fr_id}          @tab @code{omp_interop_fr_t} @tab int         @tab @code{omp_fr_hip}
 @item @code{fr_name}        @tab @code{const char *}     @tab str         @tab @code{"hip"}
-@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{1}
-@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"amd"}
+@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{5}
+@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"gnu"}
 @item @code{device_num}     @tab @code{int}              @tab int         @tab
 @item @code{platform}       @tab N/A                     @tab             @tab
 @item @code{device}         @tab @code{hipDevice_t}      @tab int         @tab
@@ -7274,8 +7347,8 @@ Available properties for an HSA interop object:
 @headitem Property          @tab C data type             @tab API routine @tab value (if constant)
 @item @code{fr_id}          @tab @code{omp_interop_fr_t} @tab int         @tab @code{omp_fr_hsa}
 @item @code{fr_name}        @tab @code{const char *}     @tab str         @tab @code{"hsa"}
-@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{1}
-@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"amd"}
+@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{5}
+@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"gnu"}
 @item @code{device_num}     @tab @code{int}              @tab int         @tab
 @item @code{platform}       @tab N/A                     @tab             @tab
 @item @code{device}         @tab @code{hsa_agent *}      @tab ptr         @tab
@@ -7383,6 +7456,12 @@ The implementation remark:
       use the fall-back setting. If the default device is configured
       differently when the memory is freed, via @code{omp_free} or
       @code{omp_realloc}, the result may be undefined.
+@item Pinned memory allocated using @code{omp_alloc} with the
+      @code{ompx_gnu_pinned_mem_alloc} allocator or the @code{pinned} trait is
+      obtained via the CUDA API when an NVPTX device is present.  This provides
+      a performance boost for NVPTX offload code and also allows unlimited use
+      of pinned memory regardless of the OS @code{ulimit}/@code{rlimit}
+      settings.
 @item The OpenMP routines @code{omp_target_memcpy_rect} and
       @code{omp_target_memcpy_rect_async} and the @code{target update}
       directive for non-contiguous list items use the 2D and 3D memory-copy
@@ -7437,8 +7516,8 @@ Available properties for a CUDA runtime API interop object:
 @headitem Property          @tab C data type             @tab API routine @tab value (if constant)
 @item @code{fr_id}          @tab @code{omp_interop_fr_t} @tab int         @tab @code{omp_fr_cuda}
 @item @code{fr_name}        @tab @code{const char *}     @tab str         @tab @code{"cuda"}
-@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{11}
-@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"nvidia"}
+@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{5}
+@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"gnu"}
 @item @code{device_num}     @tab @code{int}              @tab int         @tab
 @item @code{platform}       @tab N/A                     @tab             @tab
 @item @code{device}         @tab @code{int}              @tab int         @tab
@@ -7453,8 +7532,8 @@ Available properties for a CUDA driver API interop object:
 @headitem Property          @tab C data type             @tab API routine @tab value (if constant)
 @item @code{fr_id}          @tab @code{omp_interop_fr_t} @tab int         @tab @code{omp_fr_cuda_driver}
 @item @code{fr_name}        @tab @code{const char *}     @tab str         @tab @code{"cuda_driver"}
-@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{11}
-@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"nvidia"}
+@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{5}
+@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"gnu"}
 @item @code{device_num}     @tab @code{int}              @tab int         @tab
 @item @code{platform}       @tab N/A                     @tab             @tab
 @item @code{device}         @tab @code{CUdevice}         @tab int         @tab
@@ -7469,8 +7548,8 @@ Available properties for an HIP interop object:
 @headitem Property          @tab C data type             @tab API routine @tab value (if constant)
 @item @code{fr_id}          @tab @code{omp_interop_fr_t} @tab int         @tab @code{omp_fr_hip}
 @item @code{fr_name}        @tab @code{const char *}     @tab str         @tab @code{"hip"}
-@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{11}
-@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"nvidia"}
+@item @code{vendor}         @tab @code{int}              @tab int         @tab @code{5}
+@item @code{vendor_name}    @tab @code{const char *}     @tab str         @tab @code{"gnu"}
 @item @code{device_num}     @tab @code{int}              @tab int         @tab
 @item @code{platform}       @tab N/A                     @tab             @tab
 @item @code{device}         @tab @code{hipDevice_t}      @tab int         @tab

@@ -2631,7 +2631,7 @@ lex_raw_string (cpp_reader *pfile, cpp_token *token, const uchar *base)
 
 	  case '\n':
 	    /* This can happen for ??/<NEWLINE> when trigraphs are not
-	       being interpretted.  */
+	       being interpreted.  */
 	    gcc_checking_assert (!CPP_OPTION (pfile, trigraphs));
 	    note->type = 0;
 	    note++;
@@ -3674,6 +3674,15 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
 		      peek->flags |= NO_DOT_COLON;
 		      break;
 		    }
+		  else if (peek->type == CPP_PRAGMA_EOL)
+		    {
+		      /* This is a broken module-directive; undo the clearing
+			 of in_deferred_pragma from _cpp_lex_direct so callers
+			 don't crash, and make sure we process the EOL again.  */
+		      pfile->state.in_deferred_pragma = true;
+		      eol = true;
+		      break;
+		    }
 		  else
 		    break;
 		}
@@ -3703,7 +3712,7 @@ cpp_maybe_module_directive (cpp_reader *pfile, cpp_token *result)
     {
       /* Put the peeked tokens back.  */
       _cpp_backup_tokens_direct (pfile, backup);
-      /* But if the last one was an EOL in the not_module case, forget it.  */
+      /* But if the last one was an EOL, forget it.  */
       if (eol)
 	pfile->lookaheads--;
     }
@@ -5407,7 +5416,7 @@ cpp_directive_only_process (cpp_reader *pfile,
 
 	    case '\\':
 	      /* <backslash><newline> is removed, and doesn't undo any
-		 preceeding escape or whatnot.  */
+		 preceding escape or whatnot.  */
 	      if (*pos == '\n')
 		{
 		  pos++;

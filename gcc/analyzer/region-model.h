@@ -352,6 +352,8 @@ class region_model
 				  bool unmergeable);
   void update_for_zero_return (const call_details &cd,
 			       bool unmergeable);
+  void update_for_null_return (const call_details &cd,
+			       bool unmergeable);
   void update_for_nonzero_return (const call_details &cd);
 
   void handle_unrecognized_call (const gcall &call,
@@ -1268,16 +1270,16 @@ class rejected_op_constraint : public rejected_constraint
 {
 public:
   rejected_op_constraint (const region_model &model,
-			  tree lhs, enum tree_code op, tree rhs)
+			  const svalue *lhs, enum tree_code op, const svalue *rhs)
   : rejected_constraint (model),
     m_lhs (lhs), m_op (op), m_rhs (rhs)
   {}
 
   void dump_to_pp (pretty_printer *pp) const final override;
 
-  tree m_lhs;
+  const svalue *m_lhs;
   enum tree_code m_op;
-  tree m_rhs;
+  const svalue *m_rhs;
 };
 
 class rejected_default_case : public rejected_constraint
@@ -1326,6 +1328,30 @@ private:
   region_model_manager &m_mgr;
   const supergraph *m_sg;
 };
+
+/* Factory functions for various diagnostics.  */
+
+extern std::unique_ptr<pending_diagnostic>
+make_poisoned_value_diagnostic (tree expr, enum poison_kind pkind,
+				const region *src_region,
+				tree check_expr);
+
+extern std::unique_ptr<pending_diagnostic>
+make_shift_count_negative_diagnostic (const gassign *assign,
+				      tree count_cst,
+				      const region *src_region);
+
+extern std::unique_ptr<pending_diagnostic>
+make_shift_count_overflow_diagnostic (const gassign *assign,
+				      int operand_precision,
+				      tree count_cst,
+				      const region *src_region);
+
+extern std::unique_ptr<pending_diagnostic>
+make_write_to_const_diagnostic (const region *dest_reg, tree decl);
+
+extern std::unique_ptr<pending_diagnostic>
+make_write_to_string_literal_diagnostic (const region *reg);
 
 } // namespace ana
 

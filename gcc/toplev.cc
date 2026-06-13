@@ -842,6 +842,9 @@ output_stack_usage_1 (FILE *cf)
       print_decl_identifier (stack_usage_file, current_function_decl,
 			     PRINT_DECL_ORIGIN | PRINT_DECL_NAME
 			     | PRINT_DECL_REMAP_DEBUG);
+      fputs ("\t", stack_usage_file);
+      print_decl_identifier (stack_usage_file, current_function_decl,
+			     PRINT_DECL_UNIQUE_NAME);
       fprintf (stack_usage_file, "\t" HOST_WIDE_INT_PRINT_DEC"\t%s\n",
 	       stack_usage, stack_usage_kind_str[stack_usage_kind]);
     }
@@ -2328,8 +2331,7 @@ toplev::main (int argc, char **argv)
 
   /* Convert the options to an array.  */
   decode_cmdline_options_to_array_default_mask (argc,
-						CONST_CAST2 (const char **,
-							     char **, argv),
+						const_cast<const char **> (argv),
 						&save_decoded_options,
 						&save_decoded_options_count);
 

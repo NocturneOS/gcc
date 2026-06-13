@@ -1070,6 +1070,37 @@ validate_ipa_reorder_locality_lto_partition (struct gcc_options *opts,
   validated_p = true;
 }
 
+/* If OPTS.x_dump_base_name doesn't contain any directory separators
+   and has not had OPTS.x_dump_dir_name prepended to it, generate
+   a new string in opts_obstack that has the dump_dir_name prepended to
+   the dump_base_name.  */
+
+const char *
+maybe_prepend_dump_dir_name (const gcc_options &opts)
+{
+  const char *sep = opts.x_dump_base_name;
+
+  for (; *sep; sep++)
+    if (IS_DIR_SEPARATOR (*sep))
+      break;
+
+  if (*sep)
+    {
+      /* If dump_base_name contains subdirectories, don't prepend
+	 anything.  */
+      return nullptr;
+    }
+
+  if (opts.x_dump_dir_name)
+    {
+      /* We have a DUMP_DIR_NAME, prepend that.  */
+      return opts_concat (opts.x_dump_dir_name,
+			  opts.x_dump_base_name, NULL);
+    }
+
+  return nullptr;
+}
+
 /* After all options at LOC have been read into OPTS and OPTS_SET,
    finalize settings of those options and diagnose incompatible
    combinations.  */
@@ -1080,19 +1111,9 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
   if (opts->x_dump_base_name
       && ! opts->x_dump_base_name_prefixed)
     {
-      const char *sep = opts->x_dump_base_name;
-
-      for (; *sep; sep++)
-	if (IS_DIR_SEPARATOR (*sep))
-	  break;
-
-      if (*sep)
-	/* If dump_base_path contains subdirectories, don't prepend
-	   anything.  */;
-      else if (opts->x_dump_dir_name)
-	/* We have a DUMP_DIR_NAME, prepend that.  */
-	opts->x_dump_base_name = opts_concat (opts->x_dump_dir_name,
-					      opts->x_dump_base_name, NULL);
+      if (const char *prepended_dump_base_name
+	  = maybe_prepend_dump_dir_name (*opts))
+	opts->x_dump_base_name = prepended_dump_base_name;
 
       /* It is definitely prefixed now.  */
       opts->x_dump_base_name_prefixed = true;
@@ -2930,12 +2951,6 @@ common_handle_option (struct gcc_options *opts,
       set_Wstrict_aliasing (opts, value);
       break;
 
-    case OPT_Wstrict_overflow:
-      opts->x_warn_strict_overflow = (value
-				      ? (int) WARN_STRICT_OVERFLOW_CONDITIONAL
-				      : 0);
-      break;
-
     case OPT_Wsystem_headers:
       dc->m_warn_system_headers = value;
       break;
@@ -3023,8 +3038,7 @@ common_handle_option (struct gcc_options *opts,
 
     case OPT_fdiagnostics_format_:
 	{
-	  const char *basename = (opts->x_dump_base_name ? opts->x_dump_base_name
-				  : opts->x_main_input_basename);
+	  const char *basename = get_diagnostic_file_output_basename (*opts);
 	  gcc_assert (dc);
 	  diagnostics::output_format_init (*dc,
 					   opts->x_main_input_filename, basename,
@@ -3792,16 +3806,15 @@ enable_warning_as_error (const char *arg, int value, unsigned int lang_mask,
   free (new_option);
 }
 
-/* Return malloced memory for the name of the option OPTION_INDEX
-   which enabled a diagnostic, originally of type
-   ORIG_DIAG_KIND but possibly converted to DIAG_KIND by options such
-   as -Werror.  */
+/* Return the name of the option OPTION_INDEX which enabled a diagnostic,
+   originally of type ORIG_DIAG_KIND but possibly converted to DIAG_KIND by
+   options such as -Werror.   Can return null if OPTION_ID is zero.  */
 
-char *
+label_text
 compiler_diagnostic_option_id_manager::
-make_option_name (diagnostics::option_id option_id,
-		  enum diagnostics::kind orig_diag_kind,
-		  enum diagnostics::kind diag_kind) const
+get_option_name (diagnostics::option_id option_id,
+		 enum diagnostics::kind orig_diag_kind,
+		 enum diagnostics::kind diag_kind) const
 {
   if (option_id.m_idx)
     {
@@ -3809,22 +3822,24 @@ make_option_name (diagnostics::option_id option_id,
       if ((orig_diag_kind == diagnostics::kind::warning
 	   || orig_diag_kind == diagnostics::kind::pedwarn)
 	  && diag_kind == diagnostics::kind::error)
-	return concat (cl_options[OPT_Werror_].opt_text,
-		       /* Skip over "-W".  */
-		       cl_options[option_id.m_idx].opt_text + 2,
-		       NULL);
+	return label_text::take
+	  (concat (cl_options[OPT_Werror_].opt_text,
+		   /* Skip over "-W".  */
+		   cl_options[option_id.m_idx].opt_text + 2,
+		   NULL));
       /* A warning with option.  */
       else
-	return xstrdup (cl_options[option_id.m_idx].opt_text);
+	return label_text::take
+	  (xstrdup (cl_options[option_id.m_idx].opt_text));
     }
   /* A warning without option classified as an error.  */
   else if ((orig_diag_kind == diagnostics::kind::warning
 	    || orig_diag_kind == diagnostics::kind::pedwarn
 	    || diag_kind == diagnostics::kind::warning)
 	   && m_context.warning_as_error_requested_p ())
-    return xstrdup (cl_options[OPT_Werror].opt_text);
+    return label_text::borrow (cl_options[OPT_Werror].opt_text);
   else
-    return NULL;
+    return label_text ();
 }
 
 /* Get the page within the documentation for this option.  */
@@ -3873,22 +3888,23 @@ get_option_url_suffix (int option_index, unsigned lang_mask)
   return label_text ();
 }
 
-/* Return malloced memory for a URL describing the option OPTION_INDEX
-   which enabled a diagnostic.  */
+/* Return a URL describing the option OPTION_INDEX which enabled
+   a diagnostic, or null.  */
 
-char *
+label_text
 gcc_diagnostic_option_id_manager::
-make_option_url (diagnostics::option_id option_id) const
+get_option_url (diagnostics::option_id option_id) const
 {
   if (option_id.m_idx)
     {
       label_text url_suffix = get_option_url_suffix (option_id.m_idx,
 						     m_lang_mask);
       if (url_suffix.get ())
-	return concat (DOCUMENTATION_ROOT_URL, url_suffix.get (), nullptr);
+	return label_text::take
+	  (concat (DOCUMENTATION_ROOT_URL, url_suffix.get (), nullptr));
     }
 
-  return nullptr;
+  return label_text ();
 }
 
 /* Return a heap allocated producer with command line options.  */

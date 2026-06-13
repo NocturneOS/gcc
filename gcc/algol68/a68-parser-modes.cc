@@ -24,6 +24,7 @@
 #include "coretypes.h"
 
 #include "a68.h"
+#include "a68-pretty-print.h"
 
 /*
  * Mode collection, equivalencing and derived modes.
@@ -518,7 +519,7 @@ get_mode_from_declarer (NODE_T *p)
 		  /* Position of definition tells indicants apart.  */
 		  TAG_T *y = a68_find_tag_global (TABLE (p), INDICANT, NSYMBOL (p));
 		  if (y == NO_TAG)
-		    a68_error ( p, "tag Z has not been declared properly", NSYMBOL (p));
+		    a68_error (p, "tag %qs has not been declared properly", NSYMBOL (p));
 		  else
 		    MOID (p) = a68_add_mode (&TOP_MOID (&A68_JOB), INDICANT, 0, NODE (y),
 					     NO_MOID, NO_PACK);
@@ -800,17 +801,22 @@ get_mode_from_proc_var_declarations_tree (NODE_T *p)
 /* Whether a mode declaration refers to self or relates to void.
    This uses Lindsey's ying-yang algorithm.  */
 
-static bool
-is_well_formed (MOID_T *def, MOID_T *z, bool yin, bool yang, bool video)
+#define WELL 0
+#define NO_YIN 1
+#define NO_YANG 2
+#define UNWELL 3
+
+static int
+is_well_formed (MOID_T *def, MOID_T *z, bool yin, bool yang, int video)
 {
   if (z == NO_MOID)
-    return false;
+    return UNWELL;
   else if (yin && yang)
-    return z == M_VOID ? video : true;
+    return z == M_VOID ? video : WELL;
   else if (z == M_VOID)
     return video;
   else if (IS (z, STANDARD))
-    return true;
+    return WELL;
   else if (IS (z, INDICANT))
     {
       if (def == NO_MOID)
@@ -821,50 +827,59 @@ is_well_formed (MOID_T *def, MOID_T *z, bool yin, bool yang, bool video)
 	  if (z == M_VOID)
 	    return video;
 	  else
-	    return true;
+	    return WELL;
 	}
       else
 	{
 	  if (z == def || USE (z))
-	    return yin && yang;
+	    {
+	      if (!yin)
+		return NO_YIN;
+	      else if (!yang)
+		return NO_YANG;
+	      else
+		return WELL;
+	    }
 	  else
 	    {
 	      USE (z) = true;
-	      bool wwf = is_well_formed (def, EQUIVALENT (z), yin, yang, video);
+	      int wwf = is_well_formed (def, EQUIVALENT (z), yin, yang, video);
 	      USE (z) = false;
-	  return wwf;
+	      return wwf;
 	    }
 	}
     }
   else if (IS_REF (z))
-    return is_well_formed (def, SUB (z), true, yang, false);
+    return is_well_formed (def, SUB (z), true, yang, UNWELL);
   else if (IS (z, PROC_SYMBOL))
-    return PACK (z) != NO_PACK ? true : is_well_formed (def, SUB (z), true, yang, true);
+    return PACK (z) != NO_PACK ? WELL : is_well_formed (def, SUB (z), true, yang, WELL);
   else if (IS_ROW (z))
-    return is_well_formed (def, SUB (z), yin, yang, false);
+    return is_well_formed (def, SUB (z), yin, yang, UNWELL);
   else if (IS_FLEX (z))
-    return is_well_formed (def, SUB (z), yin, yang, false);
+    return is_well_formed (def, SUB (z), yin, yang, UNWELL);
   else if (IS (z, STRUCT_SYMBOL))
     {
       for (PACK_T *s = PACK (z); s != NO_PACK; FORWARD (s))
 	{
-	  if (!is_well_formed (def, MOID (s), yin, true, false))
-	    return false;
+	  int wwf = is_well_formed (def, MOID (s), yin, true, UNWELL);
+	  if (wwf != WELL)
+	    return wwf;
 	}
-      return true;
+      return WELL;
     }
   else if (IS (z, UNION_SYMBOL))
     {
       for (PACK_T *s = PACK (z); s != NO_PACK; FORWARD (s))
 	{
-	  if (!is_well_formed (def, MOID (s), yin, yang, true))
-	    return false;
+	  int wwf = is_well_formed (def, MOID (s), yin, yang, WELL);
+	  if (wwf != WELL)
+	    return wwf;
 	}
-      return true;
+      return WELL;
     }
   else
     {
-      return false;
+      return UNWELL;
     }
 }
 
@@ -1217,7 +1232,10 @@ compute_derived_modes (MODULE_T *mod)
   for (z = TOP_MOID (mod); z != NO_MOID; FORWARD (z))
     {
       if (IS_FLEX (z) && !IS (SUB (z), ROW_SYMBOL))
-	a68_error (NODE (z), "M does not specify a well formed mode", z);
+	{
+	  a68_moid_format_token m (z);
+	  a68_error (NODE (z), "%e does not specify a well formed mode", &m);
+	}
     }
 
   /* Check on fields in structured modes f.i. STRUCT (REAL x, INT n, REAL x) is
@@ -1236,7 +1254,8 @@ compute_derived_modes (MODULE_T *mod)
 		{
 		  if (TEXT (s) == TEXT (t))
 		    {
-		      a68_error (NODE (z), "multiple declaration of field S");
+		      a68_symbol_format_token zs (NODE (z));
+		      a68_error (NODE (z), "multiple declaration of field %e", &zs);
 		      while (NEXT (s) != NO_PACK && TEXT (NEXT (s)) == TEXT (t))
 			FORWARD (s);
 		      x = false;
@@ -1254,7 +1273,10 @@ compute_derived_modes (MODULE_T *mod)
 	  PACK_T *s = PACK (z);
 	  /* Discard unions with one member.  */
 	  if (a68_count_pack_members (s) == 1)
-	    a68_error (NODE (z), "M must have at least two components", z);
+	    {
+	      a68_moid_format_token m (z);
+	      a68_error (NODE (z), "%e must have at least two components", &m);
+	    }
 	  /* Discard incestuous unions with firmly related modes.  */
 	  for (; s != NO_PACK; FORWARD (s))
 	    {
@@ -1265,7 +1287,10 @@ compute_derived_modes (MODULE_T *mod)
 		  if (MOID (t) != MOID (s))
 		    {
 		      if (a68_is_firm (MOID (s), MOID (t)))
-			a68_error (NODE (z), "M has firmly related components", z);
+			{
+			  a68_moid_format_token m (z);
+			  a68_error (NODE (z), "%e has firmly related components", &m);
+			}
 		    }
 		}
 	    }
@@ -1276,7 +1301,11 @@ compute_derived_modes (MODULE_T *mod)
 	      MOID_T *n = a68_depref_completely (MOID (s));
 
 	      if (IS (n, UNION_SYMBOL) && a68_is_subset (n, z, NO_DEFLEXING))
-		  a68_error (NODE (z), "M has firmly related subset M", z, n);
+		{
+		  a68_moid_format_token m1 (z);
+		  a68_moid_format_token m2 (n);
+		  a68_error (NODE (z), "%e has firmly related subset %e", &m1, &m2);
+		}
 	    }
 	}
     }
@@ -1319,9 +1348,15 @@ a68_make_moid_list (MODULE_T *mod)
     {
       if (IS (z, INDICANT) && EQUIVALENT (z) != NO_MOID)
 	{
-	  if (!is_well_formed (z, EQUIVALENT (z), false, false, true))
+	  int wwf = is_well_formed (z, EQUIVALENT (z), false, false, WELL);
+	  if (wwf != WELL)
 	    {
-	      a68_error (NODE (z), "M does not specify a well formed mode", z);
+	      a68_moid_format_token m (z);
+	      a68_error (NODE (z), "%e does not specify a well formed mode", &m);
+	      if (wwf == NO_YIN)
+		a68_inform (NODE (z), "mode %e is infinite", &m);
+	      else if (wwf == NO_YANG)
+		a68_inform (NODE (z), "mode %e is strongly coercible to itself", &m);
 	      cont = false;
 	    }
 	}
@@ -1333,8 +1368,16 @@ a68_make_moid_list (MODULE_T *mod)
 	;
       else if (NODE (z) != NO_NODE)
 	{
-	  if (!is_well_formed (NO_MOID, z, false, false, true))
-	    a68_error (NODE (z), "M does not specify a well formed mode", z);
+	  int wwf = is_well_formed (NO_MOID, z, false, false, WELL);
+	  if (wwf != WELL)
+	    {
+	      a68_moid_format_token m (z);
+	      a68_error (NODE (z), "%e does not specify a well formed mode", &m);
+	      if (wwf == NO_YIN)
+		a68_inform (NODE (z), "mode %e is infinite", &m);
+	      else if (wwf == NO_YANG)
+		a68_inform (NODE (z), "mode %e is strongly coercible to itself", &m);
+	    }
 	}
     }
 
@@ -1349,4 +1392,5 @@ a68_make_moid_list (MODULE_T *mod)
 
   compute_derived_modes (mod);
   a68_init_postulates ();
+  a68_sort_union_packs(TOP_MOID (mod));
 }

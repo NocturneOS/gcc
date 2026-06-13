@@ -407,13 +407,9 @@ combine_cond_expr_cond (gimple *stmt, enum tree_code code, tree type,
 
   gcc_assert (TREE_CODE_CLASS (code) == tcc_comparison);
 
-  fold_defer_overflow_warnings ();
   t = fold_binary_loc (gimple_location (stmt), code, type, op0, op1);
   if (!t)
-    {
-      fold_undefer_overflow_warnings (false, NULL, 0);
-      return NULL_TREE;
-    }
+    return NULL_TREE;
 
   /* Require that we got a boolean type out if we put one in.  */
   gcc_assert (TREE_CODE (TREE_TYPE (t)) == TREE_CODE (type));
@@ -423,13 +419,7 @@ combine_cond_expr_cond (gimple *stmt, enum tree_code code, tree type,
 
   /* Bail out if we required an invariant but didn't get one.  */
   if (!t || (invariant_only && !is_gimple_min_invariant (t)))
-    {
-      fold_undefer_overflow_warnings (false, NULL, 0);
-      return NULL_TREE;
-    }
-
-  bool nowarn = warning_suppressed_p (stmt, OPT_Wstrict_overflow);
-  fold_undefer_overflow_warnings (!nowarn, stmt, 0);
+    return NULL_TREE;
 
   return t;
 }
@@ -770,8 +760,10 @@ forward_propagate_addr_expr_1 (tree name, tree def_rhs,
 	      new_base = build_fold_addr_expr (*def_rhs_basep);
 	      new_offset = TREE_OPERAND (lhs, 1);
 	    }
-	  *def_rhs_basep = build2 (MEM_REF, TREE_TYPE (*def_rhs_basep),
-				   new_base, new_offset);
+	  tree atype = TREE_TYPE (*def_rhs_basep);
+	  if (TYPE_ALIGN (TREE_TYPE (lhs)) < TYPE_ALIGN (atype))
+	    atype = build_aligned_type (atype, TYPE_ALIGN (TREE_TYPE (lhs)));
+	  *def_rhs_basep = build2 (MEM_REF, atype, new_base, new_offset);
 	  TREE_THIS_VOLATILE (*def_rhs_basep) = TREE_THIS_VOLATILE (lhs);
 	  TREE_SIDE_EFFECTS (*def_rhs_basep) = TREE_SIDE_EFFECTS (lhs);
 	  TREE_THIS_NOTRAP (*def_rhs_basep) = TREE_THIS_NOTRAP (lhs);
@@ -856,8 +848,10 @@ forward_propagate_addr_expr_1 (tree name, tree def_rhs,
 	      new_base = build_fold_addr_expr (*def_rhs_basep);
 	      new_offset = TREE_OPERAND (rhs, 1);
 	    }
-	  *def_rhs_basep = build2 (MEM_REF, TREE_TYPE (*def_rhs_basep),
-				   new_base, new_offset);
+	  tree atype = TREE_TYPE (*def_rhs_basep);
+	  if (TYPE_ALIGN (TREE_TYPE (rhs)) < TYPE_ALIGN (atype))
+	    atype = build_aligned_type (atype, TYPE_ALIGN (TREE_TYPE (rhs)));
+	  *def_rhs_basep = build2 (MEM_REF, atype, new_base, new_offset);
 	  TREE_THIS_VOLATILE (*def_rhs_basep) = TREE_THIS_VOLATILE (rhs);
 	  TREE_SIDE_EFFECTS (*def_rhs_basep) = TREE_SIDE_EFFECTS (rhs);
 	  TREE_THIS_NOTRAP (*def_rhs_basep) = TREE_THIS_NOTRAP (rhs);
@@ -1366,6 +1360,10 @@ optimize_aggr_zeroprop (gimple *stmt, bool full_walk)
       || !poly_int_tree_p (len))
     return;
 
+  /* Sometimes memset can have no vdef due to invalid declaration of memset (const, etc.).  */
+  if (!gimple_vdef (stmt))
+    return;
+
   /* This store needs to be on the byte boundary and pointing to an object.  */
   poly_int64 offset;
   tree dest_base = get_addr_base_and_unit_offset (dest, &offset);
@@ -1458,7 +1456,7 @@ static tree
 new_src_based_on_copy (tree src2, tree dest, tree src)
 {
   /* If the second src is not exactly the same as dest,
-     try to handle it seperately; see it is address/size equivalent.
+     try to handle it separately; see it is address/size equivalent.
      Handles `a` and `a.b` and `MEM<char[N]>(&a)` which all have
      the same size and offsets as address/size equivalent.
      This allows copying over a memcpy and also one for copying
@@ -1599,7 +1597,7 @@ optimize_agr_copyprop_1 (gimple *stmt, gimple *use_stmt,
   src = new_src_based_on_copy (src2, dest, src);
   if (!src)
     return;
-  /* For 2 memory refences and using a temporary to do the copy,
+  /* For 2 memory references and using a temporary to do the copy,
      don't remove the temporary as the 2 memory references might overlap.
      Note t does not need to be decl as it could be field.
      See PR 22237 for full details.
@@ -1721,6 +1719,52 @@ optimize_agr_copyprop_arg (gimple *defstmt, gcall *call,
     update_stmt (call);
 }
 
+/* Helper function for optimize_agr_copyprop, propagate aggregates
+   into the return stmt USE if the operand of the return matches DEST;
+   replacing it with SRC.  */
+static void
+optimize_agr_copyprop_return (gimple *defstmt, greturn *use,
+			      tree dest, tree src)
+{
+  tree rvalue = gimple_return_retval (use);
+  if (!rvalue
+      || TREE_CODE (rvalue) == SSA_NAME
+      || is_gimple_min_invariant (rvalue)
+      || TYPE_VOLATILE (TREE_TYPE (rvalue)))
+    return;
+
+  /* `return <retval>;` is already the best it could be.
+     Likewise `return *<retval>_N(D)`.  */
+  if (TREE_CODE (rvalue) == RESULT_DECL
+      || (TREE_CODE (rvalue) == MEM_REF
+	  && TREE_CODE (TREE_OPERAND (rvalue, 0)) == SSA_NAME
+	  && TREE_CODE (SSA_NAME_VAR (TREE_OPERAND (rvalue, 0)))
+	       == RESULT_DECL))
+    return;
+  tree newsrc = new_src_based_on_copy (rvalue, dest, src);
+  if (!newsrc)
+    return;
+  /* Currently only support non-global vars.
+     See PR 124099 on enumtls not supporting expanding for GIMPLE_RETURN.
+     FIXME: could support VCEs too?  */
+  if (!VAR_P (newsrc) || is_global_var (newsrc))
+    return;
+  if (dump_file && (dump_flags & TDF_DETAILS))
+    {
+      fprintf (dump_file, "Simplified\n  ");
+      print_gimple_stmt (dump_file, use, 0, dump_flags);
+      fprintf (dump_file, "after previous\n  ");
+      print_gimple_stmt (dump_file, defstmt, 0, dump_flags);
+    }
+  gimple_return_set_retval (use, newsrc);
+  if (dump_file && (dump_flags & TDF_DETAILS))
+    {
+      fprintf (dump_file, "into\n  ");
+      print_gimple_stmt (dump_file, use, 0, dump_flags);
+    }
+  update_stmt (use);
+}
+
 /* Optimizes
    DEST = SRC;
    DEST2 = DEST; # DEST2 = SRC2;
@@ -1764,6 +1808,8 @@ optimize_agr_copyprop (gimple *stmt)
 	optimize_agr_copyprop_1 (stmt, use_stmt, dest, src);
       else if (is_gimple_call (use_stmt))
 	optimize_agr_copyprop_arg (stmt, as_a<gcall*>(use_stmt), dest, src);
+      else if (is_a<greturn*> (use_stmt))
+	optimize_agr_copyprop_return (stmt, as_a<greturn*>(use_stmt), dest, src);
     }
 }
 
@@ -3412,8 +3458,20 @@ simplify_count_zeroes (gimple_stmt_iterator *gsi)
 	{
 	  unsigned HOST_WIDE_INT mask
 	    = ((HOST_WIDE_INT_1U << (input_bits - shiftval)) - 1) << shiftval;
-	  return (((((HOST_WIDE_INT_1U << (data + 1)) - 1) * mulval) & mask)
-		  >> shiftval) == i;
+	  /* The OR-cascade produces a value with all bits from 0 to the
+	     original MSB set.  Compute (1 << (data + 1)) - 1 to simulate
+	     that value.  When data + 1 equals HOST_BITS_PER_WIDE_INT
+	     (i.e. data is the MSB position of a 64-bit input) the shift
+	     is undefined behavior, so handle that case explicitly using
+	     all-ones.  Without this, any well-formed 64-bit DeBruijn CLZ
+	     table is rejected because its entry for the all-ones input
+	     correctly maps to the MSB (e.g. table[...] == 63).
+	     PR tree-optimization/122569.  */
+	  unsigned HOST_WIDE_INT all_bits_below
+	    = (data + 1 == HOST_BITS_PER_WIDE_INT)
+	      ? HOST_WIDE_INT_M1U
+	      : ((HOST_WIDE_INT_1U << (data + 1)) - 1);
+	  return (((all_bits_below * mulval) & mask) >> shiftval) == i;
 	};
     if (!check_table (ctor, type, zero_val, input_bits, checkfn))
       return false;
@@ -3975,14 +4033,29 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
   if (refnelts < nelts)
     return false;
 
+  /* Determine the element type for the conversion source.
+     As orig_elem_type keeps track of the original type, check
+     if we need to perform a sign swap after permuting.
+     We need to be able to construct a vector type from the element
+     type which is not possible for e.g. BitInt or pointers
+     so pun with an integer type if needed.   */
+  tree perm_eltype = TREE_TYPE (TREE_TYPE (orig[0]));
+  bool sign_change_p = false;
+  if (conv_code != ERROR_MARK
+      && orig_elem_type[0]
+      && TYPE_SIGN (orig_elem_type[0]) != TYPE_SIGN (perm_eltype))
+    {
+      perm_eltype = signed_or_unsigned_type_for
+	(TYPE_UNSIGNED (orig_elem_type[0]), perm_eltype);
+      sign_change_p = true;
+    }
+  tree conv_src_type = build_vector_type (perm_eltype, nelts);
+
   if (maybe_ident)
     {
-      tree conv_src_type
-	= (nelts != refnelts
-	   ? (conv_code != ERROR_MARK
-	      ? build_vector_type (TREE_TYPE (TREE_TYPE (orig[0])), nelts)
-	      : type)
-	   : TREE_TYPE (orig[0]));
+      /* When there is no conversion, use the target type directly.  */
+      if (conv_code == ERROR_MARK && nelts != refnelts)
+	conv_src_type = type;
       if (conv_code != ERROR_MARK
 	  && !supportable_convert_operation (conv_code, type, conv_src_type,
 					     &conv_code))
@@ -4017,7 +4090,7 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 		  == TYPE_PRECISION (TREE_TYPE (type)))
 	      && orig_elem_type[0]
 	      && useless_type_conversion_p (orig_elem_type[0],
-					    TREE_TYPE (type))
+					    TREE_TYPE (TREE_TYPE (orig[0])))
 	      && mode_for_vector (as_a <scalar_mode>
 				  (TYPE_MODE (TREE_TYPE (TREE_TYPE (orig[0])))),
 				  nelts * 2).exists ()
@@ -4059,7 +4132,7 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 		       == 2 * TYPE_PRECISION (TREE_TYPE (type)))
 		   && orig_elem_type[0]
 		   && useless_type_conversion_p (orig_elem_type[0],
-						 TREE_TYPE (type))
+						 TREE_TYPE (TREE_TYPE (orig[0])))
 		   && mode_for_vector (as_a <scalar_mode>
 				         (TYPE_MODE
 					   (TREE_TYPE (TREE_TYPE (orig[0])))),
@@ -4104,6 +4177,15 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 	  gsi_insert_before (gsi, lowpart, GSI_SAME_STMT);
 	  orig[0] = gimple_assign_lhs (lowpart);
 	}
+      else if (sign_change_p)
+	{
+	  gassign *conv
+	    = gimple_build_assign (make_ssa_name (conv_src_type),
+				   build1 (VIEW_CONVERT_EXPR, conv_src_type,
+					   orig[0]));
+	  gsi_insert_before (gsi, conv, GSI_SAME_STMT);
+	  orig[0] = gimple_assign_lhs (conv);
+	}
       if (conv_code == ERROR_MARK)
 	{
 	  tree src_type = TREE_TYPE (orig[0]);
@@ -4135,22 +4217,8 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 	  && orig[1] == error_mark_node
 	  && !maybe_blend[0])
 	return false;
-      tree mask_type, perm_type, conv_src_type;
+      tree mask_type, perm_type;
       perm_type = TREE_TYPE (orig[0]);
-      /* Determine the element type for the conversion source.
-	 As orig_elem_type keeps track of the original type, check
-	 if we need to perform a sign swap after permuting.
-	 We need to be able to construct a vector type from the element
-	 type which is not possible for e.g. BitInt or pointers
-	 so pun with an integer type if needed.  */
-      tree conv_elem_type = TREE_TYPE (perm_type);
-      if (conv_code != ERROR_MARK
-	  && orig_elem_type[0]
-	  && TYPE_SIGN (orig_elem_type[0]) != TYPE_SIGN (conv_elem_type))
-	conv_elem_type = signed_or_unsigned_type_for (TYPE_UNSIGNED
-						      (orig_elem_type[0]),
-						      conv_elem_type);
-      conv_src_type = build_vector_type (conv_elem_type, nelts);
       if (conv_code != ERROR_MARK
 	  && !supportable_convert_operation (conv_code, type, conv_src_type,
 					     &conv_code))
@@ -4184,7 +4252,8 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 			   ? 0 : refnelts) + i);
       vec_perm_indices indices (sel, orig[1] ? 2 : 1, refnelts);
       machine_mode vmode = TYPE_MODE (perm_type);
-      if (!can_vec_perm_const_p (vmode, vmode, indices))
+      if ((cfun->curr_properties & PROP_gimple_lvec)
+	  && !can_vec_perm_const_p (vmode, vmode, indices))
 	return false;
       mask_type = build_vector_type (ssizetype, refnelts);
       tree op2 = vec_perm_indices_to_tree (mask_type, indices);
@@ -4249,7 +4318,8 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
 			    ? elts[i].second + nelts : i);
 	  vec_perm_indices indices (sel, 2, nelts);
 	  machine_mode vmode = TYPE_MODE (type);
-	  if (!can_vec_perm_const_p (vmode, vmode, indices))
+	  if ((cfun->curr_properties & PROP_gimple_lvec)
+	      && !can_vec_perm_const_p (vmode, vmode, indices))
 	    return false;
 	  mask_type = build_vector_type (ssizetype, nelts);
 	  blend_op2 = vec_perm_indices_to_tree (mask_type, indices);
@@ -4280,8 +4350,7 @@ simplify_vector_constructor (gimple_stmt_iterator *gsi)
       /* Otherwise, we can still have an intermediate sign change.
 	 ??? In that case we have two subsequent conversions.
 	 We should be able to merge them.  */
-      else if (conv_code != ERROR_MARK
-	       && tree_nop_conversion_p (conv_src_type, perm_type))
+      else if (sign_change_p)
 	res = gimple_build (&stmts, VIEW_CONVERT_EXPR, conv_src_type, res);
       /* Finally, apply the conversion.  */
       if (conv_code != ERROR_MARK)
@@ -4358,7 +4427,13 @@ optimize_vector_load (gimple_stmt_iterator *gsi)
 	  gimple *use_stmt = USE_STMT (use_p);
 	  if (is_gimple_debug (use_stmt))
 	    continue;
-	  if (!is_gimple_assign (use_stmt))
+	  tree use_lhs;
+	  if (!is_gimple_assign (use_stmt)
+	      /* For alias reasons we move the use to the place of the
+		 load.  Avoid this when abnormals are involved.  */
+	      || ((TREE_CODE ((use_lhs = gimple_assign_lhs (use_stmt)))
+		   == SSA_NAME)
+		  && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (use_lhs)))
 	    {
 	      rewrite = false;
 	      break;
@@ -4608,8 +4683,7 @@ recognise_vec_perm_simplify_seq (gassign *stmt, vec_perm_simplify_seq *seq)
       if (commutative_tree_code (gimple_assign_rhs_code (v_x_stmt)))
 	{
 	  /* Keep v_x_1 the first operand for non-commutative operators.  */
-	  v_x_1 = gimple_assign_rhs2 (v_x_stmt);
-	  v_x_2 = gimple_assign_rhs1 (v_x_stmt);
+	  std::swap (v_x_1, v_x_2);
 	  if (v_x_1 != v_y_1 || v_x_2 != v_y_2)
 	    return false;
 	}
@@ -4652,7 +4726,7 @@ recognise_vec_perm_simplify_seq (gassign *stmt, vec_perm_simplify_seq *seq)
 
   /* Create the new selector.  */
   vec_perm_builder new_sel_perm (nelts, nelts, 1);
-  auto_vec<unsigned int> lanes (nelts);
+  auto_vec<bool> lanes (nelts);
   lanes.quick_grow_cleared (nelts);
   for (unsigned int i = 0; i < nelts; i++)
     {
@@ -4678,7 +4752,7 @@ recognise_vec_perm_simplify_seq (gassign *stmt, vec_perm_simplify_seq *seq)
       new_sel_perm.quick_push (l + offs * nelts);
 
       /* Mark lane as used.  */
-      lanes[l] = 1;
+      lanes[l] = true;
     }
 
   /* Count how many lanes are need.  */
@@ -4690,12 +4764,12 @@ recognise_vec_perm_simplify_seq (gassign *stmt, vec_perm_simplify_seq *seq)
   if (cnt > nelts / 2)
     return false;
 
-  /* Check if the resulting permuation is cheap.  */
+  /* Check if the resulting permutation is cheap.  */
   vec_perm_indices new_indices (new_sel_perm, 2, nelts);
   tree vectype = TREE_TYPE (gimple_assign_lhs (stmt));
   machine_mode vmode = TYPE_MODE (vectype);
   if (!can_vec_perm_const_p (vmode, vmode, new_indices, false))
-      return false;
+    return false;
 
   *seq = XNEW (struct _vec_perm_simplify_seq);
   (*seq)->stmt = stmt;
@@ -4785,8 +4859,7 @@ can_blend_vec_perm_simplify_seqs_p (vec_perm_simplify_seq seq1,
      seq1->v_x_stmt and seq1->v_y_stmt are before it.
 
      Note, that we don't need to check the BBs here, because all
-     statements of both sequences have to be in the same BB.
-     */
+     statements of both sequences have to be in the same BB.  */
 
   tree seq2_v_in = gimple_assign_rhs1 (seq2->v_1_stmt);
   if (TREE_CODE (seq2_v_in) != SSA_NAME)
@@ -4834,7 +4907,7 @@ calc_perm_vec_perm_simplify_seqs (vec_perm_simplify_seq seq1,
 {
   unsigned int i;
   unsigned int nelts = seq1->nelts;
-  auto_vec<int> lane_assignment;
+  auto_vec<unsigned int> lane_assignment;
   lane_assignment.create (nelts);
 
   /* Mark all lanes as free.  */
@@ -4846,7 +4919,7 @@ calc_perm_vec_perm_simplify_seqs (vec_perm_simplify_seq seq1,
       unsigned int l = TREE_INT_CST_LOW (VECTOR_CST_ELT (seq1->new_sel, i));
       l %= nelts;
       lane_assignment[l] = 1;
-}
+    }
 
   /* Allocate lanes for seq2 and calculate selector for seq2->stmt.  */
   vec_perm_builder seq2_stmt_sel_perm (nelts, nelts, 1);
@@ -4887,14 +4960,14 @@ calc_perm_vec_perm_simplify_seqs (vec_perm_simplify_seq seq1,
 	    }
 
 	  /* Allocate lane.  */
-	  lane_assignment[lane] = 2;
+	  lane_assignment[lane] = 2 + l_orig;
 	  new_sel = lane + offs * nelts;
 	}
 
       seq2_stmt_sel_perm.quick_push (new_sel);
     }
 
-  /* Check if the resulting permuation is cheap.  */
+  /* Check if the resulting permutation is cheap.  */
   seq2_stmt_indices->new_vector (seq2_stmt_sel_perm, 2, nelts);
   tree vectype = TREE_TYPE (gimple_assign_lhs (seq2->stmt));
   machine_mode vmode = TYPE_MODE (vectype);
@@ -4906,7 +4979,7 @@ calc_perm_vec_perm_simplify_seqs (vec_perm_simplify_seq seq1,
   vec_perm_builder seq1_v_2_stmt_sel_perm (nelts, nelts, 1);
   for (i = 0; i < nelts; i++)
     {
-      bool use_seq1 = lane_assignment[i] != 2;
+      bool use_seq1 = lane_assignment[i] < 2;
       unsigned int l1, l2;
 
       if (use_seq1)
@@ -4922,25 +4995,12 @@ calc_perm_vec_perm_simplify_seqs (vec_perm_simplify_seq seq1,
 	  /* We moved the lanes for seq2, so we need to adjust for that.  */
 	  tree s1 = gimple_assign_rhs3 (seq2->v_1_stmt);
 	  tree s2 = gimple_assign_rhs3 (seq2->v_2_stmt);
-
-	  unsigned int j = 0;
-	  for (; j < i; j++)
-	    {
-	      unsigned int sel_new;
-	      sel_new = seq2_stmt_sel_perm[j].to_constant ();
-	      sel_new %= nelts;
-	      if (sel_new == i)
-		break;
-	    }
-
-	  /* This should not happen.  Test anyway to guarantee correctness.  */
-	  if (j == i)
-	    return false;
-
-	  l1 = TREE_INT_CST_LOW (VECTOR_CST_ELT (s1, j));
-	  l2 = TREE_INT_CST_LOW (VECTOR_CST_ELT (s2, j));
+	  l1 = TREE_INT_CST_LOW (VECTOR_CST_ELT (s1, lane_assignment[i] - 2));
+	  l2 = TREE_INT_CST_LOW (VECTOR_CST_ELT (s2, lane_assignment[i] - 2));
 	}
 
+      l1 %= nelts;
+      l2 %= nelts;
       seq1_v_1_stmt_sel_perm.quick_push (l1 + (use_seq1 ? 0 : nelts));
       seq1_v_2_stmt_sel_perm.quick_push (l2 + (use_seq1 ? 0 : nelts));
     }
@@ -5165,7 +5225,7 @@ public:
   bool m_full_walk = false;
 }; // class pass_forwprop
 
-/* Attemp to make the BB block of __builtin_unreachable unreachable by changing
+/* Attempt to make the BB block of __builtin_unreachable unreachable by changing
    the incoming jumps.  Return true if at least one jump was changed.  */
 
 static bool
@@ -5202,8 +5262,7 @@ optimize_unreachable (basic_block bb)
 	}
       else
 	{
-	  /* Todo: handle other cases.  Note that unreachable switch case
-	     statements have already been removed.  */
+	  /* Todo: handle other cases.  e.g. switch.  */
 	  continue;
 	}
 
@@ -5882,7 +5941,7 @@ pass_forwprop::execute (function *fun)
 	      propagate_value (use_p, val);
 	  }
 
-      /* Mark outgoing exectuable edges.  */
+      /* Mark outgoing executable edges.  */
       if (edge e = find_taken_edge (bb, NULL))
 	{
 	  e->flags |= EDGE_EXECUTABLE;
@@ -5944,7 +6003,7 @@ pass_forwprop::execute (function *fun)
 
   /* Fixup stmts that became noreturn calls.  This may require splitting
      blocks and thus isn't possible during the walk.  Do this
-     in reverse order so we don't inadvertedly remove a stmt we want to
+     in reverse order so we don't inadvertently remove a stmt we want to
      fixup by visiting a dominating now noreturn call first.  */
   while (!to_fixup.is_empty ())
     {

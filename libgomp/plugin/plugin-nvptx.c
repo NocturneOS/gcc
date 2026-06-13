@@ -353,6 +353,8 @@ struct ptx_device
 
 static struct ptx_device **ptx_devices;
 
+static bool using_usm = false;
+
 /* "Native" GPU thread stack size.  */
 static unsigned native_gpu_thread_stack_size = 0;
 
@@ -826,6 +828,33 @@ link_ptx (CUmodule *module, const struct targ_ptx_obj *ptx_objs,
   return true;
 }
 
+/* The NVPTX plugin can't make much use of this abstraction, so it has the bare
+   minimum possible.  */
+struct gomp_offload_session
+{
+  int device;
+  void **target_var_table;
+};
+GOMP_OFFLOAD_session_boilerplate();
+
+void
+GOMP_OFFLOAD_session_start (struct gomp_offload_session *session, int device)
+{
+  assert ((((uintptr_t) session) % __BIGGEST_ALIGNMENT__) == 0);
+  *session = (struct gomp_offload_session) {
+    .device = device,
+    .target_var_table = NULL,
+  };
+}
+
+void
+GOMP_OFFLOAD_session_set_target_var_table (struct gomp_offload_session *session,
+					   void **table)
+{
+  assert (!session->target_var_table);
+  session->target_var_table = table;
+}
+
 static void
 nvptx_exec (void (*fn), unsigned *dims, void *targ_mem_desc,
 	    CUdeviceptr dp, CUstream stream)
@@ -1275,7 +1304,7 @@ GOMP_OFFLOAD_get_name (void)
 }
 
 /* Return the UID; if not available return NULL.
-   Returns freshly allocated memoy.  */
+   Returns freshly allocated memory.  */
 
 const char *
 GOMP_OFFLOAD_get_uid (int ord)
@@ -1343,15 +1372,20 @@ GOMP_OFFLOAD_get_num_devices (unsigned int omp_requires_mask)
   if (num_devices > 0
       && (omp_requires_mask
 	  & (GOMP_REQUIRES_UNIFIED_SHARED_MEMORY | GOMP_REQUIRES_SELF_MAPS)))
-    for (int dev = 0; dev < num_devices; dev++)
-      {
-	int pi;
-	CUresult r;
-	r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
-			       CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS, dev);
-	if (r != CUDA_SUCCESS || pi == 0)
-	  return -1;
-      }
+    {
+      for (int dev = 0; dev < num_devices; dev++)
+	{
+	  int pi;
+	  CUresult r;
+	  r = CUDA_CALL_NOCHECK (cuDeviceGetAttribute, &pi,
+				 CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS,
+				 dev);
+	  if (r != CUDA_SUCCESS || pi == 0)
+	    return -1;
+	}
+
+      using_usm = true;
+    }
   return num_devices;
 }
 
@@ -1906,6 +1940,50 @@ GOMP_OFFLOAD_managed_free (int ord, void *ptr)
   return GOMP_OFFLOAD_free (ord, ptr);
 }
 
+int
+GOMP_OFFLOAD_is_accessible_ptr (int ord,
+				const void *ptr, size_t size)
+{
+  /* USM implies access.  */
+  if (using_usm)
+    return 1;
+
+  struct ptx_device *ptx_dev = ptx_devices[ord];
+  CUcontext old_ctx;
+  CUDA_CALL_ERET (false, cuCtxPushCurrent, ptx_dev->ctx);
+
+  /* The Cuda API does not permit testing a whole range, so we test each
+     4K page within the range.  If any page is inaccessible return false.  */
+  const void *p = ptr;
+  int result = 1;  /* All pages accessible.  */
+  do
+    {
+      CUmemorytype mem_type;
+      CUresult res = CUDA_CALL_NOCHECK (cuPointerGetAttribute, &mem_type,
+					CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+					(CUdeviceptr)p);
+      if (res != CUDA_SUCCESS)
+	/* Memory is not registered, and therefore not accessible.  */
+	result = 0;
+
+      switch (mem_type)
+	{
+	case CU_MEMORYTYPE_HOST:
+	case CU_MEMORYTYPE_UNIFIED:
+	case CU_MEMORYTYPE_DEVICE:
+	  break;
+	case CU_MEMORYTYPE_ARRAY:
+	default:
+	  result = 0;  /* This page isn't accessible.  */
+	}
+
+      p = (void*)(((uintptr_t)p + 4096) & ~0xfffUL);
+    } while (result && p < ptr + size);
+
+  CUDA_CALL_ASSERT (cuCtxPopCurrent, &old_ctx);
+  return result;
+}
+
 bool
 GOMP_OFFLOAD_page_locked_host_alloc (void **ptr, size_t size)
 {
@@ -1940,15 +2018,15 @@ GOMP_OFFLOAD_page_locked_host_free (void *ptr)
 }
 
 void
-GOMP_OFFLOAD_openacc_exec (void (*fn) (void *),
+GOMP_OFFLOAD_openacc_exec (struct gomp_offload_session *session,
+			   void (*fn) (void *),
 			   size_t mapnum  __attribute__((unused)),
 			   void **hostaddrs __attribute__((unused)),
-			   void **devaddrs,
 			   unsigned *dims, void *targ_mem_desc)
 {
   GOMP_PLUGIN_debug (0, "nvptx %s\n", __FUNCTION__);
 
-  CUdeviceptr dp = (CUdeviceptr) devaddrs;
+  CUdeviceptr dp = (CUdeviceptr) session->target_var_table;
   nvptx_exec (fn, dims, targ_mem_desc, dp, NULL);
 
   CUresult r = CUDA_CALL_NOCHECK (cuStreamSynchronize, NULL);
@@ -1961,16 +2039,16 @@ GOMP_OFFLOAD_openacc_exec (void (*fn) (void *),
 }
 
 void
-GOMP_OFFLOAD_openacc_async_exec (void (*fn) (void *),
+GOMP_OFFLOAD_openacc_async_exec (struct gomp_offload_session *session,
+				 void (*fn) (void *),
 				 size_t mapnum __attribute__((unused)),
 				 void **hostaddrs __attribute__((unused)),
-				 void **devaddrs,
 				 unsigned *dims, void *targ_mem_desc,
 				 struct goacc_asyncqueue *aq)
 {
   GOMP_PLUGIN_debug (0, "nvptx %s\n", __FUNCTION__);
 
-  CUdeviceptr dp = (CUdeviceptr) devaddrs;
+  CUdeviceptr dp = (CUdeviceptr) session->target_var_table;
   nvptx_exec (fn, dims, targ_mem_desc, dp, aq->cuda_stream);
 }
 
@@ -2697,7 +2775,7 @@ GOMP_OFFLOAD_get_interop_int (struct interop_obj_t *obj,
     case omp_ipr_vendor:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return 11; /* nvidia */
+      return 5; /* gnu */
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_type_str;
@@ -2844,7 +2922,7 @@ GOMP_OFFLOAD_get_interop_str (struct interop_obj_t *obj,
     case omp_ipr_vendor_name:
       if (ret_code)
 	*ret_code = omp_irc_success;
-      return "nvidia";
+      return "gnu";
     case omp_ipr_device_num:
       if (ret_code)
 	*ret_code = omp_irc_type_int;
@@ -2906,7 +2984,7 @@ GOMP_OFFLOAD_get_interop_type_desc (struct interop_obj_t *obj,
 }
 
 void
-GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
+GOMP_OFFLOAD_run (struct gomp_offload_session *session, void *tgt_fn, void **args)
 {
   struct targ_fn_descriptor *tgt_fn_desc
     = (struct targ_fn_descriptor *) tgt_fn;
@@ -2914,7 +2992,7 @@ GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
   const struct targ_fn_launch *launch = tgt_fn_desc->launch;
   const char *fn_name = launch->fn;
   CUresult r;
-  struct ptx_device *ptx_dev = ptx_devices[ord];
+  struct ptx_device *ptx_dev = ptx_devices[session->device];
   const char *maybe_abort_msg = "(perhaps abort was called)";
   int teams = 0, threads = 0;
 
@@ -2952,7 +3030,7 @@ GOMP_OFFLOAD_run (int ord, void *tgt_fn, void *tgt_vars, void **args)
 
   pthread_mutex_lock (&ptx_dev->omp_stacks.lock);
   void *stacks = nvptx_stacks_acquire (ptx_dev, stack_size, teams * threads);
-  void *fn_args[] = {tgt_vars, stacks, (void *) stack_size};
+  void *fn_args[] = {session->target_var_table, stacks, (void *) stack_size};
   size_t fn_args_size = sizeof fn_args;
   void *config[] = {
     CU_LAUNCH_PARAM_BUFFER_POINTER, fn_args,

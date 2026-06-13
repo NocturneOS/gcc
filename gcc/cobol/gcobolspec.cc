@@ -69,6 +69,14 @@ int lang_specific_extra_outfiles = 0;
 #define COBOL_LIBRARY "gcobol"
 #endif
 
+#ifndef COMPAT_LIBRARY
+#define COMPAT_LIBRARY "gcobol_compat_gnu"
+#endif
+
+#ifndef POSIX_LIBRARY
+#define POSIX_LIBRARY "gcobol_posix"
+#endif
+
 #define SPEC_FILE "libgcobol.spec"
 
 /* The original argument list and related info is copied here.  */
@@ -78,6 +86,8 @@ static const struct cl_decoded_option *original_options;
 static std::vector<cl_decoded_option>new_opt;
 
 static bool need_libgcobol = true;
+static bool need_libcompat = false; // This one need for dialect mf or ibm
+static bool need_libposix = false;
 
 // #define NOISY 1
 
@@ -160,6 +170,8 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
 
   // Separate flags for a couple of static libraries
   bool static_libgcobol  = false;
+  bool static_libcompat  = false;
+  bool static_libposix   = false;
   bool static_in_general = false;
 
   /*  WEIRDNESS ALERT:
@@ -301,6 +313,9 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
       case OPT_print_multi_os_directory:
       case OPT_print_multiarch:
       case OPT_print_sysroot_headers_suffix:
+      case OPT_dumpmachine:
+      case OPT_dumpversion:
+      case OPT_dumpspecs:
         no_files_error = false;
         break;
 
@@ -346,6 +361,16 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
         /* Let gcc.cc handle this, as it has a really
            cool facility for handling --help and --verbose --help.  */
         return;
+
+      case OPT_dialect:
+        if(    strstr(decoded_options[i].arg, "ibm")
+            || strstr(decoded_options[i].arg, "mf") )
+          {
+          need_libcompat = true;
+          // libcompat depends on libposix.
+          need_libposix = true;
+          }
+        break;
 
       default:
         break;
@@ -511,6 +536,10 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
     {
     add_arg_lib(COBOL_LIBRARY, static_libgcobol);
     }
+  if( need_libcompat )
+    {
+    add_arg_lib(COMPAT_LIBRARY, static_libcompat);
+    }
   if( need_libdl )
     {
     add_arg_lib(DL_LIBRARY, false);
@@ -518,6 +547,10 @@ lang_specific_driver (struct cl_decoded_option **in_decoded_options,
   if( need_libstdc )
     {
     add_arg_lib(STDCPP_LIBRARY, false);
+    }
+  if( need_libposix )
+    {
+    add_arg_lib(POSIX_LIBRARY, static_libposix);
     }
 
   if( prior_main )

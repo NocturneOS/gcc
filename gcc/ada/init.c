@@ -507,17 +507,18 @@ __gnat_adjust_context_for_raise (int signo ATTRIBUTE_UNUSED, void *ucontext)
 
 #if defined (__i386__)
   unsigned long *pc = (unsigned long *)mcontext->gregs[REG_EIP];
-  /* The pattern is "orl $0x0,(%esp)" for a probe in 32-bit mode.  */
-  if (signo == SIGSEGV && pc && *pc == 0x00240c83)
+  /* The pattern is "or{l,b} $0x0,(%esp)" for a probe in 32-bit mode.  */
+  if (signo == SIGSEGV && pc && (*pc == 0x00240c83 || *pc == 0x00240c80))
     mcontext->gregs[REG_ESP] += 4096 + 4 * sizeof (unsigned long);
 #elif defined (__x86_64__)
   unsigned long long *pc = (unsigned long long *)mcontext->gregs[REG_RIP];
   if (signo == SIGSEGV && pc
       /* The pattern is "orq $0x0,(%rsp)" for a probe in 64-bit mode.  */
       && ((*pc & 0xffffffffffLL) == 0x00240c8348LL
-	  /* The pattern may also be "orl $0x0,(%esp)" for a probe in
-	     x32 mode.  */
-	  || (*pc & 0xffffffffLL) == 0x00240c83LL))
+	  /* The pattern is "orl $0x0,(%rsp)" for a probe in x32 mode.  */
+	  || (*pc & 0xffffffffLL) == 0x00240c83LL
+	  /* The pattern may also be "orb $0x0,(%rsp)" in both modes.  */
+	  || (*pc & 0xffffffffLL) == 0x00240c80LL))
     mcontext->gregs[REG_RSP] += 4096 + 4 * sizeof (unsigned long);
 #elif defined (__ia64__)
   /* ??? The IA-64 unwinder doesn't compensate for signals.  */
@@ -593,8 +594,10 @@ __gnat_error_handler (int sig, siginfo_t *si ATTRIBUTE_UNUSED, void *ucontext)
 
 #ifndef __ia64__
 #define HAVE_GNAT_ALTERNATE_STACK 1
-/* This must be in keeping with System.OS_Interface.Alternate_Stack_Size.  */
-char __gnat_alternate_stack[32 * 1024];
+/* Address sanitizer requires the alternate stack to be 8-byte aligned,
+   regardless of any extra alignment added by the operating system.  The size
+   must be in keeping with System.OS_Interface.Alternate_Stack_Size.  */
+char __gnat_alternate_stack[32 * 1024] __attribute__ ((aligned (8)));
 #endif
 
 #ifdef __XENO__
@@ -1318,7 +1321,7 @@ __gnat_handle_vms_condition (int *sigargs, void *mechargs)
 
   extern int SYS$PUTMSG (void *, int (*)(), void *, unsigned long long);
 
-  /* If it was a DEC Ada specific condtiion, make it GNAT otherwise
+  /* If it was a DEC Ada specific condition, make it GNAT otherwise
      keep the old facility.  */
   if ((sigargs [1] & FAC_MASK) == DECADA_M_FACILITY)
     SYS$PUTMSG (sigargs, copy_msg, &gnat_facility,
@@ -1347,7 +1350,7 @@ __gnat_handle_vms_condition (int *sigargs, void *mechargs)
 void
 GNAT$STOP (int *sigargs)
 {
-   /* Note that there are no mechargs. We rely on the fact that condtions
+   /* Note that there are no mechargs. We rely on the fact that conditions
       raised from DEClib I/O do not require an "adjust".  Also the count
       will be off by 2, since LIB$STOP didn't get a chance to add the
       PC and PSL fields, so we bump it so PUTMSG comes out right.  */
@@ -2116,7 +2119,7 @@ __gnat_error_handler (int sig, siginfo_t *si, void *sc)
 #endif
 
   /* VxWorks will always mask out the signal during the signal handler and
-     will reenable it on a longjmp.  GNAT does not generate a longjmp to
+     will re-enable it on a longjmp.  GNAT does not generate a longjmp to
      return from a signal handler so the signal will still be masked unless
      we unmask it.  */
   sigprocmask (SIG_SETMASK, NULL, &mask);

@@ -56,6 +56,8 @@ GNATRTL_TASKING_OBJS= \
   s-inmaop$(objext) \
   s-interr$(objext) \
   s-intman$(objext) \
+  s-intnam$(objext) \
+  s-inttyp$(objext) \
   s-mudido$(objext) \
   s-osinte$(objext) \
   s-proinf$(objext) \
@@ -2036,6 +2038,7 @@ ifeq ($(strip $(filter-out s390% linux%,$(target_cpu) $(target_os))),)
   EXTRA_GNATRTL_TASKING_OBJS=s-linux.o
   EH_MECHANISM=-gcc
   THREADSLIB = -lpthread
+  MISCLIB = -ldl
   GNATLIB_SHARED = gnatlib-shared-dual
   LIBRARY_VERSION := $(LIB_VERSION)
 endif
@@ -2529,6 +2532,7 @@ ifeq ($(strip $(filter-out arm% linux-gnueabi%,$(target_cpu) $(target_os))),)
   EXTRA_GNATRTL_TASKING_OBJS=s-linux.o
   EH_MECHANISM=-arm
   THREADSLIB = -lpthread
+  MISCLIB = -ldl
   GNATLIB_SHARED = gnatlib-shared-dual
   GMEM_LIB = gmemlib
   LIBRARY_VERSION := $(LIB_VERSION)
@@ -2968,6 +2972,7 @@ ifeq ($(strip $(filter-out %x32 linux%,$(target_cpu) $(target_os))),)
   EXTRA_GNATRTL_TASKING_OBJS=s-linux.o a-exetim.o
   EH_MECHANISM=-gcc
   THREADSLIB=-lpthread -lrt
+  MISCLIB = -ldl
   GNATLIB_SHARED=gnatlib-shared-dual
   GMEM_LIB = gmemlib
   LIBRARY_VERSION := $(LIB_VERSION)
@@ -3366,6 +3371,8 @@ setup-rts: rts-err force
 	  if [ -f $(RTSDIR)/$$f ]; then echo $$f >> $(RTSDIR)/libgnarl.lst; fi \
 	done
 	@echo thread.c >> $(RTSDIR)/libgnarl.lst
+# s-intnam.ads is generated later, so hardcode it here
+	@echo s-intnam.ads >> $(RTSDIR)/libgnarl.lst
 	@for f in \
 	  $(foreach F,$(GNATRTL_NONTASKING_OBJS),$(subst $(objext),.ads,$(F))) \
 	  $(foreach F,$(GNATRTL_NONTASKING_OBJS),$(subst $(objext),.adb,$(F))); \

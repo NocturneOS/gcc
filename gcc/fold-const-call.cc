@@ -495,27 +495,25 @@ static bool
 fold_const_pow (real_value *result, const real_value *arg0,
 		const real_value *arg1, const real_format *format)
 {
-  if (do_mpfr_arg2 (result, mpfr_pow, arg0, arg1, format))
-    return true;
+  if (flag_signaling_nans
+      && (REAL_VALUE_ISSIGNALING_NAN (*arg0)
+	  || REAL_VALUE_ISSIGNALING_NAN (*arg1)))
+    return false;
 
-  /* Check for an integer exponent.  */
-  REAL_VALUE_TYPE cint1;
-  HOST_WIDE_INT n1 = real_to_integer (arg1);
-  real_from_integer (&cint1, VOIDmode, n1, SIGNED);
-  /* Attempt to evaluate pow at compile-time, unless this should
-     raise an exception.  */
-  if (real_identical (arg1, &cint1)
-      && (n1 > 0
-	  || (!flag_trapping_math && !flag_errno_math)
-	  || !real_equal (arg0, &dconst0)))
+  if (do_mpfr_arg2 (result, mpfr_pow, arg0, arg1, format))
     {
-      bool inexact = real_powi (result, format, arg0, n1);
-      /* Avoid the folding if flag_signaling_nans is on.  */
-      if (flag_unsafe_math_optimizations
-	  || (!inexact
-	      && !(flag_signaling_nans
-	           && REAL_VALUE_ISSIGNALING_NAN (*arg0))))
-	return true;
+      if (flag_errno_math)
+	switch (result->cl)
+	  {
+	  case rvc_inf:
+	  case rvc_nan:
+	    return false;
+	  case rvc_zero:
+	    return arg0->cl == rvc_zero;
+	  default:
+	    break;
+	  }
+      return true;
     }
 
   return false;
@@ -1057,7 +1055,7 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
 	int tmp;
 	if (wi::ne_p (arg, 0))
 	  tmp = wi::clz (arg);
-	else if (TREE_CODE (arg_type) == BITINT_TYPE)
+	else if (BITINT_TYPE_P (arg_type))
 	  tmp = TYPE_PRECISION (arg_type);
 	else if (!CLZ_DEFINED_VALUE_AT_ZERO (SCALAR_INT_TYPE_MODE (arg_type),
 					     tmp))
@@ -1072,7 +1070,7 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
 	int tmp;
 	if (wi::ne_p (arg, 0))
 	  tmp = wi::ctz (arg);
-	else if (TREE_CODE (arg_type) == BITINT_TYPE)
+	else if (BITINT_TYPE_P (arg_type))
 	  tmp = TYPE_PRECISION (arg_type);
 	else if (!CTZ_DEFINED_VALUE_AT_ZERO (SCALAR_INT_TYPE_MODE (arg_type),
 					     tmp))
@@ -1096,12 +1094,14 @@ fold_const_call_ss (wide_int *result, combined_fn fn, const wide_int_ref &arg,
       *result = wi::shwi (wi::parity (arg), precision);
       return true;
 
-    case CFN_BUILT_IN_BSWAP16:
-    case CFN_BUILT_IN_BSWAP32:
-    case CFN_BUILT_IN_BSWAP64:
-    case CFN_BUILT_IN_BSWAP128:
+    CASE_CFN_BSWAP:
       *result = wi::bswap (wide_int::from (arg, precision,
 					   TYPE_SIGN (arg_type)));
+      return true;
+
+    CASE_CFN_BITREVERSE:
+      *result = wi::bitreverse (wide_int::from (arg, precision,
+						TYPE_SIGN (arg_type)));
       return true;
 
     default:
@@ -1477,6 +1477,38 @@ fold_const_vec_extract (tree, tree arg0, tree)
     return elem;
 
   return NULL_TREE;
+}
+
+/* Try to fold scalar integer IFN_SAT_ADD with operands OP0 and OP1.  */
+
+static tree
+fold_internal_fn_sat_add (tree type, tree op0, tree op1)
+{
+  if (!INTEGRAL_NB_TYPE_P (type))
+    return NULL_TREE;
+
+  if (TREE_CODE (op0) != INTEGER_CST
+      || TREE_CODE (op1) != INTEGER_CST)
+    return NULL_TREE;
+
+  wi::overflow_type overflow;
+  unsigned int prec = TYPE_PRECISION (type);
+  wide_int result = wi::add (wi::to_wide (op0), wi::to_wide (op1),
+			     TYPE_SIGN (type), &overflow);
+
+  if (overflow != wi::OVF_NONE)
+    {
+      if (TYPE_UNSIGNED (type))
+	result = wi::max_value (prec, UNSIGNED);
+      else if (overflow == wi::OVF_OVERFLOW)
+	result = wi::max_value (prec, SIGNED);
+      else if (overflow == wi::OVF_UNDERFLOW)
+	result = wi::min_value (prec, SIGNED);
+      else
+	return NULL_TREE;
+    }
+
+  return wide_int_to_tree (type, result);
 }
 
 /* Try to evaluate:
@@ -1887,6 +1919,9 @@ fold_const_call (combined_fn fn, tree type, tree arg0, tree arg1)
 
     case CFN_VEC_EXTRACT:
       return fold_const_vec_extract (type, arg0, arg1);
+
+    case CFN_SAT_ADD:
+      return fold_internal_fn_sat_add (type, arg0, arg1);
 
     case CFN_UBSAN_CHECK_ADD:
     case CFN_ADD_OVERFLOW:

@@ -349,6 +349,9 @@ Driver JoinedOrMissing Alias(B)
 -preprocess
 Driver Alias(E)
 
+-print-autofdo-gcov-version
+Driver Alias(print-autofdo-gcov-version)
+
 -print-file-name
 Driver Separate Alias(print-file-name=)
 
@@ -778,12 +781,12 @@ Common Joined RejectNegative UInteger Var(warn_strict_aliasing) Warning
 Warn about code which might break strict aliasing rules.
 
 Wstrict-overflow
-Common Warning
-Warn about optimizations that assume that signed overflow is undefined.
+Common Ignore Warning
+Does nothing.  Preserved for backward compatibility.
 
 Wstrict-overflow=
-Common Joined RejectNegative UInteger Var(warn_strict_overflow) Warning
-Warn about optimizations that assume that signed overflow is undefined.
+Common Ignore Joined RejectNegative UInteger Warning
+Does nothing.  Preserved for backward compatibility.
 
 Wsuggest-attribute=cold
 Common Var(warn_suggest_attribute_cold) Warning
@@ -928,6 +931,10 @@ Warn when a vector operation is compiled outside the SIMD.
 Wtsan
 Common Var(warn_tsan) Init(1) Warning
 Warn about unsupported features in ThreadSanitizer.
+
+Wzero-init-padding-bits=
+Common Joined RejectNegative Enum(zero_init_padding_bits_kind) Var(warn_zero_init_padding_bits) Init(ZERO_INIT_PADDING_BITS_STANDARD) Warning
+-Wzero-init-padding-bits=[standard|unions|all]	Warn about initializers that might not zero padding bits.
 
 Xassembler
 Driver Separate
@@ -2562,7 +2569,7 @@ Report on memory allocation before interprocedural optimization.
 
 fpost-ipa-mem-report
 Common Var(post_ipa_mem_report)
-Report on memory allocation before interprocedural optimization.
+Report on memory allocation after interprocedural optimization.
 
 fpack-struct
 Common Var(flag_pack_struct) Optimization
@@ -3901,6 +3908,9 @@ Driver
 
 pipe
 Driver Var(use_pipes)
+
+print-autofdo-gcov-version
+Driver Var(print_autofdo_gcov_version)
 
 print-file-name=
 Driver JoinedOrMissing Var(print_file_name)

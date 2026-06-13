@@ -60,7 +60,7 @@ extern int standard_sse_constant_p (rtx, machine_mode);
 extern const char *standard_sse_constant_opcode (rtx_insn *, rtx *);
 extern bool ix86_standard_x87sse_constant_load_p (const rtx_insn *, rtx);
 extern bool ix86_pre_reload_split (void);
-extern bool symbolic_reference_mentioned_p (rtx);
+extern bool symbolic_reference_mentioned_p (const_rtx);
 extern bool extended_reg_mentioned_p (rtx);
 extern bool x86_extended_QIreg_mentioned_p (rtx_insn *);
 extern bool x86_extended_reg_mentioned_p (rtx);
@@ -263,6 +263,7 @@ extern rtx ix86_expand_ternlog (machine_mode mode, rtx op0, rtx op1, rtx op2,
 				int idx, rtx target);
 extern void ix86_expand_vector_sf2bf_with_vec_perm (rtx, rtx);
 extern void ix86_expand_vector_bf2sf_with_vec_perm (rtx, rtx);
+extern void ix86_expand_gfni_bitreverse (rtx, rtx);
 
 
 #ifdef TREE_CODE

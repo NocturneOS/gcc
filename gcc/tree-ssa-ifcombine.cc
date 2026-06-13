@@ -43,6 +43,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "attribs.h"
 #include "asan.h"
 #include "bitmap.h"
+#include "cfgloop.h"
 
 #ifndef LOGICAL_OP_NON_SHORT_CIRCUIT
 #define LOGICAL_OP_NON_SHORT_CIRCUIT \
@@ -818,6 +819,21 @@ ifcombine_ifandif (basic_block inner_cond_bb, bool inner_inv,
   if (!outer_cond)
     return false;
 
+  /* niter analysis does not cope with boolean typed loop exit conditions.
+     Avoid turning an analyzable exit into an unanalyzable one.  */
+  if (inner_cond_bb->loop_father == outer_cond_bb->loop_father
+      && loop_exits_from_bb_p (inner_cond_bb->loop_father, inner_cond_bb)
+      && loop_exits_from_bb_p (outer_cond_bb->loop_father, outer_cond_bb))
+    {
+      tree outer_type = TREE_TYPE (gimple_cond_lhs (outer_cond));
+      tree inner_type = TREE_TYPE (gimple_cond_lhs (inner_cond));
+      if (TREE_CODE (outer_type) == INTEGER_TYPE
+	  || POINTER_TYPE_P (outer_type)
+	  || TREE_CODE (inner_type) == INTEGER_TYPE
+	  || POINTER_TYPE_P (inner_type))
+	return false;
+    }
+
   /* See if we test a single bit of the same name in both tests.  In
      that case remove the outer test, merging both else edges,
      and change the inner one to test for
@@ -1048,7 +1064,7 @@ tree_ssa_ifcombine_bb_1 (basic_block inner_cond_bb, basic_block outer_cond_bb,
 			 basic_block phi_pred_bb, basic_block outer_succ_bb)
 {
   /* The && form is characterized by a common else_bb with
-     the two edges leading to it mergable.  The latter is
+     the two edges leading to it mergeable.  The latter is
      guaranteed by matching PHI arguments in the else_bb and
      the inner cond_bb having no side-effects.  */
   if (phi_pred_bb != else_bb
@@ -1384,7 +1400,7 @@ pass_tree_ifcombine::execute (function *fun)
 
      We walk the blocks in order that guarantees that a block with
      a single predecessor is processed after the predecessor.
-     This ensures that we collapse outter ifs before visiting the
+     This ensures that we collapse outer ifs before visiting the
      inner ones, and also that we do not try to visit a removed
      block.  This is opposite of PHI-OPT, because we cascade the
      combining rather than cascading PHIs. */

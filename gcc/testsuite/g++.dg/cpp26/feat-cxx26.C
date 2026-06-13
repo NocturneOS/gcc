@@ -353,8 +353,8 @@
 
 #ifndef __cpp_deduction_guides
 #  error "__cpp_deduction_guides"
-#elif __cpp_deduction_guides != 201907
-#  error "__cpp_deduction_guides != 201907"
+#elif __cpp_deduction_guides != 202207
+#  error "__cpp_deduction_guides != 202207"
 #endif
 
 #ifndef __cpp_if_constexpr
@@ -651,4 +651,10 @@
 #  error "__cpp_expansion_statements"
 #elif __cpp_expansion_statements != 202506
 #  error "__cpp_expansion_statements != 202506"
+#endif
+
+#ifndef __cpp_trivial_union
+#  error "__cpp_trivial_union"
+#elif __cpp_trivial_union != 202502
+#  error "__cpp_trivial_union != 202502"
 #endif

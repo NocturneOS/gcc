@@ -274,7 +274,7 @@ package body Sem_Ch4 is
    is (Is_Visible_Operator (N => N, Typ => Typ)
          or else
            --  test for a rewritten Foo."+" call
-           (N /= Original_Node (N)
+           (Is_Rewrite_Substitution (N)
              and then Is_Effectively_Visible_Operator
                         (N => Original_Node (N), Typ => Typ))
          or else Checking_Potentially_Static_Expression
@@ -1812,7 +1812,7 @@ package body Sem_Ch4 is
         and then Has_Static_Predicate_Aspect (Exp_Type)
         and then Preanalysis_Active
       then
-         null;
+         Analyze_Choices (Alternatives (N), Exp_Type);
 
       --  Call Analyze_Choices and Check_Choices to do the rest of the work
 
@@ -2335,12 +2335,12 @@ package body Sem_Ch4 is
             while Present (It.Nam) loop
                T := It.Typ;
 
-               if Is_Access_Type (T)
-                 and then No (First_Formal (Base_Type (Designated_Type (T))))
-               then
-                  Set_Etype (P, T);
-               else
-                  Remove_Interp (I);
+               if Is_Access_Type (T) then
+                  if No (First_Formal (Base_Type (Designated_Type (T)))) then
+                     Set_Etype (P, T);
+                  else
+                     Remove_Interp (I);
+                  end if;
                end if;
 
                Get_Next_Interp (I, It);
@@ -2482,6 +2482,8 @@ package body Sem_Ch4 is
          Error_Msg_N ("object renaming or constant declaration expected", A);
       end Check_Action_OK;
 
+      --  Local variables
+
       A        : Node_Id;
       EWA_Scop : Entity_Id;
 
@@ -2496,6 +2498,8 @@ package body Sem_Ch4 is
       Set_Scope  (EWA_Scop, Current_Scope);
       Set_Parent (EWA_Scop, N);
       Push_Scope (EWA_Scop);
+
+      Set_Scope_Link (N, EWA_Scop);
 
       --  If this Expression_With_Actions node comes from source, then it
       --  represents a declare_expression; increment the counter to take note
@@ -2514,11 +2518,13 @@ package body Sem_Ch4 is
 
       Analyze_Expression (Expression (N));
       Set_Etype (N, Etype (Expression (N)));
-      End_Scope;
 
       if Comes_From_Source (N) then
          In_Declare_Expr := In_Declare_Expr - 1;
       end if;
+
+      pragma Assert (Current_Scope = Scope_Link (N));
+      End_Scope;
    end Analyze_Expression_With_Actions;
 
    ---------------------------
@@ -3062,8 +3068,42 @@ package body Sem_Ch4 is
          Act_List : List_Id;
          Expr     : Node_Id;
          Inst_Id  : Entity_Id;
+         Par      : Node_Id;
+         Prev_Par : Node_Id;
 
       begin
+         Prev_Par := N;
+         Par := Parent (N);
+
+         --  A structural instance cannot be used as a formal package with the
+         --  current implementation of structural instantiation.
+
+         while Present (Par) loop
+            if Nkind (Par) in N_Generic_Declaration
+              and then Is_List_Member (Prev_Par)
+              and then
+                Generic_Formal_Declarations (Par) = List_Containing (Prev_Par)
+            then
+               Error_Msg_N
+                 ("structural instantiation cannot be used in generic formal"
+                  & " part", N);
+               Rewrite (N,
+                 Make_Raise_Program_Error (Sloc (N),
+                   Reason => PE_Explicit_Raise));
+               Analyze (N);
+               return;
+
+            else
+               --  Prevent the search from going too far
+
+               exit when Is_Statement (Par)
+                 or else Is_Body_Or_Package_Declaration (Par);
+            end if;
+
+            Prev_Par := Par;
+            Par := Parent (Par);
+         end loop;
+
          Act_List := New_List;
          Expr := First (Expressions (N));
          while Present (Expr) loop
@@ -3843,11 +3883,9 @@ package body Sem_Ch4 is
       procedure Indicate_Name_And_Type is
       begin
          Add_One_Interp (N, Nam, Etype (Nam));
-         Check_Implicit_Dereference (N, Etype (Nam));
-         Success := True;
 
-         --  If the prefix of the call is a name, indicate the entity
-         --  being called. If it is not a name, it is an expression that
+         --  If the prefix of the call is an entity name, indicate the entity
+         --  being called. If it is not such a name, it is an expression that
          --  denotes an access to subprogram or else an entry or family. In
          --  the latter case, the name is a selected component, and the entity
          --  being called is noted on the selector.
@@ -3861,6 +3899,11 @@ package body Sem_Ch4 is
                Set_Entity (Selector_Name (Name (N)),  Nam);
             end if;
          end if;
+
+         --  Now add an interpretation for the implicit dereference, if any
+
+         Check_Implicit_Dereference (N, Etype (Nam));
+         Success := True;
 
          if Debug_Flag_E and not Report then
             Write_Str (" Overloaded call ");
@@ -4525,9 +4568,36 @@ package body Sem_Ch4 is
       Expr : constant Node_Id   := Expression (N);
       Mark : constant Entity_Id := Subtype_Mark (N);
 
-      I    : Interp_Index;
-      It   : Interp;
-      T    : Entity_Id;
+      function Same_Class_Wide_Type (Typ, CW_Typ : Entity_Id) return Boolean;
+      --  Return whether Typ is the same class-wide type as CW_Typ. This is
+      --  essentially an equality test modulo the Non_Limited_View attribute.
+
+      --------------------------
+      -- Same_Class_Wide_Type --
+      --------------------------
+
+      function Same_Class_Wide_Type (Typ, CW_Typ : Entity_Id) return Boolean is
+         Btyp : constant Entity_Id := Base_Type (Typ);
+
+      begin
+         if Ekind (Btyp) /= E_Class_Wide_Type then
+            return False;
+         end if;
+
+         if Has_Non_Limited_View (Btyp) then
+            return Non_Limited_View (Btyp) = Base_Type (CW_Typ);
+         else
+            return Btyp = Base_Type (CW_Typ);
+         end if;
+      end Same_Class_Wide_Type;
+
+      --  Local variables
+
+      I  : Interp_Index;
+      It : Interp;
+      T  : Entity_Id;
+
+   --  Start of processing for Analyze_Qualified_Expression
 
    begin
       Find_Type (Mark);
@@ -4566,7 +4636,7 @@ package body Sem_Ch4 is
 
       if Is_Class_Wide_Type (T) then
          if not Is_Overloaded (Expr) then
-            if Base_Type (Etype (Expr)) /= Base_Type (T)
+            if not Same_Class_Wide_Type (Etype (Expr), T)
               and then Etype (Expr) /= Raise_Type
             then
                if Nkind (Expr) = N_Aggregate then
@@ -4580,7 +4650,7 @@ package body Sem_Ch4 is
             Get_First_Interp (Expr, I, It);
 
             while Present (It.Nam) loop
-               if Base_Type (It.Typ) /= Base_Type (T) then
+               if not Same_Class_Wide_Type (It.Typ, T) then
                   Remove_Interp (I);
                end if;
 
@@ -4634,6 +4704,7 @@ package body Sem_Ch4 is
 
       Cond    : constant Node_Id := Condition (N);
       Loc     : constant Source_Ptr := Sloc (N);
+      Filter  : Node_Id;
       Loop_Id : Entity_Id;
       QE_Scop : Entity_Id;
 
@@ -4729,8 +4800,10 @@ package body Sem_Ch4 is
 
       if Present (Iterator_Specification (N)) then
          Loop_Id := Defining_Identifier (Iterator_Specification (N));
+         Filter  := Iterator_Filter (Iterator_Specification (N));
       else
          Loop_Id := Defining_Identifier (Loop_Parameter_Specification (N));
+         Filter  := Iterator_Filter (Loop_Parameter_Specification (N));
       end if;
 
       declare
@@ -4779,11 +4852,17 @@ package body Sem_Ch4 is
       begin
          if Warn_On_Suspicious_Contract
            and then not Is_Internal_Name (Chars (Loop_Id))
+           and then not Has_Junk_Name (Loop_Id)
          then
-            if not Referenced (Loop_Id, Cond) then
-               Error_Msg_N ("?.t?unused variable &", Loop_Id);
-            else
+            --  If there is a filter, then it is less clear whether the loop
+            --  variable is used or not; just ignore this case, for simplicity.
+
+            if Present (Filter) then
+               null;
+            elsif Referenced (Loop_Id, Cond) then
                Check_Subexpr (Cond, Kind => Full);
+            elsif not Is_Trivial_Boolean (Cond) then
+               Error_Msg_N ("?.t?unused variable &", Loop_Id);
             end if;
          end if;
       end;
@@ -5351,18 +5430,19 @@ package body Sem_Ch4 is
 
          --  Another special case: the type is an extension of a private
          --  type T, either is an actual in an instance or is immediately
-         --  visible, and we are in the body of the instance, which means
-         --  the generic body had a full view of the type declaration for
-         --  T or some ancestor that defines the component in question.
+         --  visible, and we are in an instance, which means the generic
+         --  unit had a full view of the type declaration of T or some
+         --  ancestor that defines the component in question.
+
          --  This happens because Is_Visible_Component returned False on
          --  this component, as T or the ancestor is still private since
          --  the Has_Private_View mechanism is bypassed because T or the
-         --  ancestor is not directly referenced in the generic body.
+         --  ancestor is not directly referenced in the generic unit.
 
          if Is_Derived_Type (Typ)
            and then (Used_As_Generic_Actual (Base_Type (Typ))
                       or else Is_Immediately_Visible (Typ))
-           and then In_Instance_Body
+           and then In_Instance
            and then Present (Parent_Subtype (Typ))
          then
             Find_Component_In_Instance (Parent_Subtype (Typ));
@@ -5741,12 +5821,12 @@ package body Sem_Ch4 is
          --  Ada 2005 (AI05-0030): In the case of dispatching requeue, the
          --  selected component should resolve to a name.
 
-         --  Extension feature: Also support calls with prefixed views for
-         --  untagged record types.
+         --  GNAT extension: Accept calls with prefixed view for untagged
+         --  record types.
 
          if Ada_Version >= Ada_2005
            and then (Is_Tagged_Type (Prefix_Type)
-                       or else Core_Extensions_Allowed)
+                      or else Core_Extensions_Allowed)
            and then not Is_Concurrent_Type (Prefix_Type)
          then
             if Nkind (Parent (N)) = N_Generic_Association
@@ -5816,8 +5896,12 @@ package body Sem_Ch4 is
                --  Before declaring an error, check whether this is tagged
                --  private type and a call to a primitive operation.
 
+               --  GNAT extension: Accept calls with prefixed view for
+               --  untagged private types
+
                elsif Ada_Version >= Ada_2005
-                 and then Is_Tagged_Type (Prefix_Type)
+                 and then (Is_Tagged_Type (Prefix_Type)
+                            or else Core_Extensions_Allowed)
                  and then Try_Object_Operation (N)
                then
                   return;
@@ -5835,8 +5919,8 @@ package body Sem_Ch4 is
             Next_Entity (Comp);
          end loop;
 
-         --  Extension feature: Also support calls with prefixed views for
-         --  untagged private types.
+         --  GNAT extension: Accept calls with prefixed view for untagged
+         --  private types.
 
          if Core_Extensions_Allowed then
             if Try_Object_Operation (N) then
@@ -6018,9 +6102,13 @@ package body Sem_Ch4 is
          --  visible entities are plausible interpretations, check whether
          --  there is some other primitive operation with that name.
 
+         --  Note that, unlike for other types, we do not accept calls with
+         --  prefixed view for untagged concurrent types with -gnatX, since
+         --  this would require associated legality rules to avoid conflict
+         --  with protected operations or entries of the concurrent types.
+
          if Ada_Version >= Ada_2005 and then Is_Tagged_Type (Prefix_Type) then
-            if (Etype (N) = Any_Type
-                  or else not Has_Candidate)
+            if (Etype (N) = Any_Type or else not Has_Candidate)
               and then Try_Object_Operation (N)
             then
                return;
@@ -6096,8 +6184,7 @@ package body Sem_Ch4 is
 
          Set_Is_Overloaded (N, Is_Overloaded (Sel));
 
-      --  Extension feature: Also support calls with prefixed views for
-      --  untagged types.
+      --  GNAT extension: Accept calls with prefixed view for untagged types
 
       elsif Core_Extensions_Allowed
         and then Try_Object_Operation (N)
@@ -10364,8 +10451,8 @@ package body Sem_Ch4 is
          --  type, this is not a prefixed call. Restore the previous type as
          --  the current one is not a legal candidate.
 
-         --  Extension feature: Calls with prefixed views are also supported
-         --  for untagged types, so skip the early return when extensions are
+         --  GNAT extension: Given that calls with prefixed view are accepted
+         --  for untagged types, skip the early return when extensions are
          --  enabled, unless the type doesn't have a primitive operations list
          --  (such as in the case of predefined types).
 
@@ -10391,7 +10478,7 @@ package body Sem_Ch4 is
                    (Call_Node       => New_Call_Node,
                     Node_To_Replace => Node_To_Replace);
 
-               --  Extension feature: In the case where the prefix is of an
+               --  GNAT extension: In the case where the prefix is of an
                --  access type, and a primitive wasn't found for the designated
                --  type, then if the access type has primitives we attempt a
                --  prefixed call using one of its primitives. (It seems that

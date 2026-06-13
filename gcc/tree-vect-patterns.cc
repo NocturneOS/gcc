@@ -1036,6 +1036,17 @@ vect_reassociating_reduction_p (vec_info *vinfo,
   return true;
 }
 
+/* Return true iff the target has a vector optab implementing the operation
+   CODE on type VECTYPE with SUBTYPE.  */
+
+static bool
+target_has_vecop_for_code (tree_code code, tree vectype,
+			   enum optab_subtype subtype = optab_vector)
+{
+  optab voptab = optab_for_tree_code (code, vectype, subtype);
+  return voptab && can_implement_p (voptab, TYPE_MODE (vectype));
+}
+
 /* match.pd function to match
    (cond (cmp@3 a b) (convert@1 c) (convert@2 d))
    with conditions:
@@ -2991,7 +3002,7 @@ vect_recog_bit_insert_pattern (vec_info *vinfo, stmt_vec_info stmt_info,
    needed to maintain the type correctness of the IR.
 
    vect_determine_precisions has already determined the minimum
-   precison of the operation and the minimum precision required
+   precision of the operation and the minimum precision required
    by users of the result.  */
 
 static gimple *
@@ -3160,14 +3171,34 @@ vect_recog_over_widening_pattern (vec_info *vinfo,
       && (code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR))
     op_type = build_nonstandard_integer_type (new_precision, true);
 
-  /* We specifically don't check here whether the target supports the
-     new operation, since it might be something that a later pattern
-     wants to rewrite anyway.  If targets have a minimum element size
-     for some optabs, we should pattern-match smaller ops to larger ops
-     where beneficial.  */
   tree new_vectype = get_vectype_for_scalar_type (vinfo, new_type);
   tree op_vectype = get_vectype_for_scalar_type (vinfo, op_type);
   if (!new_vectype || !op_vectype)
+    return NULL;
+
+  /* Verify we can handle the new operation.  For shifts and rotates
+     apply heuristic of whether we are likely facing vector-vector or
+     vector-scalar operation.  Since we are eventually expecting that
+     a later pattern might eventually want to rewrite an unsupported
+     into a supported case error on that side in case the original
+     operation was not supported either or this is a binary operation
+     and the 2nd operand is constant.  */
+  if (code == RSHIFT_EXPR || code == LSHIFT_EXPR || code == RROTATE_EXPR)
+    {
+      if (!target_has_vecop_for_code (code, op_vectype, optab_vector)
+	  && ((unprom[1].dt != vect_external_def
+	       && unprom[1].dt != vect_constant_def)
+	      || !target_has_vecop_for_code (code, op_vectype, optab_scalar))
+	  && !(!target_has_vecop_for_code (code, *type_out, optab_vector)
+	       && ((unprom[1].dt != vect_external_def
+		    || unprom[1].dt != vect_constant_def)
+		   || !target_has_vecop_for_code (code, *type_out,
+						  optab_scalar))))
+	return NULL;
+    }
+  else if (!target_has_vecop_for_code (code, op_vectype, optab_vector)
+	   && (target_has_vecop_for_code (code, *type_out, optab_vector)
+	       && !(nops == 2 && unprom[1].dt == vect_constant_def)))
     return NULL;
 
   if (dump_enabled_p ())
@@ -4151,17 +4182,6 @@ vect_recog_vector_vector_shift_pattern (vec_info *vinfo,
   return pattern_stmt;
 }
 
-/* Return true iff the target has a vector optab implementing the operation
-   CODE on type VECTYPE.  */
-
-static bool
-target_has_vecop_for_code (tree_code code, tree vectype)
-{
-  optab voptab = optab_for_tree_code (code, vectype, optab_vector);
-  return voptab
-	 && can_implement_p (voptab, TYPE_MODE (vectype));
-}
-
 /* Verify that the target has optabs of VECTYPE to perform all the steps
    needed by the multiplication-by-immediate synthesis algorithm described by
    ALG and VAR.  If SYNTH_SHIFT_P is true ensure that vector addition is
@@ -4224,7 +4244,7 @@ target_supports_mult_synth_alg (struct algorithm *alg, mult_variant var,
 static gimple *
 synth_lshift_by_additions (vec_info *vinfo,
 			   tree dest, tree op, HOST_WIDE_INT amnt,
-			   stmt_vec_info stmt_info)
+			   stmt_vec_info stmt_info, tree vectype)
 {
   HOST_WIDE_INT i;
   tree itype = TREE_TYPE (op);
@@ -4238,7 +4258,7 @@ synth_lshift_by_additions (vec_info *vinfo,
         = gimple_build_assign (tmp_var, PLUS_EXPR, prev_res, prev_res);
       prev_res = tmp_var;
       if (i < amnt - 1)
-	append_pattern_def_seq (vinfo, stmt_info, stmt);
+	append_pattern_def_seq (vinfo, stmt_info, stmt, vectype);
       else
 	return stmt;
     }
@@ -4256,7 +4276,8 @@ synth_lshift_by_additions (vec_info *vinfo,
 static tree
 apply_binop_and_append_stmt (vec_info *vinfo,
 			     tree_code code, tree op1, tree op2,
-			     stmt_vec_info stmt_vinfo, bool synth_shift_p)
+			     stmt_vec_info stmt_vinfo, tree vectype,
+			     bool synth_shift_p)
 {
   if (integer_zerop (op2)
       && (code == LSHIFT_EXPR
@@ -4274,13 +4295,14 @@ apply_binop_and_append_stmt (vec_info *vinfo,
       && synth_shift_p)
     {
       stmt = synth_lshift_by_additions (vinfo, tmp_var, op1,
-					TREE_INT_CST_LOW (op2), stmt_vinfo);
-      append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+					TREE_INT_CST_LOW (op2), stmt_vinfo,
+					vectype);
+      append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
       return tmp_var;
     }
 
   stmt = gimple_build_assign (tmp_var, code, op1, op2);
-  append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+  append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
   return tmp_var;
 }
 
@@ -4376,7 +4398,7 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
     {
       tree tmp_op = vect_recog_temp_ssa_var (multtype, NULL);
       stmt = gimple_build_assign (tmp_op, CONVERT_EXPR, op);
-      append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+      append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
       op = tmp_op;
     }
 
@@ -4400,7 +4422,7 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
 	  if (synth_shift_p)
 	    stmt
 	      = synth_lshift_by_additions (vinfo, accum_tmp, accumulator,
-					   alg.log[i], stmt_vinfo);
+					   alg.log[i], stmt_vinfo, vectype);
 	  else
 	    stmt = gimple_build_assign (accum_tmp, LSHIFT_EXPR, accumulator,
 					 shft_log);
@@ -4408,14 +4430,14 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
 	case alg_add_t_m2:
 	  tmp_var
 	    = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, op, shft_log,
-					   stmt_vinfo, synth_shift_p);
+					   stmt_vinfo, vectype, synth_shift_p);
 	  stmt = gimple_build_assign (accum_tmp, PLUS_EXPR, accumulator,
 				       tmp_var);
 	  break;
 	case alg_sub_t_m2:
 	  tmp_var = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, op,
 						 shft_log, stmt_vinfo,
-						 synth_shift_p);
+						 vectype, synth_shift_p);
 	  /* In some algorithms the first step involves zeroing the
 	     accumulator.  If subtracting from such an accumulator
 	     just emit the negation directly.  */
@@ -4428,26 +4450,30 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
 	case alg_add_t2_m:
 	  tmp_var
 	    = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, accumulator,
-					   shft_log, stmt_vinfo, synth_shift_p);
+					   shft_log, stmt_vinfo, vectype,
+					   synth_shift_p);
 	  stmt = gimple_build_assign (accum_tmp, PLUS_EXPR, tmp_var, op);
 	  break;
 	case alg_sub_t2_m:
 	  tmp_var
 	    = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, accumulator,
-					   shft_log, stmt_vinfo, synth_shift_p);
+					   shft_log, stmt_vinfo, vectype,
+					   synth_shift_p);
 	  stmt = gimple_build_assign (accum_tmp, MINUS_EXPR, tmp_var, op);
 	  break;
 	case alg_add_factor:
 	  tmp_var
 	    = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, accumulator,
-					   shft_log, stmt_vinfo, synth_shift_p);
+					   shft_log, stmt_vinfo, vectype,
+					   synth_shift_p);
 	  stmt = gimple_build_assign (accum_tmp, PLUS_EXPR, accumulator,
 				       tmp_var);
 	  break;
 	case alg_sub_factor:
 	  tmp_var
 	    = apply_binop_and_append_stmt (vinfo, LSHIFT_EXPR, accumulator,
-					   shft_log, stmt_vinfo, synth_shift_p);
+					   shft_log, stmt_vinfo, vectype,
+					   synth_shift_p);
 	  stmt = gimple_build_assign (accum_tmp, MINUS_EXPR, tmp_var,
 				      accumulator);
 	  break;
@@ -4458,7 +4484,7 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
 	 but rather return it directly.  */
 
       if ((i < alg.ops - 1) || needs_fixup || cast_to_unsigned_p)
-	append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+	append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
       accumulator = accum_tmp;
     }
   if (variant == negate_variant)
@@ -4467,7 +4493,7 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
       stmt = gimple_build_assign (accum_tmp, NEGATE_EXPR, accumulator);
       accumulator = accum_tmp;
       if (cast_to_unsigned_p)
-	append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+	append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
     }
   else if (variant == add_variant)
     {
@@ -4475,7 +4501,7 @@ vect_synth_mult_by_constant (vec_info *vinfo, tree op, tree val,
       stmt = gimple_build_assign (accum_tmp, PLUS_EXPR, accumulator, op);
       accumulator = accum_tmp;
       if (cast_to_unsigned_p)
-	append_pattern_def_seq (vinfo, stmt_vinfo, stmt);
+	append_pattern_def_seq (vinfo, stmt_vinfo, stmt, vectype);
     }
   /* Move back to a signed if needed.  */
   if (cast_to_unsigned_p)
@@ -4605,7 +4631,7 @@ vect_recog_build_binary_gimple_stmt (vec_info *vinfo, stmt_vec_info stmt_info,
  *   _10 = -_9;
  *   _12 = _7 | _10;
  *
- * And then simplied to
+ * And then simplified to
  *   _12 = .SAT_ADD (_4, _6);
  */
 
@@ -4712,7 +4738,7 @@ vect_recog_sat_sub_pattern_transform (vec_info *vinfo,
  *   _10 = (long unsigned int) _7;
  *   _9 = _8 * _10;
  *
- * And then simplied to
+ * And then simplified to
  *   _9 = .SAT_SUB (_1, _2);
  *
  * Signed:
@@ -4733,7 +4759,7 @@ vect_recog_sat_sub_pattern_transform (vec_info *vinfo,
  *   _41 = _42 & _44;
  *   iftmp.2_11 = _41 ? _26 : minus_19;
  *
- * And then simplied to
+ * And then simplified to
  *   iftmp.2_11 = .SAT_SUB (x_16, y_18);
  */
 
@@ -4774,7 +4800,7 @@ vect_recog_sat_sub_pattern (vec_info *vinfo, stmt_vec_info stmt_vinfo,
  *   _3 = -_2;
  *   _6 = _1 | _3;
  *
- * And then simplied to
+ * And then simplified to
  *   _6 = .SAT_TRUNC (x_4(D));
  */
 
@@ -5044,7 +5070,7 @@ add_code_for_floorceilround_divmod (tree vectype, vec_info *vinfo,
 	unsigned HOST_WIDE_INT mid_d = (abs_d - 1) >> 1;
 	if (!unsigned_p)
 	  {
-	    // check availibility of abs expression for vector
+	    // check availability of abs expression for vector
 	    if (!target_has_vecop_for_code (ABS_EXPR, vectype))
 	      return NULL;
 	    // abs (r)
@@ -6109,6 +6135,20 @@ vect_recog_bool_pattern (vec_info *vinfo,
 
       return pattern_stmt;
     }
+  else if (rhs_code == BIT_NOT_EXPR
+	   && !vect_use_mask_type_p (stmt_vinfo))
+    {
+      /* When we have a bool data inversion rewrite that to an XOR to
+	 cope with the fact that we'll use a wider vector element type.  */
+      lhs = vect_recog_temp_ssa_var (TREE_TYPE (lhs), NULL);
+      pattern_stmt
+	= gimple_build_assign (lhs, BIT_XOR_EXPR, var,
+			       build_all_ones_cst (TREE_TYPE (var)));
+      *type_out = NULL_TREE;
+      vect_pattern_detected ("vect_recog_bool_pattern", last_stmt);
+
+      return pattern_stmt;
+    }
   else if ((rhs_code == BIT_XOR_EXPR
 	    || rhs_code == BIT_AND_EXPR
 	    || rhs_code == BIT_IOR_EXPR)
@@ -6213,7 +6253,7 @@ vect_recog_bool_pattern (vec_info *vinfo,
 /* Function vect_recog_mask_conversion_pattern
 
    Try to find statements which require boolean type
-   converison.  Additional conversion statements are
+   conversion.  Additional conversion statements are
    added to handle such cases.  For example:
 
    bool m_1, m_2, m_3;
@@ -7402,7 +7442,7 @@ struct vect_recog_func
 };
 
 /* Note that ordering matters - the first pattern matching on a stmt is
-   taken which means usually the more complex one needs to preceed the
+   taken which means usually the more complex one needs to precede the
    less comples onex (widen_sum only after dot_prod or sad for example).  */
 static vect_recog_func vect_vect_recog_func_ptrs[] = {
   { vect_recog_bitfield_ref_pattern, "bitfield_ref" },

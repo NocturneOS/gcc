@@ -24,6 +24,9 @@ along with GCC; see the file COPYING3.  If not see
 
 #include "tree-ssa-alias.h"
 #include "gimple-expr.h"
+#include "bitmap.h"
+#include "value-range.h"
+#include "value-query.h"
 
 typedef gimple *gimple_seq_node;
 
@@ -2309,7 +2312,16 @@ inline void
 gimple_set_modified (gimple *s, bool modifiedp)
 {
   if (gimple_has_ops (s))
-    s->modified = (unsigned) modifiedp;
+    {
+      s->modified = (unsigned) modifiedp;
+      // Mark the LHS as out of date with the current range query.
+      if (modifiedp)
+	{
+	  tree def = gimple_get_lhs (s);
+	  if (def && TREE_CODE (def) == SSA_NAME)
+	    get_range_query (cfun)->update_range_info (def);
+	}
+    }
 }
 
 
@@ -2606,7 +2618,7 @@ gimple_op (const gimple *gs, unsigned i)
   if (gimple_has_ops (gs))
     {
       gcc_gimple_checking_assert (i < gimple_num_ops (gs));
-      return gimple_ops (CONST_CAST_GIMPLE (gs))[i];
+      return gimple_ops (const_cast<gimple *> (gs))[i];
     }
   else
     return NULL_TREE;
@@ -3997,7 +4009,7 @@ gimple_goto_dest (const gimple *gs)
 }
 
 
-/* Set DEST to be the destination of the unconditonal jump GS.  */
+/* Set DEST to be the destination of the unconditional jump GS.  */
 
 inline void
 gimple_goto_set_dest (ggoto *gs, tree dest)

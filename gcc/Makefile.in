@@ -162,9 +162,7 @@ PICFLAG = @PICFLAG@
 # The linker flag for the above.
 LD_PICFLAG = @LD_PICFLAG@
 
-# Flags to determine code coverage. When coverage is disabled, this will
-# contain the optimization flags, as you normally want code coverage
-# without optimization.
+# Flags to determine code coverage.
 COVERAGE_FLAGS = @coverage_flags@
 coverageexts = .{gcda,gcno}
 
@@ -1133,7 +1131,7 @@ ALL_LINKERFLAGS = $(ALL_CXXFLAGS) $(LD_PICFLAG)
 
 # Use the "pic" build of libiberty if --enable-host-shared or --enable-host-pie,
 # unless we are building for mingw.
-LIBIBERTY_PICDIR=$(if $(findstring mingw,$(target)),,pic)
+LIBIBERTY_PICDIR=$(if $(findstring mingw,$(host)),,pic)
 ifneq ($(enable_host_shared)$(enable_host_pie),)
 LIBIBERTY = ../libiberty/$(LIBIBERTY_PICDIR)/libiberty.a
 else
@@ -1353,6 +1351,7 @@ ANALYZER_OBJS = \
 	analyzer/constraint-manager.o \
 	analyzer/diagnostic-manager.o \
 	analyzer/engine.o \
+	analyzer/exploded-path.o \
 	analyzer/feasible-graph.o \
 	analyzer/function-set.o \
 	analyzer/infinite-loop.o \
@@ -1363,6 +1362,7 @@ ANALYZER_OBJS = \
 	analyzer/known-function-manager.o \
 	analyzer/ops.o \
 	analyzer/pending-diagnostic.o \
+	analyzer/poisoned-value-diagnostic.o \
 	analyzer/program-point.o \
 	analyzer/program-state.o \
 	analyzer/ranges.o \
@@ -1372,6 +1372,8 @@ ANALYZER_OBJS = \
 	analyzer/region-model-asm.o \
 	analyzer/region-model-manager.o \
 	analyzer/region-model-reachability.o \
+	analyzer/setjmp-longjmp.o \
+	analyzer/shift-diagnostics.o \
 	analyzer/sm.o \
 	analyzer/sm-file.o \
 	analyzer/sm-fd.o \
@@ -1381,6 +1383,7 @@ ANALYZER_OBJS = \
 	analyzer/sm-signal.o \
 	analyzer/sm-taint.o \
 	analyzer/state-purge.o \
+	analyzer/state-transition.o \
 	analyzer/store.o \
 	analyzer/supergraph.o \
 	analyzer/supergraph-fixup-locations.o \
@@ -1389,7 +1392,8 @@ ANALYZER_OBJS = \
 	analyzer/svalue.o \
 	analyzer/symbol.o \
 	analyzer/trimmed-graph.o \
-	analyzer/varargs.o
+	analyzer/varargs.o \
+	analyzer/write-to-const-diagnostics.o \
 
 # Language-independent object files.
 # We put the *-match.o and insn-*.o files first so that a parallel make
@@ -1895,6 +1899,7 @@ OBJS-libcommon = \
 	diagnostics/option-classifier.o \
 	diagnostics/paths.o \
 	diagnostics/paths-output.o \
+	diagnostics/physical-location-maker.o \
 	diagnostics/source-printing.o \
 	diagnostics/state-graphs-to-dot.o \
 	diagnostics/selftest-context.o \
@@ -1903,8 +1908,8 @@ OBJS-libcommon = \
 	diagnostics/diagnostics-selftests.o \
 	gcc-diagnostic-spec.o \
 	graphviz.o pex.o \
-	pretty-print.o intl.o \
-	json.o json-parsing.o \
+	pretty-print.o pretty-print-token-buffer.o intl.o \
+	json.o json-parsing.o json-diagnostic.o json-pointer-parsing.o \
 	pub-sub.o \
 	xml.o \
 	sbitmap.o \
@@ -1950,6 +1955,12 @@ $(ALL_HOST_BACKEND_OBJS): ALL_COMPILERFLAGS += -fauto-profile=all.fda
 $(ALL_HOST_BACKEND_OBJS): all.fda
 endif
 
+# Path to the perf utility
+PERF = @PERF@
+
+# The profiler to be used by autoprofiledbootstrap
+AFDO_PROFILER = @AFDO_PROFILER@
+
 # This lists all host object files, whether they are included in this
 # compilation or not.
 ALL_HOST_OBJS = $(ALL_HOST_FRONTEND_OBJS) $(ALL_HOST_BACKEND_OBJS)
@@ -1987,7 +1998,7 @@ MOSTLYCLEANFILES = insn-flags.h insn-config.h insn-codes.h \
  $(SPECS) collect2$(exeext) gcc-ar$(exeext) gcc-nm$(exeext) \
  gcc-ranlib$(exeext) \
  genversion$(build_exeext) gcov$(exeext) gcov-dump$(exeext) \
- gcov-tool$(exeect) \
+ gcov-tool$(exeext) \
  gengtype$(exeext) *.[0-9][0-9].* *.[si] *-checksum.cc libbackend.a \
  libcommon-target.a libcommon.a libgcc.mk perf.data
 
@@ -2373,7 +2384,7 @@ LIBGDIAGNOSTICS_VERSION_NUM = 0
 LIBGDIAGNOSTICS_MINOR_NUM = 0
 LIBGDIAGNOSTICS_RELEASE_NUM = 1
 
-ifneq (,$(findstring mingw,$(target)))
+ifneq (,$(findstring mingw,$(host)))
 LIBGDIAGNOSTICS_FILENAME = libgdiagnostics-$(LIBGDIAGNOSTICS_VERSION_NUM).dll
 LIBGDIAGNOSTICS_IMPORT_LIB = libgdiagnostics.dll.a
 
@@ -2446,7 +2457,7 @@ libgdiagnostics.serial = $(LIBGDIAGNOSTICS_FILENAME)
 # Tell GNU make to ignore these if they exist.
 .PHONY: libgdiagnostics
 
-ifneq (,$(findstring mingw,$(target)))
+ifneq (,$(findstring mingw,$(host)))
 # Create import library
 LIBGDIAGNOSTICS_EXTRA_OPTS = -Wl,--out-implib,$(LIBGDIAGNOSTICS_IMPORT_LIB)
 else
@@ -2474,7 +2485,7 @@ $(LIBGDIAGNOSTICS_FILENAME): $(libgdiagnostics_OBJS) $(CPPLIB) $(EXTRA_GCC_LIBS)
 	@$(call LINK_PROGRESS,$(INDEX.libgdiagnostics),end)
 
 # Create symlinks when not building for Windows
-ifeq (,$(findstring mingw,$(target)))
+ifeq (,$(findstring mingw,$(host)))
 
 ifeq (,$(findstring darwin,$(host)))
 # but only one level for Darwin, version info is embedded.
@@ -3045,7 +3056,7 @@ $(GENERIC_MATCH_PD_SEQ_SRC): s-generic-match generic-match-head.cc; @true
 generic-match-auto.h: s-generic-match; @true
 
 s-gimple-match: build/genmatch$(build_exeext) \
-	    $(srcdir)/match.pd cfn-operators.pd
+	    $(srcdir)/match.pd $(srcdir)/match-sat-alu.pd cfn-operators.pd
 	$(RUN_GEN) build/genmatch$(build_exeext) --gimple \
 	    --header=tmp-gimple-match-auto.h --include=gimple-match-auto.h \
 	    $(srcdir)/match.pd $(patsubst %, tmp-%, $(GIMPLE_MATCH_PD_SEQ_SRC))
@@ -3807,7 +3818,8 @@ TEXI_GCCINT_FILES = gccint.texi gcc-common.texi gcc-vers.texi		\
 	 gnu.texi gpl_v3.texi fdl.texi contrib.texi languages.texi	\
 	 sourcebuild.texi gty.texi libgcc.texi cfg.texi tree-ssa.texi	\
 	 loop.texi generic.texi gimple.texi plugins.texi optinfo.texi   \
-	 match-and-simplify.texi analyzer.texi ux.texi poly-int.texi
+	 match-and-simplify.texi analyzer.texi ux.texi poly-int.texi	\
+	 params.texi specs.texi ifn.texi
 
 TEXI_GCCINSTALL_FILES = install.texi fdl.texi		\
 	 gcc-common.texi gcc-vers.texi
@@ -3890,7 +3902,7 @@ doc/%.pdf: %.texi
 doc/gccinstall.pdf: $(TEXI_GCCINSTALL_FILES)
 	$(TEXI2PDF) -I . -I $(abs_docdir) -I $(abs_docdir)/include -o $@ $<
 
-# List the directories or single hmtl files which are installed by
+# List the directories or single html files which are installed by
 # install-html. The lang.html file triggers language fragments to build
 # html documentation.
 HTMLS_INSTALL=$(build_htmldir)/cpp $(build_htmldir)/gcc \
@@ -3937,7 +3949,7 @@ regenerate-opt-urls-unit-test: $(OPT_URLS_HTML_DEPS)
 
 # Regenerate attr-urls.def from the generated html.
 .PHONY: regenerate-attr-urls
-ATTR_URLS_HTML_DEPS = $(build_htmldir)/gcc/Concept-and-Symbol-Index.html
+ATTR_URLS_HTML_DEPS = $(build_htmldir)/gcc/Attribute-Index.html
 
 regenerate-attr-urls: $(srcdir)/regenerate-attr-urls.py $(ATTR_URLS_HTML_DEPS)
 	$(srcdir)/regenerate-attr-urls.py $(build_htmldir) $(shell dirname $(srcdir))
@@ -4165,7 +4177,7 @@ PLUGIN_HEADERS = $(TREE_H) $(CONFIG_H) $(SYSTEM_H) coretypes.h $(TM_H) \
   lcm.h cfgloopmanip.h file-prefix-map.h builtins.def $(INSN_ATTR_H) \
   pass-instances.def params.list $(srcdir)/../include/gomp-constants.h \
   $(EXPR_H) $(srcdir)/analyzer/*.h $(srcdir)/diagnostics/*.h \
-  $(srcdir)/text-art/*.h
+  $(srcdir)/text-art/*.h $(srcdir)/topics/*.h
 
 # generate the 'build fragment' b-header-vars
 s-header-vars: Makefile
@@ -4205,6 +4217,7 @@ install-plugin: installdirs lang.install-plugin s-header-vars install-gengtype
 	  "$(srcdir)"/analyzer/* \
 	  | "$(srcdir)"/diagnostics/* \
 	  | "$(srcdir)"/text-art/* \
+	  | "$(srcdir)"/topics/* \
 	  | "$(srcdir)"/config/* | "$(srcdir)"/common/config/* \
 	  | "$(srcdir)"/c-family/* | "$(srcdir)"/*.def ) \
 	    base=`echo "$$path" | sed -e "s|$$srcdirstrip/||"`;; \
@@ -4292,7 +4305,7 @@ libgdiagnostics.install-headers: installdirs
 	$(INSTALL_DATA) $(srcdir)/libgdiagnostics++.h \
 	  $(DESTDIR)$(includedir)/libgdiagnostics++.h
 
-ifneq (,$(findstring mingw,$(target)))
+ifneq (,$(findstring mingw,$(host)))
 libgdiagnostics.install-common: installdirs libgdiagnostics.install-headers
 # Install import library
 	$(INSTALL_PROGRAM) $(LIBGDIAGNOSTICS_IMPORT_LIB) \
@@ -4817,7 +4830,7 @@ paranoia: paranoia.o real.o $(LIBIBERTY)
 	g++ -o $@ paranoia.o real.o $(LIBIBERTY)
 
 all.fda: $(ALL_FDAS)
-	$(PROFILE_MERGER) $(ALL_FDAS) --output_file all.fda -gcov_version 2
+	$(PROFILE_MERGER) $(ALL_FDAS) --output_file all.fda -gcov_version `../stage1-gcc/xgcc$(exeext) --print-autofdo-gcov-version`
 
 # These exist for maintenance purposes.
 
@@ -4836,6 +4849,7 @@ TAGS: lang.tags
 	done;						\
 	$(ETAGS) -o TAGS.sub c-family/*.h c-family/*.cc \
 	      *.h *.cc \
+	      diagnostics/*.h diagnostics/*.cc text-art/*.h text-art/*.cc \
 	      ../include/*.h ../libiberty/*.c \
 	      ../libcpp/*.cc ../libcpp/include/*.h \
 	      --language=none --regex="/\(char\|unsigned int\|int\|bool\|void\|HOST_WIDE_INT\|enum [A-Za-z_0-9]+\) [*]?\([A-Za-z_0-9]+\)/\2/" common.opt	\

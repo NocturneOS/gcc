@@ -317,7 +317,7 @@ int i = -10;
 @{ Always a space after bold monadic operator @}
 int i = ABS (base + offset)
 
-@{ Spaces in dyadic opeator @}
+@{ Spaces in dyadic operator @}
 total := a + b;
 index := cnt +:= 1;
 total := (a + b);
@@ -362,7 +362,7 @@ mode MyString = [1:10@@]MyChar,
 While indexing and trimming a multiple, never put a space between the
 indexed tertiary and the SUB symbol.
 
-Do not put spaces direcly within indexers and trimmers, unless for
+Do not put spaces directly within indexers and trimmers, unless for
 indentation purposes.  As an exception to this rule, you can put a
 single space before the "at" operator @code{@@} if desired.
 
@@ -409,7 +409,7 @@ Use @code{`whatever'} to refer to any other source construct that is
 not a formal parameter.
 
 Use @code{@{@{} and @code{@}@}} delimiters for commenting out code.
-Remember comments in modern Algol 68 aren't nestable.
+Remember comments in modern Algol 68 are nestable.
 
 Examples:
 
@@ -773,6 +773,7 @@ facilities of the language.
 
 @menu
 * Writing routines::
+* Enquiry clauses::
 * Nihils::
 @end menu
 
@@ -812,6 +813,31 @@ declarations of the values it accesses.  If this is not possible, then
 it may be wise to judiciously pass those non-nearby values as
 arguments in order that the programmer be aware that non-nearby values
 are being accessed or possibly altered.
+
+@node Enquiry clauses
+@section Enquiry clauses
+
+@dfn{Enquiry clauses} are not just ``boolean expressions'' with a
+fancy name.  They can be thought as a sort of specialized serial
+clauses, and as such they can contain any number of declarations and
+units while being required to always yield a value of mode
+@code{bool}.
+
+Avoid polluting the lexical environment with declarations that are
+intended to be used exclusively within conditional and loop clauses:
+use a declaration in the enquiry-clause of the clause instead.  This
+also makes it easier to later refactor code.
+
+Examples:
+
+@example
+@{ The range of `c' is the entire loop clause. @}
+while char c = getchar;
+      c /= char_eof
+do
+   ... use c ...
+od
+@end example
 
 @node Nihils
 @section Nihils

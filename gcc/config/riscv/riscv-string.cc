@@ -470,7 +470,7 @@ riscv_expand_strcmp_scalar (rtx result, rtx src1, rtx src2,
    The result will be stored in RESULT.
    The strings are referenced by SRC1 and SRC2.
    The argument BYTES_RTX either holds the number of characters to
-   compare, or is NULL_RTX. The argument ALIGN_RTX holds the alignment.
+   compare, or is NULL_RTX.  The argument ALIGN_RTX holds the alignment.
 
    Return true if expansion was successful, or false otherwise.  */
 
@@ -487,7 +487,7 @@ riscv_expand_strcmp (rtx result, rtx src1, rtx src2,
   if (riscv_strcmp_inline_limit == 0)
     return false;
 
-  /* Round down the comparision limit to a multiple of xlen.  */
+  /* Round down the comparison limit to a multiple of xlen.  */
   compare_max = riscv_strcmp_inline_limit & ~(xlen - 1);
 
   /* Decide how many bytes to compare inline.  */
@@ -707,7 +707,7 @@ emit_memcmp_scalar_result_calculation (rtx result, rtx data1, rtx data2)
   do_ior3 (result, result, const1_rtx);
 }
 
-/* Expand memcmp using scalar instructions (incl. Zbb).
+/* Expand memcmp using scalar instructions (including Zbb).
 
    RESULT is the register where the return value will be stored.
    The source pointers are SRC1 and SRC2 (NBYTES bytes to compare).  */
@@ -908,7 +908,7 @@ riscv_block_move_loop (rtx dest, rtx src, unsigned HOST_WIDE_INT length,
   if (leftover)
     riscv_block_move_straight (dest, src, leftover, align);
   else
-    emit_insn(gen_nop ());
+    emit_insn (gen_nop ());
 }
 
 /* Expand a cpymemsi instruction, which copies LENGTH bytes from
@@ -980,7 +980,7 @@ riscv_expand_block_move_scalar (rtx dest, rtx src, rtx length)
 bool
 riscv_expand_block_move (rtx dest, rtx src, rtx length)
 {
-  if ((TARGET_VECTOR && !TARGET_XTHEADVECTOR)
+  if (TARGET_VECTOR
       && stringop_strategy & STRATEGY_VECTOR)
     {
       bool ok = riscv_vector::expand_block_move (dest, src, length, false);
@@ -1086,8 +1086,14 @@ use_vector_stringop_p (struct stringop_info &info, HOST_WIDE_INT max_ew,
   rtx avl = length_in;
   HOST_WIDE_INT potential_ew = max_ew;
 
-  if (!TARGET_VECTOR || !(stringop_strategy & STRATEGY_VECTOR))
+  if (!TARGET_VECTOR
+      || !(stringop_strategy & STRATEGY_VECTOR))
     return false;
+
+  if (TARGET_XTHEADVECTOR
+      && (!CONST_INT_P (length_in)
+	  || known_lt (INTVAL (length_in), BYTES_PER_RISCV_VECTOR)))
+      return false;
 
   int max_lmul = TARGET_MAX_LMUL;
   if (rvv_max_lmul == RVV_CONV_DYNAMIC)
@@ -1597,6 +1603,10 @@ check_vectorise_memory_operation (rtx length_in, HOST_WIDE_INT &lmul_out)
     return false;
 
   HOST_WIDE_INT length = INTVAL (length_in);
+
+  if (TARGET_XTHEADVECTOR
+      && known_lt (length, BYTES_PER_RISCV_VECTOR))
+    return false;
 
   /* If it's tiny, default operation is likely better; maybe worth
      considering fractional lmul in the future as well.  */

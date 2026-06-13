@@ -22,7 +22,14 @@ along with GCC; see the file COPYING3.  If not see
 
 #ifdef __MINGW32__
 #include <winsock2.h>
+#ifdef HAVE_AFUNIX_H
 #include <afunix.h>
+#else
+struct sockaddr_un {
+  ADDRESS_FAMILY sun_family;
+  char sun_path[108];
+};
+#endif
 #else
 #include <sys/un.h>
 #include <sys/socket.h>
@@ -30,6 +37,7 @@ along with GCC; see the file COPYING3.  If not see
 
 #define INCLUDE_LIST
 #define INCLUDE_MAP
+#define INCLUDE_SET
 #define INCLUDE_STRING
 #define INCLUDE_VECTOR
 #include "system.h"
@@ -794,7 +802,9 @@ public:
   const logical_locations::manager *
   get_logical_location_manager () const
   {
-    return m_logical_loc_mgr;
+    if (auto client_data_hooks = m_context.get_client_data_hooks ())
+      return client_data_hooks->get_logical_location_manager ();
+    return nullptr;
   }
 
   void
@@ -987,8 +997,6 @@ private:
   const line_maps *m_line_maps;
   sarif_token_printer m_token_printer;
 
-  const logical_locations::manager *m_logical_loc_mgr;
-
   /* The JSON object for the invocation object.  */
   std::unique_ptr<sarif_invocation> m_invocation_obj;
 
@@ -1005,7 +1013,7 @@ private:
 		    sarif_artifact *> m_filename_to_artifact_map;
 
   bool m_seen_any_relative_paths;
-  hash_set <free_string_hash> m_rule_id_set;
+  std::set<std::string> m_rule_id_set;
   std::unique_ptr<json::array> m_rules_arr;
 
   /* The set of all CWE IDs we've seen, if any.  */
@@ -1693,7 +1701,6 @@ sarif_builder::sarif_builder (diagnostics::context &dc,
   m_printer (&printer),
   m_line_maps (line_maps),
   m_token_printer (*this),
-  m_logical_loc_mgr (nullptr),
   m_invocation_obj
     (std::make_unique<sarif_invocation> (*this,
 					 dc.get_original_argv ())),
@@ -1714,9 +1721,6 @@ sarif_builder::sarif_builder (diagnostics::context &dc,
 {
   gcc_assert (m_line_maps);
   gcc_assert (m_serialization_format);
-
-  if (auto client_data_hooks = dc.get_client_data_hooks ())
-    m_logical_loc_mgr = client_data_hooks->get_logical_location_manager ();
 }
 
 sarif_builder::~sarif_builder ()
@@ -2064,25 +2068,24 @@ sarif_builder::make_result_object (const diagnostic_info &diagnostic,
 
   /* "ruleId" property (SARIF v2.1.0 section 3.27.5).  */
   /* Ideally we'd have an option_name for these.  */
-  if (char *option_text
-	= m_context.make_option_name (diagnostic.m_option_id,
-				      orig_diag_kind, diagnostic.m_kind))
+  label_text option_text
+    = m_context.get_option_name (diagnostic.m_option_id,
+				 orig_diag_kind, diagnostic.m_kind);
+  if (option_text.get ())
     {
       /* Lazily create reportingDescriptor objects for and add to m_rules_arr.
 	 Set ruleId referencing them.  */
-      result_obj->set_string ("ruleId", option_text);
-      if (m_rule_id_set.contains (option_text))
-	free (option_text);
-      else
+      result_obj->set_string ("ruleId", option_text.get ());
+      if (m_rule_id_set.find (option_text.get ()) == m_rule_id_set.end ())
 	{
 	  /* This is the first time we've seen this ruleId.  */
 	  /* Add to set, taking ownership.  */
-	  m_rule_id_set.add (option_text);
+	  m_rule_id_set.insert (option_text.get ());
 
 	  m_rules_arr->append<sarif_reporting_descriptor>
 	    (make_reporting_descriptor_object_for_warning (diagnostic,
 							   orig_diag_kind,
-							   option_text));
+							   option_text.get ()));
 	}
     }
   else
@@ -2188,11 +2191,9 @@ make_reporting_descriptor_object_for_warning (const diagnostic_info &diagnostic,
      it seems redundant compared to "id".  */
 
   /* "helpUri" property (SARIF v2.1.0 section 3.49.12).  */
-  if (char *option_url = m_context.make_option_url (diagnostic.m_option_id))
-    {
-      reporting_desc->set_string ("helpUri", option_url);
-      free (option_url);
-    }
+  label_text option_url = m_context.get_option_url (diagnostic.m_option_id);
+  if (option_url.get ())
+    reporting_desc->set_string ("helpUri", option_url.get ());
 
   return reporting_desc;
 }
@@ -2300,7 +2301,8 @@ set_any_logical_locs_arr (sarif_location &location_obj,
 {
   if (!logical_loc)
     return;
-  gcc_assert (m_logical_loc_mgr);
+  auto logical_loc_mgr = get_logical_location_manager ();
+  gcc_assert (logical_loc_mgr);
   auto location_locs_arr = std::make_unique<json::array> ();
 
   auto logical_loc_obj = make_minimal_sarif_logical_location (logical_loc);
@@ -3054,28 +3056,33 @@ int
 sarif_builder::
 ensure_sarif_logical_location_for (logical_locations::key k)
 {
-  gcc_assert (m_logical_loc_mgr);
+  auto logical_loc_mgr = get_logical_location_manager ();
+  gcc_assert (logical_loc_mgr);
 
   auto sarif_logical_loc = std::make_unique<sarif_logical_location> ();
 
-  if (const char *short_name = m_logical_loc_mgr->get_short_name (k))
-    sarif_logical_loc->set_string ("name", short_name);
+  label_text short_name = logical_loc_mgr->get_short_name (k);
+  if (short_name.get ())
+    sarif_logical_loc->set_string ("name", short_name.get ());
 
   /* "fullyQualifiedName" property (SARIF v2.1.0 section 3.33.5).  */
-  if (const char *name_with_scope = m_logical_loc_mgr->get_name_with_scope (k))
-    sarif_logical_loc->set_string ("fullyQualifiedName", name_with_scope);
+  label_text name_with_scope = logical_loc_mgr->get_name_with_scope (k);
+  if (name_with_scope.get ())
+    sarif_logical_loc->set_string ("fullyQualifiedName",
+				   name_with_scope.get ());
 
   /* "decoratedName" property (SARIF v2.1.0 section 3.33.6).  */
-  if (const char *internal_name = m_logical_loc_mgr->get_internal_name (k))
-    sarif_logical_loc->set_string ("decoratedName", internal_name);
+  label_text internal_name = logical_loc_mgr->get_internal_name (k);
+  if (internal_name.get ())
+    sarif_logical_loc->set_string ("decoratedName", internal_name.get ());
 
   /* "kind" property (SARIF v2.1.0 section 3.33.7).  */
-  enum logical_locations::kind kind = m_logical_loc_mgr->get_kind (k);
+  enum logical_locations::kind kind = logical_loc_mgr->get_kind (k);
   if (const char *sarif_kind_str = maybe_get_sarif_kind (kind))
     sarif_logical_loc->set_string ("kind", sarif_kind_str);
 
   /* "parentIndex" property (SARIF v2.1.0 section 3.33.8).  */
-  if (auto parent_key = m_logical_loc_mgr->get_parent (k))
+  if (auto parent_key = logical_loc_mgr->get_parent (k))
     {
       /* Recurse upwards.  */
       int parent_index = ensure_sarif_logical_location_for (parent_key);
@@ -3098,7 +3105,8 @@ std::unique_ptr<sarif_logical_location>
 sarif_builder::
 make_minimal_sarif_logical_location (logical_locations::key logical_loc)
 {
-  gcc_assert (m_logical_loc_mgr);
+  auto logical_loc_mgr = get_logical_location_manager ();
+  gcc_assert (logical_loc_mgr);
 
   /* Ensure that m_cached_logical_locs has a "logicalLocation" object
      (SARIF v2.1.0 section 3.33) for LOGICAL_LOC, and return its index within
@@ -3112,9 +3120,11 @@ make_minimal_sarif_logical_location (logical_locations::key logical_loc)
   sarif_logical_loc->set_integer ("index", index);
 
   /* "fullyQualifiedName" property (SARIF v2.1.0 section 3.33.5).  */
-  if (const char *name_with_scope
-        = m_logical_loc_mgr->get_name_with_scope (logical_loc))
-    sarif_logical_loc->set_string ("fullyQualifiedName", name_with_scope);
+  label_text name_with_scope
+    = logical_loc_mgr->get_name_with_scope (logical_loc);
+  if (name_with_scope.get ())
+    sarif_logical_loc->set_string ("fullyQualifiedName",
+				   name_with_scope.get ());
 
   return sarif_logical_loc;
 }
@@ -5165,7 +5175,7 @@ get_message_from_result (const sarif_result &result)
 }
 
 /* Assuming that a single diagnostic has been emitted to
-   DC, get a json::object for the messsage object within
+   DC, get a json::object for the message object within
    the result.  */
 
 static const json::object *

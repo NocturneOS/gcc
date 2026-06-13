@@ -3829,6 +3829,13 @@ commutative_operand_precedence (rtx op)
       /* If only one operand is a binary expression, it will be the first
          operand.  In particular,  (plus (minus (reg) (reg)) (neg (reg)))
          is canonical, although it will usually be further simplified.  */
+      return 3;
+
+    case RTX_COMM_COMPARE:
+    case RTX_COMPARE:
+      /* Give comparisons a cost between the unary expressions below
+	 and the other binary expressions above, so that we don't have
+	 a situation where the canonical order is binary, unary, binary.  */
       return 2;
 
     case RTX_UNARY:
@@ -5827,7 +5834,8 @@ seq_cost (const rtx_insn *seq, bool speed)
         cost += set_rtx_cost (set, speed);
       else if (NONDEBUG_INSN_P (seq))
 	{
-	  int this_cost = insn_cost (CONST_CAST_RTX_INSN (seq), speed);
+	  int this_cost = insn_cost (const_cast<struct rtx_insn *> (seq),
+				     speed);
 	  if (this_cost > 0)
 	    cost += this_cost;
 	  else

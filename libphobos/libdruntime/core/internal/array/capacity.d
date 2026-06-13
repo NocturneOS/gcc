@@ -17,7 +17,65 @@ extern(C) {
     bool gc_expandArrayUsed(void[] slice, size_t newUsed, bool atomic) nothrow pure;
     size_t gc_reserveArrayCapacity(void[] slice, size_t request, bool atomic) nothrow pure;
     bool gc_shrinkArrayUsed(void[] slice, size_t existingUsed, bool atomic) nothrow pure;
+    void[] gc_getArrayUsed(void *ptr, bool atomic) nothrow pure;
 }
+
+/**
+Shrink the "allocated" length of an array to be the exact size of the array.
+
+It doesn't matter what the current allocated length of the array is, the
+user is telling the runtime that he knows what he is doing.
+
+Params:
+    T = the type of the elements in the array (this should be unqualified)
+    arr = array to shrink. Its `.length` is element length, not byte length, despite `void` type
+    isshared = true if the underlying data is shared
+*/
+void _d_arrayshrinkfit(Tarr: T[], T)(Tarr arr, bool isshared) @trusted
+{
+    import core.exception : onFinalizeError;
+    import core.internal.traits: hasElaborateDestructor;
+
+    debug(PRINTF) printf("_d_arrayshrinkfit, elemsize = %zd, arr.ptr = %p arr.length = %zd\n", T.sizeof, arr.ptr, arr.length);
+    auto reqlen = arr.length;
+
+    auto curArr = cast(Tarr)gc_getArrayUsed(arr.ptr, isshared);
+    if (curArr.ptr is null)
+        // not a valid GC pointer
+        return;
+
+    // align the array.
+    auto offset = arr.ptr - curArr.ptr;
+    auto curlen = curArr.length - offset;
+    if (curlen <= reqlen)
+        // invalid situation, or no change.
+        return;
+
+    // if the type has a destructor, destroy elements we are about to remove.
+    static if(is(T == struct) && hasElaborateDestructor!T)
+    {
+        try
+        {
+            // Finalize the elements that are being removed
+
+            // Due to the fact that the delete operator calls destructors
+            // for arrays from the last element to the first, we maintain
+            // compatibility here by doing the same.
+            for (auto curP = arr.ptr + curlen - 1; curP >= arr.ptr + reqlen; curP--)
+            {
+                // call destructor
+                curP.__xdtor();
+            }
+        }
+        catch (Exception e)
+        {
+            onFinalizeError(typeid(T), e);
+        }
+    }
+
+    gc_shrinkArrayUsed(arr[0 .. reqlen], curlen * T.sizeof, isshared);
+}
+
 /**
 Set the array capacity.
 
@@ -60,6 +118,7 @@ do
     alias BlkAttr = GC.BlkAttr;
 
     auto size = T.sizeof;
+
     bool overflow = false;
     const reqsize = mulu(size, newcapacity, overflow);
     if (overflow)
@@ -83,7 +142,10 @@ do
     auto attrs = __typeAttrs!T((*p).ptr) | BlkAttr.APPENDABLE;
 
     // use this static enum to avoid recomputing TypeInfo for every call.
-    static enum ti = typeid(T);
+    version (D_TypeInfo)
+        static enum ti = typeid(T);
+    else
+        static enum ti = null;
     auto ptr = GC.malloc(reqsize, attrs, ti);
     if (ptr is null)
     {
@@ -163,7 +225,16 @@ size_t _d_arraysetlengthT(Tarr : T[], T)(return ref scope Tarr arr, size_t newle
     // Call the implementation with the unqualified array and sharedness flag
     size_t result = _d_arraysetlengthT_(unqual_arr, newlength, isShared);
 
-    arr = cast(Tarr) unqual_arr;
+    static if (isShared)
+    {
+        // This low-level primitive mutates the caller's shared slice header, so
+        // the caller must already provide whatever synchronization makes that
+        // header update valid; the cast only preserves that existing contract
+        // under `-preview=nosharedaccess`.
+        *cast(UnqT[]*) &arr = unqual_arr;
+    }
+    else
+        arr = cast(Tarr) unqual_arr;
     // Return the result
     return result;
 }
@@ -195,8 +266,8 @@ private size_t _d_arraysetlengthT_(Tarr : T[], T)(return ref scope Tarr arr, siz
     }
 
     enum sizeelem = T.sizeof;
-    enum hasPostblit = __traits(hasMember, T, "__postblit");
-    enum hasEnabledPostblit = hasPostblit && !__traits(isDisabled, T.__postblit);
+    enum hasPostblit = __traits(hasMember, T, "__xpostblit");
+    enum hasEnabledPostblit = hasPostblit && !__traits(isDisabled, T.__xpostblit);
 
     bool overflow = false;
     const newsize = mulu(sizeelem, newlength, overflow);
@@ -217,7 +288,10 @@ private size_t _d_arraysetlengthT_(Tarr : T[], T)(return ref scope Tarr arr, siz
     if (!arr.ptr)
     {
         assert(arr.length == 0);
-        void* ptr = GC.malloc(newsize, gcAttrs);
+        version (D_TypeInfo)
+            void* ptr = GC.malloc(newsize, gcAttrs, typeid(T));
+        else
+            void* ptr = GC.malloc(newsize, gcAttrs, null);
         if (!ptr)
         {
             onOutOfMemoryError();
@@ -253,7 +327,10 @@ private size_t _d_arraysetlengthT_(Tarr : T[], T)(return ref scope Tarr arr, siz
 
     if (!gc_expandArrayUsed(newdata[0 .. oldsize], newsize, isShared))
     {
-        newdata = GC.malloc(newsize, gcAttrs);
+        version (D_TypeInfo)
+            newdata = GC.malloc(newsize, gcAttrs, typeid(T));
+        else
+            newdata = GC.malloc(newsize, gcAttrs, null);
         if (!newdata)
         {
             onOutOfMemoryError();
@@ -333,6 +410,8 @@ version (D_ProfileGC)
     shared S[] arr2;
     _d_arraysetlengthT!(typeof(arr2))(arr2, 16);
     assert(arr2.length == 16);
-    foreach (s; arr2)
+    // The resized slice has not been published yet, so the test may inspect
+    // the backing storage directly to verify initialization.
+    foreach (s; (() @trusted => *cast(S[]*) &arr2)())
         assert(s == S.init);
 }

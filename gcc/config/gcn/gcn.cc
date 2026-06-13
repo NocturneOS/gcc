@@ -505,6 +505,11 @@ VnMODE (int n, machine_mode mode)
 static unsigned char
 gcn_class_max_nregs (reg_class_t rclass, machine_mode mode)
 {
+  /* The aperture registers always hold a 64-bit value, though they can be
+     accessed as either full registers or their lower half.  */
+  if (rclass == MEMORY_APERTURE_REGS)
+    return 1;
+
   /* Scalar registers are 32bit, vector registers are in fact tuples of
      64 lanes.  */
   if (rclass == VGPR_REGS || rclass == AVGPR_REGS
@@ -602,6 +607,14 @@ gcn_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
     }
   if (regno == ARG_POINTER_REGNUM || regno == FRAME_POINTER_REGNUM)
     return true;
+
+  if (MEMORY_APERTURE_REG_P (regno))
+    /* Memory aperture registers are accessible either by their lower half
+       (that is always zero, but accessible anyway), or by their whole value.
+       We, for now, don't permit the former, since there's no use to those
+       values yet.  */
+    return mode == DImode;
+
   if (SGPR_REGNO_P (regno))
     /* We restrict double register values to aligned registers.  */
     return (sgpr_1reg_mode_p (mode)
@@ -645,6 +658,8 @@ gcn_regno_reg_class (int regno)
     case EXEC_HI_REG:
       return EXEC_MASK_REG;
     }
+  if (MEMORY_APERTURE_REG_P (regno))
+    return MEMORY_APERTURE_REGS;
   if (VGPR_REGNO_P (regno))
     return VGPR_REGS;
   if (AVGPR_REGNO_P (regno))
@@ -765,6 +780,9 @@ gcn_operand_part (machine_mode mode, rtx op, int n)
       if (REG_P (op))
 	{
 	  gcc_assert (REGNO (op) + n < FIRST_PSEUDO_REGISTER);
+	  gcc_assert (!MEMORY_APERTURE_REG_P (REGNO (op))
+		      /* We can't access the higher parts of aperture regs.  */
+		      || n == 0);
 	  return gen_rtx_REG (vsimode, REGNO (op) + n);
 	}
       if (GET_CODE (op) == CONST_VECTOR)
@@ -785,6 +803,9 @@ gcn_operand_part (machine_mode mode, rtx op, int n)
   else if (GET_MODE_SIZE (mode) == 8 && REG_P (op))
     {
       gcc_assert (REGNO (op) + n < FIRST_PSEUDO_REGISTER);
+      gcc_assert (!MEMORY_APERTURE_REG_P (REGNO (op))
+		  /* We can't access the higher parts of aperture regs.  */
+		  || n == 0);
       return gen_rtx_REG (SImode, REGNO (op) + n);
     }
   else
@@ -1221,7 +1242,7 @@ gcn_gen_undef (machine_mode mode)
 /* {{{ Utility functions.  */
 
 /*  Generalised accessor functions for instruction patterns.
-    The machine desription '@' prefix does something similar, but as of
+    The machine description '@' prefix does something similar, but as of
     GCC 10 is incompatible with define_subst, and anyway it doesn't
     auto-handle the exec feature.
 
@@ -1853,6 +1874,23 @@ gcn_addr_space_subset_p (addr_space_t subset, addr_space_t superset)
   return false;
 }
 
+static bool
+gcn_addr_space_zero_address_valid (addr_space_t as)
+{
+  if (as == ADDR_SPACE_LDS)
+    return true;
+  return false;
+}
+
+static addr_space_t
+gcn_addr_space_resolve_default (addr_space_t as)
+{
+  if (as != ADDR_SPACE_DEFAULT)
+    return as;
+
+  return DEFAULT_ADDR_SPACE;
+}
+
 /* Convert from one address space to another.  */
 
 static rtx
@@ -1861,26 +1899,34 @@ gcn_addr_space_convert (rtx op, tree from_type, tree to_type)
   gcc_assert (POINTER_TYPE_P (from_type));
   gcc_assert (POINTER_TYPE_P (to_type));
 
-  addr_space_t as_from = TYPE_ADDR_SPACE (TREE_TYPE (from_type));
-  addr_space_t as_to = TYPE_ADDR_SPACE (TREE_TYPE (to_type));
+  addr_space_t as_from = (gcn_addr_space_resolve_default
+			  (TYPE_ADDR_SPACE (TREE_TYPE (from_type))));
+  addr_space_t as_to = (gcn_addr_space_resolve_default
+			  (TYPE_ADDR_SPACE (TREE_TYPE (to_type))));
 
   if (AS_LDS_P (as_from) && AS_FLAT_P (as_to))
     {
-      /* The high bits of the QUEUE_PTR_ARG register are used by
-	 GCN_BUILTIN_FIRST_CALL_THIS_THREAD_P, so mask them out.  */
-      rtx queue_reg = gen_rtx_REG (DImode,
-				   cfun->machine->args.reg[QUEUE_PTR_ARG]);
-      rtx queue_ptr = gen_reg_rtx (DImode);
-      emit_insn (gen_anddi3 (queue_ptr, queue_reg, GEN_INT (0xffffffffffff)));
-      rtx group_seg_aperture_hi = gen_rtx_MEM (SImode,
-				     gen_rtx_PLUS (DImode, queue_ptr,
-						   gen_int_mode (64, SImode)));
-      rtx tmp = gen_reg_rtx (DImode);
+      /* The LDS based pointer is held in SHARED_BASE.
 
+	 Per:
+
+	   For GFX9-GFX11 the aperture base addresses are directly available as
+	   inline constant registers SRC_SHARED_BASE/LIMIT and
+	   SRC_PRIVATE_BASE/LIMIT. In 64-bit address mode the aperture sizes
+	   are 2^32 bytes and the base is aligned to 2^32 which makes it easier
+	   to convert from flat to segment or segment to flat.
+	   -- User Guide for AMDGPU Backend (LLVM)
+
+	 ... we can safely assume that the SImode low-part of SHARED_BASE_REG
+	 contains all zeroes.  As OP is an LDS address, it is 32-bit.  Ergo,
+	 SHARED_BASE_REG+OP is equivalent to SHARED_BASE_REG|OP.  If
+	 SHARED_BASE_REG is in r[N:N+1], then, writing OP to rN should suffice.
+	 Ergo, this conversion can be implemented as two moves.  */
+      rtx group_seg_aperture = gen_rtx_REG (Pmode, SHARED_BASE_REG);
+      rtx tmp = gen_reg_rtx (Pmode);
+
+      emit_move_insn (tmp, group_seg_aperture);
       emit_move_insn (gen_lowpart (SImode, tmp), op);
-      emit_move_insn (gen_highpart_mode (SImode, DImode, tmp),
-		      group_seg_aperture_hi);
-
       return tmp;
     }
   else if (as_from == as_to)
@@ -1918,7 +1964,7 @@ gcn_addr_space_debug (addr_space_t as)
 
 /* Implement REGNO_MODE_CODE_OK_FOR_BASE_P via gcn.h
 
-   Retun true if REGNO is OK for memory adressing.  */
+   Return true if REGNO is OK for memory addressing.  */
 
 bool
 gcn_regno_mode_code_ok_for_base_p (int regno,
@@ -3357,8 +3403,8 @@ gcn_expand_prologue ()
 	+ offsets->local_vars + offsets->outgoing_args_size;
       if (sp_adjust > 0)
 	{
-	  /* Adding RTX_FRAME_RELATED_P effectively disables spliting, so
-	     we use split add explictly, and specify the DImode add in
+	  /* Adding RTX_FRAME_RELATED_P effectively disables splitting, so
+	     we use split add explicitly, and specify the DImode add in
 	     the note.  */
 	  rtx scc = gen_rtx_REG (BImode, SCC_REG);
 	  rtx adjustment = gen_int_mode (sp_adjust, SImode);
@@ -3377,8 +3423,8 @@ gcn_expand_prologue ()
 
       if (offsets->need_frame_pointer)
 	{
-	  /* Adding RTX_FRAME_RELATED_P effectively disables spliting, so
-	     we use split add explictly, and specify the DImode add in
+	  /* Adding RTX_FRAME_RELATED_P effectively disables splitting, so
+	     we use split add explicitly, and specify the DImode add in
 	     the note.  */
 	  rtx scc = gen_rtx_REG (BImode, SCC_REG);
 	  int fp_adjust = -(offsets->local_vars + offsets->outgoing_args_size);
@@ -3408,7 +3454,7 @@ gcn_expand_prologue ()
     {
       if (TARGET_PACKED_WORK_ITEMS)
 	{
-	  /* v0 conatins the X, Y and Z dimensions all in one.
+	  /* v0 contains the X, Y and Z dimensions all in one.
 	     Expand them out for ABI compatibility.  */
 	  /* TODO: implement and use zero_extract.  */
 	  rtx v1 = gen_rtx_REG (V64SImode, VGPR_REGNO (1));
@@ -3502,8 +3548,8 @@ gcn_expand_prologue ()
       emit_insn (gen_addsi3_scalar_carry (fp_lo, fp_lo, wave_offset, scc));
       emit_insn (gen_addcsi3_scalar_zero (fp_hi, fp_hi, scc));
 
-      /* Adding RTX_FRAME_RELATED_P effectively disables spliting, so we use
-	 split add explictly, and specify the DImode add in the note.
+      /* Adding RTX_FRAME_RELATED_P effectively disables splitting, so we use
+	 split add explicitly, and specify the DImode add in the note.
          The DWARF info expects that the callee-save data is in the frame,
          even though it isn't (because this is the entry point), so we
          make a notional adjustment to the DWARF frame offset here.  */
@@ -3642,7 +3688,7 @@ gcn_frame_pointer_rqd (void)
 {
   /* GDB needs the frame pointer in order to unwind properly,
      but that's not important for the entry point, unless alloca is used.
-     It's not important for code execution, so we should repect the
+     It's not important for code execution, so we should respect the
      -fomit-frame-pointer flag.  */
   return (!flag_omit_frame_pointer
 	  && cfun
@@ -3713,7 +3759,8 @@ gcn_hard_regno_rename_ok (unsigned int from_reg, unsigned int to_reg)
       || from_reg == EXEC_LO_REG || from_reg == EXEC_HI_REG
       || to_reg == SCC_REG
       || to_reg == VCC_LO_REG || to_reg == VCC_HI_REG
-      || to_reg == EXEC_LO_REG || to_reg == EXEC_HI_REG)
+      || to_reg == EXEC_LO_REG || to_reg == EXEC_HI_REG
+      || MEMORY_APERTURE_REG_P (to_reg))
     return false;
 
   /* Allow the link register to be used if it was saved.  */
@@ -4008,6 +4055,8 @@ gcn_memory_move_cost (machine_mode mode, reg_class_t regclass, bool in)
     case SGPR_DST_REGS:
     case GENERAL_REGS:
     case AFP_REGS:
+      /* This one can't be written to.  */
+    case MEMORY_APERTURE_REGS:
       if (!in)
 	return (STORE_COST + 2) * nregs;
       return LOAD_COST * nregs;
@@ -7018,8 +7067,13 @@ print_reg (FILE *file, rtx x)
   machine_mode mode = GET_MODE (x);
   if (VECTOR_MODE_P (mode))
     mode = GET_MODE_INNER (mode);
-  if (mode == BImode || mode == QImode || mode == HImode || mode == SImode
-      || mode == HFmode || mode == SFmode)
+  if (MEMORY_APERTURE_REG_P (REGNO (x)))
+    {
+      gcc_assert (mode == DImode);
+      fprintf (file, "%s", reg_names[REGNO (x)]);
+    }
+  else if (mode == BImode || mode == QImode || mode == HImode || mode == SImode
+	   || mode == HFmode || mode == SFmode)
     fprintf (file, "%s", reg_names[REGNO (x)]);
   else if (mode == DImode || mode == DFmode)
     {
@@ -8039,6 +8093,8 @@ gcn_dwarf_register_span (rtx rtl)
 #define TARGET_ADDR_SPACE_POINTER_MODE gcn_addr_space_pointer_mode
 #undef  TARGET_ADDR_SPACE_SUBSET_P
 #define TARGET_ADDR_SPACE_SUBSET_P gcn_addr_space_subset_p
+#undef  TARGET_ADDR_SPACE_ZERO_ADDRESS_VALID
+#define TARGET_ADDR_SPACE_ZERO_ADDRESS_VALID gcn_addr_space_zero_address_valid
 #undef  TARGET_ADDR_SPACE_CONVERT
 #define TARGET_ADDR_SPACE_CONVERT gcn_addr_space_convert
 #undef  TARGET_ARG_PARTIAL_BYTES

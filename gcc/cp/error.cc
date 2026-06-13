@@ -875,11 +875,11 @@ dump_type (cxx_pretty_printer *pp, tree t, int flags)
       break;
 
     case NULLPTR_TYPE:
-      pp_string (pp, "std::nullptr_t");
+      pp_cxx_ws_string (pp, "std::nullptr_t");
       break;
 
     case META_TYPE:
-      pp_string (pp, "std::meta::info");
+      pp_cxx_ws_string (pp, "std::meta::info");
       break;
 
     case SPLICE_SCOPE:
@@ -2629,7 +2629,6 @@ dump_expr (cxx_pretty_printer *pp, tree t, int flags)
     case EQ_EXPR:
     case NE_EXPR:
     case SPACESHIP_EXPR:
-    case EXACT_DIV_EXPR:
       dump_binary_op (pp, OVL_OP_INFO (false, TREE_CODE (t))->name, t, flags);
       break;
 
@@ -2637,6 +2636,7 @@ dump_expr (cxx_pretty_printer *pp, tree t, int flags)
     case FLOOR_DIV_EXPR:
     case ROUND_DIV_EXPR:
     case RDIV_EXPR:
+    case EXACT_DIV_EXPR:
       dump_binary_op (pp, "/", t, flags);
       break;
 
@@ -3331,14 +3331,161 @@ dump_expr (cxx_pretty_printer *pp, tree t, int flags)
 
     case REFLECT_EXPR:
       {
-	pp_string (pp, "^^");
 	tree h = REFLECT_EXPR_HANDLE (t);
-	if (DECL_P (h))
-	  dump_decl (pp, h, flags);
-	else if (TYPE_P (h))
-	  dump_type (pp, h, flags);
-	else
-	  dump_expr (pp, h, flags);
+	bool any;
+	switch (REFLECT_EXPR_KIND (t))
+	  {
+	  case REFLECT_ANNOTATION:
+	    pp_string (pp, "^^[[=");
+	    pp->set_padding (pp_none);
+	    dump_expr (pp, TREE_VALUE (TREE_VALUE (h)), flags);
+	    pp_string (pp, "]]");
+	    break;
+	  case REFLECT_DATA_MEMBER_SPEC:
+	    pp_cxx_ws_string (pp, "data_member_spec");
+	    pp_string (pp, "(^^");
+	    pp->set_padding (pp_none);
+	    dump_type (pp, TREE_VEC_ELT (h, 0), flags);
+	    pp_string (pp, ",{");
+	    any = false;
+	    if (TREE_VEC_ELT (h, 1))
+	      {
+		pp_string (pp, ".name=");
+		pp_doublequote (pp);
+		pp->set_padding (pp_none);
+		dump_decl (pp, TREE_VEC_ELT (h, 1), flags);
+		pp_doublequote (pp);
+		any = true;
+	      }
+	    if (TREE_VEC_ELT (h, 2))
+	      {
+		if (any)
+		  pp_comma (pp);
+		pp_string (pp, ".alignment=");
+		pp->set_padding (pp_none);
+		dump_expr (pp, TREE_VEC_ELT (h, 2), flags);
+		any = true;
+	      }
+	    if (TREE_VEC_ELT (h, 3))
+	      {
+		if (any)
+		  pp_comma (pp);
+		pp_string (pp, ".bit_width=");
+		pp->set_padding (pp_none);
+		dump_expr (pp, TREE_VEC_ELT (h, 3), flags);
+		any = true;
+	      }
+	    if (TREE_VEC_ELT (h, 4) && !integer_zerop (TREE_VEC_ELT (h, 4)))
+	      {
+		if (any)
+		  pp_comma (pp);
+		pp_string (pp, ".no_unique_address=");
+		pp->set_padding (pp_none);
+		dump_expr (pp, TREE_VEC_ELT (h, 4), flags);
+		any = true;
+	      }
+	    if (TREE_VEC_LENGTH (h) > 5)
+	      {
+		if (any)
+		  pp_comma (pp);
+		pp_string (pp, ".annotations={");
+		pp->set_padding (pp_none);
+		for (int i = 5; i < TREE_VEC_LENGTH (h); ++i)
+		  {
+		    dump_expr (pp, TREE_VEC_ELT (h, i), flags);
+		    if (i != TREE_VEC_LENGTH (h) - 1)
+		      pp_comma (pp);
+		    pp->set_padding (pp_none);
+		  }
+		pp_right_brace (pp);
+	      }
+	    pp_string (pp, "})");
+	    break;
+	  case REFLECT_BASE:
+	    {
+	      pp_cxx_ws_string (pp, "bases_of");
+	      pp_string (pp, "(^^");
+	      pp->set_padding (pp_none);
+	      tree d = direct_base_derived (h);
+	      dump_type (pp, d, flags);
+	      pp_string (pp, ",std::meta::access_context::unchecked())[");
+	      pp->set_padding (pp_none);
+	      tree binfo = TYPE_BINFO (d), base_binfo;
+	      for (unsigned i = 0; BINFO_BASE_ITERATE (binfo, i, base_binfo);
+		   i++)
+		if (base_binfo == h)
+		  {
+		    pp_wide_integer (pp, i);
+		    break;
+		  }
+	      pp_string (pp, "] {aka ");
+	      pp->set_padding (pp_none);
+	      dump_type (pp, BINFO_TYPE (h), flags);
+	      pp_right_brace (pp);
+	      break;
+	    }
+	  case REFLECT_PARM:
+	    {
+	      pp_cxx_ws_string (pp, "parameters_of");
+	      pp_string (pp, "(^^");
+	      pp->set_padding (pp_none);
+	      h = maybe_update_function_parm (h);
+	      dump_decl (pp, DECL_CONTEXT (h), flags);
+	      pp_string (pp, ")[");
+	      pp->set_padding (pp_none);
+	      unsigned int i = 0;
+	      for (tree arg = FUNCTION_FIRST_USER_PARM (DECL_CONTEXT (h));
+		   arg; arg = DECL_CHAIN (arg), ++i)
+		if (arg == h)
+		  {
+		    pp_wide_integer (pp, i);
+		    break;
+		  }
+	      pp_right_bracket (pp);
+	      if (MULTIPLE_NAMES_PARM_P (h))
+		break;
+	      if (DECL_NAME (h))
+		h = DECL_NAME (h);
+	      else if (tree opn = lookup_attribute ("old parm name",
+						    DECL_ATTRIBUTES (h)))
+		h = TREE_VALUE (TREE_VALUE (opn));
+	      else
+		break;
+	      pp_string (pp, " {aka ");
+	      dump_decl (pp, h, flags);
+	      pp_right_brace (pp);
+	      break;
+	    }
+	  case REFLECT_OBJECT:
+	    pp_cxx_ws_string (pp, "std::meta::reflect_object");
+	    pp_left_paren (pp);
+	    pp->set_padding (pp_none);
+	    dump_expr (pp, h, flags);
+	    pp_right_paren (pp);
+	    break;
+	  case REFLECT_VALUE:
+	    pp_cxx_ws_string (pp, "std::meta::reflect_constant");
+	    pp_left_paren (pp);
+	    pp->set_padding (pp_none);
+	    dump_expr (pp, h, flags);
+	    pp_right_paren (pp);
+	    break;
+	  default:
+	    if (null_reflection_p (t))
+	      {
+		pp_cxx_ws_string (pp, "std::meta::info{}");
+		break;
+	      }
+	    pp_string (pp, "^^");
+	    pp->set_padding (pp_none);
+	    if (DECL_P (h))
+	      dump_decl (pp, h, flags);
+	    else if (TYPE_P (h))
+	      dump_type (pp, h, flags);
+	    else
+	      dump_expr (pp, h, flags);
+	    break;
+	  }
 	break;
       }
 
@@ -3976,6 +4123,48 @@ function_category (tree fn)
     return G_("In function %qD");
 }
 
+/* We expected some kind of tree but instead got T and emitted a diagnostic.
+   Print the category of T (type, expression, ...) if possible.  */
+
+void
+inform_tree_category (tree t)
+{
+  const location_t loc = location_of (t);
+
+  t = maybe_get_first_fn (t);
+  if (TREE_CODE (t) == TYPE_DECL)
+    t = TREE_TYPE (t);
+
+  if (TYPE_P (t))
+    inform (loc, "but %qE is a type", t);
+  else if (EXPR_P (t))
+    inform (loc, "but %qE is an expression", t);
+  else if (DECL_DECOMPOSITION_P (t) && !DECL_DECOMP_IS_BASE (t))
+    inform (loc, "but %qE is a structured binding", t);
+  else if (VAR_P (t))
+    inform (loc, "but %qE is a variable", t);
+  else if (TREE_CODE (t) == PARM_DECL)
+    inform (loc, "but %qE is a parameter", t);
+  else if (TREE_CODE (t) == FUNCTION_DECL)
+    inform (loc, "but %qE is a function", t);
+  else if (TREE_CODE (t) == FIELD_DECL)
+    inform (loc, "but %qE is a data member", t);
+  else if (DECL_FUNCTION_TEMPLATE_P (t))
+    inform (loc, "but %qE is a function template", t);
+  else if (DECL_CLASS_TEMPLATE_P (t))
+    inform (loc, "but %qE is a class template", t);
+  else if (DECL_ALIAS_TEMPLATE_P (t))
+    inform (loc, "but %qE is an alias template", t);
+  else if (variable_template_p (t))
+    inform (loc, "but %qE is a variable template", t);
+  else if (TREE_CODE (t) == NAMESPACE_DECL)
+    inform (loc, "but %qE is a namespace", t);
+  else if (TREE_CODE (t) == CONST_DECL && !DECL_TEMPLATE_PARM_P (t))
+    inform (loc, "but %qE is an enumerator", t);
+  else if (concept_definition_p (t))
+    inform (loc, "but %qE is a concept", t);
+}
+
 /* Disable warnings about missing quoting in GCC diagnostics for
    the pp_verbatim calls.  Their format strings deliberately don't
    follow GCC diagnostic conventions.  */
@@ -4055,13 +4244,18 @@ public:
 		     bool show_locus = false)
   : m_text_output (text_output),
     m_loc (loc),
-    m_show_locus (show_locus)
+    m_show_locus (show_locus),
+    m_nesting_level (text_output.get_context ().get_diagnostic_nesting_level ()),
+    m_location_printed (false)
   {
     char *indent = m_text_output.build_indent_prefix (true);
     pp_verbatim (m_text_output.get_printer (), indent);
     free (indent);
-    if (!m_text_output.show_nesting_p ())
-      print_location (m_text_output, m_loc);
+    if (m_nesting_level == 0 || !m_text_output.show_nesting_p ())
+      {
+	print_location (m_text_output, m_loc);
+	m_location_printed = true;
+      }
   }
   ~auto_context_line ()
   {
@@ -4071,9 +4265,13 @@ public:
 	if (m_text_output.show_locations_in_nesting_p ())
 	  {
 	    char *indent = m_text_output.build_indent_prefix (false);
-	    pp_verbatim (pp, indent);
-	    print_location (m_text_output, m_loc);
-	    pp_newline (pp);
+	    if (!m_location_printed)
+	      {
+		pp_verbatim (pp, indent);
+		print_location (m_text_output, m_loc);
+		pp_newline (pp);
+		m_location_printed = true;
+	      }
 
 	    char *saved_prefix = pp_take_prefix (pp);
 	    pp_set_prefix (pp, indent);
@@ -4101,6 +4299,8 @@ private:
   diagnostics::text_sink &m_text_output;
   location_t m_loc;
   bool m_show_locus;
+  int m_nesting_level;
+  bool m_location_printed;
 };
 
 /* Helper function of print_instantiation_partial_context() that

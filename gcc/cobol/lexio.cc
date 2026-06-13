@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -78,7 +78,7 @@ static inline int right_margin() {
 }
 
 /*
- * When setting the indicator column explicity:
+ * When setting the indicator column explicitly:
  *   To get strict fixed 72-column lines, use a negative column number.
  *   When setting back to 0 (free), the right margin is also reset to 0.
  */
@@ -206,7 +206,7 @@ maybe_add_space(const span_t& pattern, replace_t& recognized) {
  * directive.  For the current line, apply patterns that begins on the
  * line.  (It may match input extending beyond the current eol.)
  *
- * As each replacement is identified, append it to the passsed list of
+ * As each replacement is identified, append it to the passed list of
  * pending replacements.  For these elements:
  *
  *     before is a span in mfile
@@ -814,8 +814,8 @@ static std::pair<std::list<replace_t>, char *>
 parse_replace_pairs( const char *stmt, const char *estmt, bool is_copy_stmt ) {
   std::list<replace_t> pairs ;
 
-  static const char     any_ch[] = ".";
-  static const char    word_ch[] = "[[:alnum:]$_-]";
+  static const char     any_ch[] = "";
+  ////   const char    word_ch[] = "[[:alnum:]$_-]";
   static const char nonword_ch[] = "[^[:alnum:]\"'$_-]";
 
   // Pattern to find one REPLACE pseudo-text pair
@@ -878,10 +878,10 @@ parse_replace_pairs( const char *stmt, const char *estmt, bool is_copy_stmt ) {
     if( parsed.leading_trailing.size() > 0 ) {
       switch( TOUPPER(parsed.leading_trailing.p[0]) ) {
       case 'L': // leading
-        befter[1] = word_ch;
+        befter[1] = any_ch;
         break;
       case 'T': // trailing
-        befter[0] = word_ch;
+        befter[0] = any_ch;
         break;
       default:
         gcc_unreachable();
@@ -1513,21 +1513,26 @@ cdftext::lex_open( const char filename[] ) {
   if( input == -1 ) return NULL;
 
   int output = open_output();
-
+  size_t n =0;
+  
   // Process any files supplied by the -include command-line option.
   for( auto name : included_files ) {
+    int input; // cppcheck-suppress shadowVariable
     if( -1 == (input = open(name, O_RDONLY)) ) {
       cbl_message(LexIncludeE, "cannot open %<-include%> file %qs", name);
       continue;
     }
+    dbgmsg("lex_open: including %zu of %zu: '%s'", ++n, included_files.size(), name);
     cobol_filename(name, inode_of(input));
     filespan_t mfile( free_form_reference_format( input ) );
 
     process_file( mfile, output );
 
+    dbgmsg("lex_open: processed %zu of %zu: '%s'", n, included_files.size(), name);
     cobol_filename_restore(); // process_file restores only for COPY
   }
   included_files.clear();
+  dbgmsg("lex_open: '%s'", filename);
 
   cobol_filename(filename, inode_of(input));
   filespan_t mfile( free_form_reference_format( input ) );
@@ -1600,7 +1605,8 @@ int
 cdftext::open_input( const char filename[] ) {
   int fd = open(filename, O_RDONLY);
   if( fd == -1 ) {
-    dbgmsg( "could not open '%s': %s", filename, xstrerror(errno) );
+    auto erc(errno);
+    dbgmsg( "could not open '%s': %s", filename, xstrerror(erc) );
   }
 
   verbose_file_reader = NULL != getenv("GCOBOL_TEMPDIR");

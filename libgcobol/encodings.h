@@ -1,5 +1,5 @@
  /*
- * Copyright (c) 2021_2025 Symas Corporation
+ * Copyright (c) 2021_2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -30,6 +30,8 @@
 
 #ifndef _ENCODINGS_H_
 #define _ENCODINGS_H_
+
+#include <type_traits>
 
 enum cbl_encoding_t {
   no_encoding_e,
@@ -1210,6 +1212,15 @@ struct encodings_t {
   bool supported;
   cbl_encoding_t type;
   char name[32];
+};
+
+struct cbl_encoding_t_hash {
+  using hashed_type = std::underlying_type<cbl_encoding_t>::type;
+    size_t
+    operator()(cbl_encoding_t e) const noexcept
+    {
+      return std::hash<hashed_type>{}(static_cast<hashed_type>(e));
+    }
 };
 
 #endif

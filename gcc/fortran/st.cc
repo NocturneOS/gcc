@@ -295,11 +295,11 @@ gfc_free_statement (gfc_code *p)
       break;
 
     case EXEC_OMP_END_CRITICAL:
-      free (CONST_CAST (char *, p->ext.omp_name));
+      free (const_cast<char *> (p->ext.omp_name));
       break;
 
     case EXEC_OMP_FLUSH:
-      gfc_free_omp_namelist (p->ext.omp_namelist, false, false, false, false);
+      gfc_free_omp_namelist (p->ext.omp_namelist, OMP_LIST_NONE);
       break;
 
     case EXEC_OMP_BARRIER:

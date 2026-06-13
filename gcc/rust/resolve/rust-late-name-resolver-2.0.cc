@@ -119,7 +119,7 @@ Late::visit (AST::LetStmt &let)
   ctx.bindings.exit ();
 
   if (let.has_else_expr ())
-    visit (let.get_init_expr ());
+    visit (let.get_else_expr ());
 
   // how do we deal with the fact that `let a = blipbloup` should look for a
   // label and cannot go through function ribs, but `let a = blipbloup()` can?
@@ -238,6 +238,16 @@ Late::visit_function_params (AST::Function &function)
 void
 Late::visit (AST::StructPatternFieldIdent &field)
 {
+  // We need to check if the Identifier resolves to a variant or empty struct
+  auto path = AST::SimplePath (field.get_identifier ());
+
+  if (auto resolved = ctx.resolve_path (path, Namespace::Types))
+    {
+      ctx.map_usage (Usage (field.get_node_id ()),
+		     Definition (resolved->get_node_id ()));
+      return;
+    }
+
   visit_identifier_as_pattern (ctx, field.get_identifier (), field.get_locus (),
 			       field.get_node_id (), field.is_ref (),
 			       field.is_mut ());
@@ -289,6 +299,9 @@ Late::visit (AST::BreakExpr &expr)
 void
 Late::visit (AST::LoopLabel &label)
 {
+  auto resolved = ctx.lookup (label.get_lifetime ().get_node_id ());
+  if (resolved.has_value ())
+    return;
   auto &lifetime = label.get_lifetime ();
   ctx.labels.insert (Identifier (lifetime.as_string (), lifetime.get_locus ()),
 		     lifetime.get_node_id ());
@@ -324,6 +337,7 @@ Late::visit (AST::IdentifierExpr &expr)
   // TODO: same thing as visit(PathInExpression) here?
 
   tl::optional<Rib::Definition> resolved = tl::nullopt;
+
   if (auto value = ctx.values.get (expr.get_ident ()))
     {
       resolved = value;
@@ -613,13 +627,26 @@ Late::visit (AST::StructExprStructFields &s)
 {
   visit_outer_attrs (s);
   visit_inner_attrs (s);
-  DefaultResolver::visit (s.get_struct_name ());
+
+  auto &path = s.get_struct_name ();
+
+  DefaultResolver::visit (path);
   if (s.has_struct_base ())
     visit (s.get_struct_base ());
   for (auto &field : s.get_fields ())
     visit (field);
 
-  resolve_type_path_like (ctx, block_big_self, s.get_struct_name ());
+  auto resolved = ctx.resolve_path (path, Namespace::Types);
+
+  if (!resolved)
+    {
+      rust_error_at (path.get_locus (), ErrorCode::E0433,
+		     "could not resolve path %qs", path.as_string ().c_str ());
+      return;
+    }
+
+  ctx.map_usage (Usage (path.get_node_id ()),
+		 Definition (resolved->get_node_id ()));
 }
 
 // needed because Late::visit (AST::GenericArg &) is non-virtual

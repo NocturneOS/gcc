@@ -523,17 +523,31 @@ package body Sem_Ch12 is
    --  The body of the wrapper is a call to the actual, with the generated
    --  pre/postconditon checks added.
 
-   procedure Build_Subprogram_Wrappers
-     (Match, Analyzed_Formal : Node_Id; Renamings : List_Id);
+   procedure Build_Subprogram_Wrapper
+     (Match             : Node_Id;
+      Analyzed_Formal   : Node_Id;
+      Unanalyzed_Formal : Node_Id;
+      Renamings         : List_Id);
    --  Ada 2022: AI12-0272 introduces pre/postconditions for formal
    --  subprograms. The implementation of making the formal into a renaming
-   --  of the actual does not work, given that subprogram renaming cannot
-   --  carry aspect specifications. Instead we must create subprogram
-   --  wrappers whose body is a call to the actual, and whose declaration
+   --  of the actual does not work, given that a subprogram renaming cannot
+   --  carry aspect specifications. Instead we must create a subprogram
+   --  wrapper whose body is a call to the actual, and whose declaration
    --  carries the aspects of the formal.
-   --  The wrapper declaration and body are appended to Renamings.
    --  ???But renaming declarations CAN have aspects specs,
    --  and that was true from the start (see AI05-0183-1).
+   --
+   --  Renamings is a list of the declarations created to represent the
+   --  parameter associations of the instantiation, and the last element
+   --  will generally be a subprogram renaming of the actual subprogram
+   --  (though it can also be a generated subprogram body in some cases,
+   --  such as when a formal procedure defaults to "null"). The wrapper
+   --  declaration and body are appended to Renamings, substituting for
+   --  the last element in the subprogram renaming case.
+   --
+   --  The procedure also copies the aspect specifications from the unanalyzed
+   --  formal subprogram to the wrapper subprogram for later analysis in the
+   --  context of the instantiation.
 
    procedure Check_Abbreviated_Instance
      (N                : Node_Id;
@@ -639,14 +653,14 @@ package body Sem_Ch12 is
    --  of freeze nodes for instance bodies that may depend on other instances.
 
    function Find_Actual_Type
-     (Typ      : Entity_Id;
-      Gen_Type : Entity_Id;
-      Typ_Ref  : Node_Id) return Entity_Id;
+     (Typ     : Entity_Id;
+      Gen_Typ : Entity_Id;
+      Typ_Ref : Node_Id) return Entity_Id;
    --  When validating the actual types of a child instance, check whether
    --  the formal is a formal type of the parent unit, and retrieve the current
    --  actual for it. Typ is the entity in the analyzed formal type declaration
    --  (component or index type of an array type, or designated type of an
-   --  access formal) and Gen_Type is the enclosing analyzed formal array
+   --  access formal) and Gen_Typ is the enclosing analyzed formal array
    --  or access type. The desired actual may be a formal of a parent, or may
    --  be declared in a formal package of a parent. In both cases it is a
    --  generic actual type because it appears within a visible instance.
@@ -2424,14 +2438,29 @@ package body Sem_Ch12 is
 
       --  An instantiation freezes all generic actuals, except for incomplete
       --  types and subprograms that are not fully defined at the point of
-      --  instantiation.
+      --  instantiation. If one of them is an expression function, then the
+      --  instantiation also freezes its expression (RM 13.14(10.2)).
 
       declare
-         Elmt : Elmt_Id := First_Elmt (Actuals_To_Freeze);
+         Elmt : Elmt_Id;
+         Expr : Node_Id;
 
       begin
+         Elmt := First_Elmt (Actuals_To_Freeze);
          while Present (Elmt) loop
-            Freeze_Before (N, Node (Elmt));
+            --  For technical reasons, we need an expression attached to the
+            --  tree to freeze the expression of an expression function, so
+            --  we manufacture one on the fly.
+
+            if Is_Expression_Function (Node (Elmt)) then
+               Expr := New_Occurrence_Of (Node (Elmt), Sloc (N));
+               Set_Comes_From_Source (Expr);
+               Set_Parent (Expr, N);
+               Freeze_Expression (Expr);
+            else
+               Freeze_Before (N, Node (Elmt));
+            end if;
+
             Next_Elmt (Elmt);
          end loop;
       end;
@@ -2555,18 +2584,6 @@ package body Sem_Ch12 is
                end if;
             end if;
 
-            --  If the object is a call to an expression function, this
-            --  is a freezing point for it.
-
-            if Is_Entity_Name (Match)
-              and then Present (Entity (Match))
-              and then Nkind
-                (Original_Node (Unit_Declaration_Node (Entity (Match))))
-                                               = N_Expression_Function
-            then
-               Append_Elmt (Entity (Match), Actuals_To_Freeze);
-            end if;
-
          when N_Formal_Type_Declaration =>
             if Assoc.Actual.Kind = Box_Actual then
                Process_Box_Actual (Assoc.Un_Formal);
@@ -2654,20 +2671,9 @@ package body Sem_Ch12 is
                if Ekind (Etype (Match)) /= E_Void
                  and then Is_Mutably_Tagged_Type (Etype (Match))
                then
-                  --  The declaration of the CW-equivalent type of a mutably
-                  --  tagged type is analyzed when the tagged type is frozen.
-
-                  if Nkind (N) /= N_Formal_Package_Declaration
-                    and then Ekind (Defining_Identifier (Assoc.An_Formal)) /=
-                                                              E_Incomplete_Type
-                  then
-                     Freeze_Before (N, Root_Type (Etype (Match)));
-                  end if;
-
                   Rewrite (Match, New_Occurrence_Of
                     (Class_Wide_Equivalent_Type
                       (Etype (Match)), Sloc (Match)));
-
                   Analyze (Match);
                end if;
 
@@ -2763,8 +2769,11 @@ package body Sem_Ch12 is
                if Has_Contracts (Assoc.An_Formal)
                  and then (Expander_Active or GNATprove_Mode)
                then
-                  Build_Subprogram_Wrappers
-                    (Match, Assoc.An_Formal, Result_Renamings);
+                  Build_Subprogram_Wrapper
+                    (Match             => Match,
+                     Analyzed_Formal   => Assoc.An_Formal,
+                     Unanalyzed_Formal => Assoc.Un_Formal,
+                     Renamings         => Result_Renamings);
                end if;
 
                --  An instantiation is a freeze point for the actuals,
@@ -3211,9 +3220,9 @@ package body Sem_Ch12 is
          end if;
       end if;
 
-      if Subtype_Mark (Def) in Empty | Error then
+      if not Is_Entity_Name (Subtype_Mark (Def)) then
          pragma Assert (Serious_Errors_Detected > 0);
-         --  avoid passing bad argument to Entity
+         --  Avoid passing bad argument to Entity
          return;
       end if;
 
@@ -4138,7 +4147,7 @@ package body Sem_Ch12 is
 
             Analyze (Prefix (Def));
             Valid_Default_Attribute (Nam, Def);
-            goto Leave;
+            goto Do_Aspects;
          end if;
 
          --  The default for a ghost generic formal procedure should be a ghost
@@ -4279,9 +4288,10 @@ package body Sem_Ch12 is
          End_Scope;
       end if;
 
-   <<Leave>>
+   <<Do_Aspects>>
       Analyze_Aspect_Specifications (N, Nam);
 
+   <<Leave>>
       if Parent_Installed then
          Remove_Parent;
       end if;
@@ -4735,6 +4745,8 @@ package body Sem_Ch12 is
       if Nkind (Spec) = N_Function_Specification then
          if Nkind (Result_Definition (Spec)) = N_Access_Definition then
             Result_Type := Access_Definition (Spec, Result_Definition (Spec));
+            Set_Parent (Result_Type, Result_Definition (Spec));
+            Set_Is_Local_Anonymous_Access (Result_Type);
             Set_Etype (Id, Result_Type);
 
             --  Check restriction imposed by AI05-073: a generic function
@@ -5390,16 +5402,6 @@ package body Sem_Ch12 is
                  and then (Front_End_Inlining or else Has_Inline_Always)
                  and then (Is_In_Main_Unit (N)
                             or else In_Main_Context (Current_Scope))
-                 and then Nkind (Parent (N)) /= N_Compilation_Unit
-               then
-                  Inline_Now := True;
-
-               --  In configurable_run_time mode we force the inlining of
-               --  predefined subprograms marked Inline_Always, to minimize
-               --  the use of the run-time library.
-
-               elsif In_Predefined_Unit (Gen_Decl)
-                 and then Configurable_Run_Time_Mode
                  and then Nkind (Parent (N)) /= N_Compilation_Unit
                then
                   Inline_Now := True;
@@ -6437,30 +6439,44 @@ package body Sem_Ch12 is
       if Present (Ent) then
          Rewrite_As_Renaming (N, Ent);
          Analyze (N);
+         return;
 
       --  Otherwise, create it in the outermost possible scope
 
       else
+         Scop := Current_Scope;
+
          --  Depth.Global is the accessibility depth of the structural instance
          --  which is defined to be the depth of the outermost scope where the
          --  instantiation is possible. If the depth cannot be reached from the
          --  current scope, then the structural instance cannot be accessed out
-         --  of it and we would need to create a local instance instead.
+         --  of it and we need to create a local instance instead; currently we
+         --  do it only for subprogram instantiations.
 
          if Depth.Local > Depth.Global then
-            Structural_Instantiation_Error (N);
-            Error_Msg_N ("\local entity used in the instantiation", N);
-            return;
-         end if;
+            if Nkind (N) = N_Package_Instantiation then
+               Structural_Instantiation_Error (N);
+               Error_Msg_N ("\local entity used in the instantiation", N);
+               return;
+            end if;
 
-         Scop := Current_Scope;
+            Append_Entity_Name (Buf, Scop);
+            Nam := Name_Find (Buf);
+            Ent := Get_Name_Entity_Id (Nam);
+
+            if Present (Ent) then
+               Rewrite_As_Renaming (N, Ent);
+               Analyze (N);
+               return;
+            end if;
+         end if;
 
          --  If the current scope is too nested, analyze the instantiation
          --  relocated in the outermost possible scope, which will invoke
          --  us recursively with a matching scope depth this time.
 
-         if Scope_Depth (Scop) > Depth.Global then
-            while Scope_Depth (Scop) > Depth.Global loop
+         if Scope_Depth (Scop) > Depth.Local then
+            while Scope_Depth (Scop) > Depth.Local loop
                Scop := Scope (Scop);
             end loop;
 
@@ -6503,6 +6519,17 @@ package body Sem_Ch12 is
 
          else
             Ent := Make_Defining_Identifier (Loc, Chars => Nam);
+            case Nkind (N) is
+               when N_Function_Instantiation =>
+                  Mutate_Ekind (Ent, E_Function);
+               when N_Procedure_Instantiation =>
+                  Mutate_Ekind (Ent, E_Procedure);
+               when N_Package_Instantiation =>
+                  Mutate_Ekind (Ent, E_Package);
+               when others =>
+                  raise Program_Error;
+            end case;
+            Set_Scope (Ent, Scop);
             Set_Defining_Unit_Name (N, Ent);
          end if;
       end if;
@@ -7516,12 +7543,15 @@ package body Sem_Ch12 is
       return Body_Node;
    end Build_Subprogram_Body_Wrapper;
 
-   -------------------------------
-   -- Build_Subprogram_Wrappers --
-   -------------------------------
+   ------------------------------
+   -- Build_Subprogram_Wrapper --
+   ------------------------------
 
-   procedure Build_Subprogram_Wrappers
-     (Match, Analyzed_Formal : Node_Id; Renamings : List_Id)
+   procedure Build_Subprogram_Wrapper
+     (Match             : Node_Id;
+      Analyzed_Formal   : Node_Id;
+      Unanalyzed_Formal : Node_Id;
+      Renamings         : List_Id)
    is
       function Adjust_Aspect_Sloc (N : Node_Id) return Traverse_Result;
       --  Adjust Sloc so that errors will be reported on the instance rather
@@ -7546,7 +7576,7 @@ package body Sem_Ch12 is
       Decl_Node   : Node_Id;
       Actual_Name : Node_Id;
 
-   --  Start of processing for Build_Subprogram_Wrappers
+   --  Start of processing for Build_Subprogram_Wrapper
 
    begin
       --  Create declaration for wrapper subprogram.
@@ -7579,10 +7609,11 @@ package body Sem_Ch12 is
 
       Decl_Node := Build_Subprogram_Decl_Wrapper (Formal);
 
-      --  Transfer aspect specifications from formal subprogram to wrapper
+      --  Transfer aspect specifications from the unanalyzed formal subprogram
+      --  to the wrapper for later analysis.
 
       Set_Aspect_Specifications (Decl_Node,
-        New_Copy_List_Tree (Aspect_Specifications (Analyzed_Formal)));
+        New_Copy_List_Tree (Aspect_Specifications (Unanalyzed_Formal)));
 
       Aspect_Spec := First (Aspect_Specifications (Decl_Node));
       while Present (Aspect_Spec) loop
@@ -7590,6 +7621,18 @@ package body Sem_Ch12 is
          Set_Analyzed (Aspect_Spec, False);
          Next (Aspect_Spec);
       end loop;
+
+      --  Remove the subprogram renaming declaration, which will be replaced
+      --  by the wrapper subprogram (we don't want two homographs in the same
+      --  scope, and the renaming will be overridden by the wrapper). We test
+      --  that the actual is present and not defaulted, and in the latter case
+      --  we don't remove the declaration, which may be an internal subprogram
+      --  body rather than a renaming (such as created for a "null" default),
+      --  and that body must be kept.
+
+      if Is_Entity_Name (Match) then
+         Remove (Last (Renamings));
+      end if;
 
       Append_To (Renamings, Decl_Node);
 
@@ -7600,7 +7643,7 @@ package body Sem_Ch12 is
 
       Append_To (Renamings,
         Build_Subprogram_Body_Wrapper (Formal, Actual_Name));
-   end Build_Subprogram_Wrappers;
+   end Build_Subprogram_Wrapper;
 
    -------------------------------------------
    -- Build_Instance_Compilation_Unit_Nodes --
@@ -9246,15 +9289,19 @@ package body Sem_Ch12 is
            and then (not In_Open_Scopes (Scope (Typ))
                       or else Nkind (Parent (N)) = N_Subtype_Declaration)
          then
+            --  In the generic unit, only the private declaration was visible,
+            --  so restore the partial view of Typ when there was an explicit
+            --  declaration of its full view.
+
             declare
-               Assoc : constant Node_Id := Get_Associated_Node (N);
+               Priv_Typ : constant Entity_Id :=
+                 Incomplete_Or_Partial_View (Typ, Partial_Only => True);
 
             begin
-               --  In the generic, only the private declaration was visible
-
-               Prepend_Elmt (Typ, Exchanged_Views);
-               Exchange_Declarations
-                 (if Comparison then Compare_Type (Assoc) else Etype (Assoc));
+               if Present (Priv_Typ) then
+                  Prepend_Elmt (Typ, Exchanged_Views);
+                  Exchange_Declarations (Priv_Typ);
+               end if;
             end;
 
          --  Check that the available views of Typ match their respective flag.
@@ -10452,11 +10499,11 @@ package body Sem_Ch12 is
    ----------------------
 
    function Find_Actual_Type
-     (Typ      : Entity_Id;
-      Gen_Type : Entity_Id;
-      Typ_Ref  : Node_Id) return Entity_Id
+     (Typ     : Entity_Id;
+      Gen_Typ : Entity_Id;
+      Typ_Ref : Node_Id) return Entity_Id
    is
-      Gen_Scope : constant Entity_Id := Scope (Gen_Type);
+      Gen_Scope : constant Entity_Id := Scope (Gen_Typ);
 
    begin
       --  Special processing only applies to child units
@@ -15730,7 +15777,7 @@ package body Sem_Ch12 is
             Act_T := Full_View (Act_T);
             Set_Entity (Actual, Act_T);
 
-            if Has_Private_Component (Act_T) then
+            if Is_Incompletely_Defined (Act_T) then
                Error_Msg_N
                  ("premature use of type with private component", Actual);
             end if;
@@ -15748,7 +15795,7 @@ package body Sem_Ch12 is
          then
             Error_Msg_N ("premature use of private type", Actual);
 
-         elsif Has_Private_Component (Act_T) then
+         elsif Is_Incompletely_Defined (Act_T) then
             Error_Msg_N
               ("premature use of type with private component", Actual);
          end if;
@@ -16455,10 +16502,6 @@ package body Sem_Ch12 is
 
                if Is_Type (E1) and then Is_Tagged_Type (E2) then
                   Set_Instance_Of (Class_Wide_Type (E1), Class_Wide_Type (E2));
-               end if;
-
-               if Is_Constrained (E1) then
-                  Set_Instance_Of (Base_Type (E1), Base_Type (E2));
                end if;
 
                if Ekind (E1) = E_Package and then No (Renamed_Entity (E1)) then
@@ -18622,22 +18665,10 @@ package body Sem_Ch12 is
          elsif No (Full_View (Typ)) and then Typ /= Etype (Typ) then
             null;
 
-         --  Otherwise mark the type for flipping and set the full view on N2
-         --  when available, which is necessary for Check_Private_View to swap
-         --  back the views in case the full declaration of Typ is visible in
-         --  the instantiation context. Note that this will be problematic if
-         --  N2 is re-analyzed later, e.g. if it's a default value in a call.
+         --  Otherwise mark the node as seeing the private view
 
          else
             Set_Has_Private_View (N);
-
-            if Present (Full_View (Typ)) then
-               if Comparison then
-                  Set_Compare_Type (N2, Full_View (Typ));
-               else
-                  Set_Etype (N2, Full_View (Typ));
-               end if;
-            end if;
          end if;
 
          if Is_Floating_Point_Type (Typ)

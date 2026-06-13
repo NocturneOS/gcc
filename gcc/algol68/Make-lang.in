@@ -61,11 +61,13 @@ ALGOL68_OBJS = algol68/a68-lang.o \
                algol68/a68-unistr.o \
                algol68/a68-moids-diagnostics.o \
                algol68/a68-moids-misc.o \
+               algol68/a68-moids-sorting.o \
                algol68/a68-moids-to-string.o \
                algol68/a68-postulates.o \
                algol68/a68-diagnostics.o \
                algol68/a68-exports.o \
                algol68/a68-imports.o \
+               algol68/a68-imports-archive.o \
                algol68/a68-parser.o \
                algol68/a68-parser-keywords.o \
                algol68/a68-parser-bottom-up.o \
@@ -103,12 +105,12 @@ ALGOL68_OBJS = algol68/a68-lang.o \
                algol68/a68-low-reals.o \
                algol68/a68-low-complex.o \
                algol68/a68-low-bits.o \
-               algol68/a68-low-posix.o \
                algol68/a68-low-prelude.o \
                algol68/a68-low-ranges.o \
                algol68/a68-low-runtime.o \
                algol68/a68-low-unions.o \
                algol68/a68-low-units.o \
+               algol68/a68-low-holes.o \
                $(END)
 
 ALGOL68_ALL_OBJS = $(ALGOL68_OBJS)
@@ -217,7 +219,7 @@ ga68.pod: algol68/ga68.texi
 algol68.srcextra:
 
 algol68.all.cross: ga68$(exeext)
-algol68.start.encap: ga68$(exeect)
+algol68.start.encap: ga68$(exeext)
 algol68.rest.encap:
 algol68.info: doc/ga68.info doc/ga68-internals.info doc/ga68-coding-guidelines.info
 algol68.dvi: doc/ga68.dvi doc/ga68-internals.dvi doc/ga68-coding-guidelines.dvi
@@ -277,10 +279,10 @@ algol68.install-info: $(DESTDIR)$(infodir)/ga68.info \
                       $(DESTDIR)$(infodir)/ga68-coding-guidelines.info
 
 algol68.install-html: $(build_htmldir)/ga68 $(build_htmldir)/ga68-internals \
-                      $(build_htmldir)/ga68-coding-guidelines.info
+                      $(build_htmldir)/ga68-coding-guidelines
 	@$(NORMAL_INSTALL)
 	test -z "$(htmldir)" || $(mkinstalldirs) "$(DESTDIR)$(htmldir)"
-	@for p in $(build_htmldir)/ga68; do \
+	@for p in $(build_htmldir)/ga68 $(build_htmldir)/ga68-internals $(build_htmldir)/ga68-coding-guidelines; do \
 	  if test -f "$$p" || test -d "$$p"; then d=""; else d="$(srcdir)/"; fi; \
 	  f=$(html__strip_dir) \
 	  if test -d "$$d$$p"; then \

@@ -151,7 +151,8 @@ typedef struct LOW_CTX_T LOW_CTX_T;
 /* Type of the lowerer routines defined in a68-low-prelude.cc.  */
 typedef tree (*LOWERER_T) (struct NODE_T *, struct LOW_CTX_T);
 
-#define NO_LOWERER a68_lower_unimplemented
+#define NO_LOWERER NULL
+#define LOWERER_UNIMPL a68_lower_unimplemented
 
 struct GTY((chain_next ("%h.more"), chain_prev ("%h.less"))) KEYWORD_T
 {
@@ -163,13 +164,13 @@ struct GTY((chain_next ("%h.more"), chain_prev ("%h.less"))) KEYWORD_T
 /* A MOID_T represents a mode indicator.
 
    NUMBER is an unique number assigned to the moid when it gets created.  A
-   renumber_moids function exists in a68-parser-modes.cc but it dosn't seem to
+   renumber_moids function exists in a68-parser-modes.cc but it doesn't seem to
    be used at all.
 
    ATTRIBUTE characterizes the kind of mode and is one of the values defined in
    a68-parser-attrs.def.  Valid values are:
 
-     PROC_SYMBOL for procecure modes.
+     PROC_SYMBOL for procedure modes.
      ROWS_SYMBOL for row modes.
      REF_SYMBOL for reference modes.
      FLEX_SYMBOL for flexible reference modes.
@@ -199,7 +200,7 @@ struct GTY((chain_next ("%h.more"), chain_prev ("%h.less"))) KEYWORD_T
    The interpretation of DIM depends on the kind of mode:
    - In VOID_SYMBOL, STANDARD or INDICANT mode, if DIM is positive it
      specifies the size of the longsety of the mode.  If DIM is negative then
-     abs (DIM) is the size of hte shortsety of the mode.
+     abs (DIM) is the size of the shortsety of the mode.
    - In ROW modes, DIM is the number of dimensions.
    - In STRUCT modes, DIM is the number of fields.
    - In UNION modes, DIM is the number of united modes.
@@ -342,7 +343,7 @@ struct GTY(()) OPTIONS_T
    value of access DIRIDEN.
 
    DIRWOST (direct working stack) is very much like DIRIDEN, except that the
-   value is stored in WOST% rathern than in IDST%.  This access is used for the
+   value is stored in WOST% rather than in IDST%.  This access is used for the
    result of an action when this result does not preexist in memory and hence
    has to be constructed in WOST%.
 
@@ -435,7 +436,9 @@ struct GTY(()) OPTIONS_T
    DEFINING_INDICANT nodes that appear in declarations marked with PUB.
 
    CDECL is a GCC GENERIC tree corresponding to a DECL_FIELD for FIELD
-   nodes.  */
+   nodes.
+
+   NEGATED is used to mark DENOTATION nodes as being negated.  */
 
 struct GTY((chain_next ("%h.next"), chain_prev ("%h.previous"))) NODE_T
 {
@@ -455,6 +458,7 @@ struct GTY((chain_next ("%h.next"), chain_prev ("%h.previous"))) NODE_T
   tree cdecl;
   bool dynamic_stack_allocs;
   bool publicized;
+  bool negated;
 };
 
 #define NO_NODE ((NODE_T *) 0)
@@ -466,7 +470,7 @@ struct GTY((chain_next ("%h.next"), chain_prev ("%h.previous"))) NODE_T
    routine texts.  This attribute is set for all the nodes in the syntax tree
    by the taxes collector and originally used by ALGOL 68 Genie's monitor.
    Even if at the moment this is not used by GCC, this field and the
-   correponding machinery is still here in case it is useful in the future.
+   corresponding machinery is still here in case it is useful in the future.
 
    PRIORITY (accessed as PRIO) is used by operator tree nodes and specifies the
    priority of the operator denoted by the node.  This is set tree wide by the
@@ -596,6 +600,11 @@ struct GTY(()) TABLE_T
    are optimized in a similar way than variable declarations in order to avoid
    indirect addressing.
 
+   NEST_PROC is set when the defining identifier has been set in an
+   identity-declaration of a proc mode with a formal hole as actual parameter.
+   These declarations are optimized in a similar way than variable declarations
+   in order to avoid indirect addressing.
+
    YOUNGEST_ENVIRON is used when NODE is either a ROUTINE_TEXT or a
    FORMAT_TEXT, and contains the youngest (higher) lexical level of any object
    directly declared in the routine or format body.  This is filled in and used
@@ -620,7 +629,7 @@ struct GTY((chain_next ("%h.next"))) TAG_T
   MOID_T *type;
   NODE_T *node, *unit;
   const char *value;
-  bool scope_assigned, use, in_proc, loc_assigned, portable, variable;
+  bool scope_assigned, use, in_proc, nest_proc, loc_assigned, portable, variable;
   bool ascribed_routine_text, is_recursive, publicized;
   int priority, heap, scope, youngest_environ, number;
   STATUS_MASK_T status;
@@ -759,7 +768,7 @@ struct MODE_CACHE_T
    buffer is known to be big enough to hold any substring from the source file.
    It is initialized in read_source_file.
 
-   MAX_SCAN_BUF_LENGTH is the useable size of SCAN_BUF.  This is used by the
+   MAX_SCAN_BUF_LENGTH is the usable size of SCAN_BUF.  This is used by the
    scanner to grow SCAN_BUF as it includes other files.
 
    TAG_NUMBER is a global counter used by the parser to assign an unique number
@@ -1013,6 +1022,7 @@ struct GTY(()) A68_T
 #define MULTIPLE_MODE(p) ((p)->multiple_mode)
 #define NAME(p) ((p)->name)
 #define NEST(p) ((p)->nest)
+#define NEST_PROC(p) ((p)->nest_proc)
 #define NEXT(p) ((p)->next)
 #define NEXT_NEXT(p) (NEXT (NEXT (p)))
 #define NEXT_NEXT_NEXT(p) (NEXT (NEXT_NEXT (p)))
@@ -1029,6 +1039,7 @@ struct GTY(()) A68_T
 #define NCOMMENT_CHAR_IN_LINE(p) (COMMENT_CHAR_IN_LINE (INFO (p)))
 #define NCOMMENT_LINE(p) (COMMENT_LINE (INFO (p)))
 #define NCOMMENT_TYPE(p) (COMMENT_TYPE (INFO (p)))
+#define NEGATED(p) ((p)->negated)
 #define NPRAGMAT(p) (PRAGMAT (INFO (p)))
 #define NPRAGMAT_CHAR_IN_LINE(p) (PRAGMAT_CHAR_IN_LINE (INFO (p)))
 #define NPRAGMAT_LINE(p) (PRAGMAT_LINE (INFO (p)))

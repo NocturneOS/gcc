@@ -44,6 +44,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "opts.h"
 #include "gcc-urlifier.h"
 #include "contracts.h" // build_contract_check ()
+#include "builtins.h"
 
 /* Keep track of forward references to immediate-escalating functions in
    case they become consteval.  This vector contains ADDR_EXPRs and
@@ -880,7 +881,29 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	      = build1 (NOP_EXPR, fnptrtype, CALL_EXPR_FN (*expr_p));
 	}
       if (!CALL_EXPR_FN (*expr_p))
-	/* Internal function call.  */;
+	/* Internal function call.  */
+	switch (CALL_EXPR_IFN (*expr_p))
+	  {
+	  case IFN_BSWAP:
+	  case IFN_BITREVERSE:
+	    if (ret == GS_OK)
+	      {
+		location_t loc = EXPR_LOCATION (*expr_p);
+		internal_fn ifn = CALL_EXPR_IFN (*expr_p);
+		tree arg = CALL_EXPR_ARG (*expr_p, 0);
+		tree r = fold_build_builtin_bswapg_bitreverseg (loc, ifn,
+								arg);
+		if (TREE_CODE (r) == CALL_EXPR
+		    && !CALL_EXPR_FN (r)
+		    && CALL_EXPR_IFN (r) == ifn)
+		  break;
+		*expr_p = r;
+		return ret;
+	      }
+	    break;
+	  default:
+	    break;
+	  }
       else if (CALL_EXPR_REVERSE_ARGS (*expr_p))
 	{
 	  /* This is a call to a (compound) assignment operator that used
@@ -921,7 +944,15 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 	  tree fntype = TREE_TYPE (CALL_EXPR_FN (*expr_p));
 	  if (INDIRECT_TYPE_P (fntype))
 	    fntype = TREE_TYPE (fntype);
-	  if (TREE_CODE (fntype) == METHOD_TYPE)
+	  tree decl = cp_get_callee_fndecl_nofold (*expr_p);
+	  /* We can't just rely on 'decl' because virtual function callees
+	     are expressed as OBJ_TYPE_REF.  Note that the xobj memfn check
+	     will also hold for calls of the form (&A::f)(a, ...) which does
+	     not require such sequencing, though it's allowed under
+	     "indeterminately sequenced".  */
+	  if (TREE_CODE (fntype) == METHOD_TYPE
+	      || (decl && DECL_LANG_SPECIFIC (decl)
+		  && DECL_XOBJ_MEMBER_FUNCTION_P (decl)))
 	    {
 	      int nargs = call_expr_nargs (*expr_p);
 	      bool side_effects = false;
@@ -971,12 +1002,41 @@ cp_gimplify_expr (tree *expr_p, gimple_seq *pre_p, gimple_seq *post_p)
 			  "__builtin_eh_ptr_adjust_ref");
 		*expr_p = void_node;
 		break;
+	      case CP_BUILT_IN_CURRENT_EXCEPTION:
+	      case CP_BUILT_IN_UNCAUGHT_EXCEPTIONS:
+		{
+		  const char *name
+		    = (DECL_FE_FUNCTION_CODE (decl)
+		       == CP_BUILT_IN_CURRENT_EXCEPTION
+		       ? "current_exception" : "uncaught_exceptions");
+		  tree newdecl = lookup_qualified_name (std_node, name);
+		  if (error_operand_p (newdecl))
+		    *expr_p = build_zero_cst (TREE_TYPE (*expr_p));
+		  else if (TREE_CODE (newdecl) != FUNCTION_DECL
+			   || !same_type_p (TREE_TYPE (TREE_TYPE (newdecl)),
+					    TREE_TYPE (TREE_TYPE (decl)))
+			   || (TYPE_ARG_TYPES (TREE_TYPE (newdecl))
+			       != void_list_node))
+		    {
+		      error_at (EXPR_LOCATION (*expr_p),
+				"unexpected %<std::%s%> declaration",
+				name);
+		      *expr_p = build_zero_cst (TREE_TYPE (*expr_p));
+		    }
+		  else
+		    *expr_p = build_call_expr_loc (EXPR_LOCATION (*expr_p),
+						   newdecl, 0);
+		  break;
+		}
 	      case CP_BUILT_IN_IS_STRING_LITERAL:
 		*expr_p
 		  = fold_builtin_is_string_literal (EXPR_LOCATION (*expr_p),
 						    call_expr_nargs (*expr_p),
 						    &CALL_EXPR_ARG (*expr_p,
 								    0));
+		break;
+	      case CP_BUILT_IN_CONSTEXPR_DIAG:
+		*expr_p = void_node;
 		break;
 	      default:
 		break;
@@ -1680,7 +1740,8 @@ cp_fold_r (tree *stmt_p, int *walk_subtrees, void *data_)
       break;
 
     case TARGET_EXPR:
-      if (!flag_no_inline)
+      if (!flag_no_inline
+	  && (data->flags & ff_genericize))
 	if (tree &init = TARGET_EXPR_INITIAL (stmt))
 	  {
 	    tree folded = maybe_constant_init (init, TARGET_EXPR_SLOT (stmt),
@@ -1912,6 +1973,16 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
     {
       *walk_subtrees = 0;
       return NULL_TREE;
+    }
+
+  if ((TREE_CODE (stmt) == VAR_DECL
+       || TREE_CODE (stmt) == PARM_DECL
+       || TREE_CODE (stmt) == RESULT_DECL)
+      && DECL_HAS_VALUE_EXPR_P (stmt))
+    {
+      tree ve = DECL_VALUE_EXPR (stmt);
+      cp_walk_tree (&ve, cp_genericize_r, data, NULL);
+      SET_DECL_VALUE_EXPR (stmt, ve);
     }
 
   switch (TREE_CODE (stmt))
@@ -3136,26 +3207,21 @@ cp_fold_maybe_rvalue (tree x, bool rval, fold_flags_t flags)
 {
   while (true)
     {
+      if (rval && (flags & ff_only_non_odr))
+	x = cp_fold_non_odr_use_1 (x);
       x = cp_fold (x, flags);
       if (rval)
-	x = mark_rvalue_use (x);
-      if (rval && (flags & ff_only_non_odr))
 	{
-	  tree v = cp_fold_non_odr_use_1 (x);
-	  if (v != x)
+	  x = mark_rvalue_use (x);
+	  if (!(flags & ff_only_non_odr)
+	      && DECL_P (x) && !TYPE_REF_P (TREE_TYPE (x)))
 	    {
-	      x = v;
-	      continue;
-	    }
-	}
-      else if (rval && DECL_P (x)
-	       && !TYPE_REF_P (TREE_TYPE (x)))
-	{
-	  tree v = decl_constant_value (x);
-	  if (v != x && v != error_mark_node)
-	    {
-	      x = v;
-	      continue;
+	      tree v = decl_constant_value (x);
+	      if (v != x && v != error_mark_node)
+		{
+		  x = v;
+		  continue;
+		}
 	    }
 	}
       break;
@@ -3419,9 +3485,9 @@ cp_fold (tree x, fold_flags_t flags)
 	 used as lvalues.  */
       if ((flags & ff_only_non_odr) && REFERENCE_REF_P (x))
 	{
-	  tree r = cp_fold_non_odr_use_1 (x);
-	  if (r != x)
-	    return convert_from_reference (cp_fold (r, flags));
+	  op0 = cp_fold_non_odr_use_1 (TREE_OPERAND (x, 0));
+	  if (op0 != TREE_OPERAND (x, 0))
+	    return convert_from_reference (cp_fold (op0, flags));
 	}
       goto unary;
 
@@ -3568,7 +3634,11 @@ cp_fold (tree x, fold_flags_t flags)
 	  if (op0 == error_mark_node || op1 == error_mark_node)
 	    x = error_mark_node;
 	  else if (op0 != TREE_OPERAND (x, 0) || op1 != TREE_OPERAND (x, 1))
-	    x = build2_loc (loc, code, TREE_TYPE (x), op0, op1);
+	    {
+	      if (code == INIT_EXPR && op1 != TREE_OPERAND (x, 1))
+		set_target_expr_eliding (op1);
+	      x = build2_loc (loc, code, TREE_TYPE (x), op0, op1);
+	    }
 	  break;
 	}
 
@@ -3717,6 +3787,7 @@ cp_fold (tree x, fold_flags_t flags)
 	if ((OPTION_SET_P (flag_fold_simple_inlines)
 	     ? flag_fold_simple_inlines
 	     : !flag_no_inline)
+	    && !(flags & ff_only_non_odr)
 	    && call_expr_nargs (x) == 1
 	    && decl_in_std_namespace_p (callee)
 	    && DECL_NAME (callee) != NULL_TREE
@@ -3829,6 +3900,7 @@ cp_fold (tree x, fold_flags_t flags)
 	   Do constexpr expansion of expressions where the call itself is not
 	   constant, but the call followed by an INDIRECT_REF is.  */
 	if (callee && DECL_DECLARED_CONSTEXPR_P (callee)
+	    && !(flags & ff_only_non_odr)
 	    && (!flag_no_inline
 		|| lookup_attribute ("always_inline",
 				     DECL_ATTRIBUTES (callee))))

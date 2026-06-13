@@ -65,12 +65,23 @@ enum riscv_microarchitecture_type {
   andes_23_series,
   andes_45_series,
   spacemit_x60,
+  arcv_rmx100,
+  arcv_rhx100,
+  xt_c908
 };
 extern enum riscv_microarchitecture_type riscv_microarchitecture;
 
 enum riscv_align_data {
   riscv_align_data_type_xlen,
   riscv_align_data_type_natural
+};
+
+/* Alignment policy for Zilsd 2 * XLEN memory accesses.  */
+enum riscv_zilsd_align_type {
+  RISCV_ZILSD_ALIGN_DEFAULT,
+  RISCV_ZILSD_ALIGN_BYTE,
+  RISCV_ZILSD_ALIGN_WORD,
+  RISCV_ZILSD_ALIGN_STRICT
 };
 
 /* Where to get the canary for the stack protector.  */
@@ -90,6 +101,13 @@ enum rvv_max_lmul_enum {
   /* For dynamic LMUL based on conversions, set LMUL based on
      type size ratio.  */
   RVV_CONV_DYNAMIC = 10
+};
+
+/* ARC-V multiply option.  */
+enum arcv_mpy_option_enum {
+  ARCV_MPY_OPTION_1C = 1,
+  ARCV_MPY_OPTION_2C = 2,
+  ARCV_MPY_OPTION_10C = 8,
 };
 
 enum riscv_multilib_select_kind {
@@ -172,8 +190,11 @@ enum riscv_tls_type {
 #define TARGET_VECTOR_AUTOVEC_SEGMENT					       \
   (TARGET_VECTOR && riscv_mautovec_segment)
 
-#define GPR2VR_COST_UNPROVIDED -1
-#define FPR2VR_COST_UNPROVIDED -1
+#define COST_UNPROVIDED -1
+#define GPR2VR_COST_UNPROVIDED COST_UNPROVIDED
+#define VR2GPR_COST_UNPROVIDED COST_UNPROVIDED
+#define FPR2VR_COST_UNPROVIDED COST_UNPROVIDED
+#define VR2FPR_COST_UNPROVIDED COST_UNPROVIDED
 
 /* Extra extension flags, used for carry extra info for a RISC-V extension.  */
 enum

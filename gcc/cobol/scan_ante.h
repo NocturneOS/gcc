@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -396,14 +396,33 @@ class enter_leave_t {
   }
 };
 
-static class input_file_status_t {
+/*
+ * The lexer knows the immediate status of the input file and its line number
+ * from the PUSH, POP, and LINE directives.  It saves yylineno whenever it
+ * encounters a PUSH, and updates it for a POP.  
+ *
+ * The line number trickles into the parser by way of location.  Only the
+ * parser knows what token it is parsing.  As for the filename, the lexer
+ * queues enter/leave notices for the parser.  
+ *
+ * Whenever the parser fetches a token, it gets the current line number from
+ * yylineno, and the current filename by depleting the notification queue, if
+ * any, and using the last one.
+ */
+class input_file_status_t {
+ public:
+  struct input_pos_t { int lineno; const char *filename; };
+ private:
   std::queue <enter_leave_t> inputs;
+  std::stack<input_pos_t> positions;
  public:
   void enter(const char *filename) {
     inputs.push( enter_leave_t(parser_enter_file, filename) );
+    positions.push( input_pos_t{ yylineno, filename } );
   }
   void leave() {
     inputs.push( enter_leave_t(parser_leave_file) );
+    positions.pop();
   }
   void notify() {
     while( ! inputs.empty() ) {
@@ -412,7 +431,10 @@ static class input_file_status_t {
       inputs.pop();
     }
   }
-} input_file_status;
+  input_pos_t pending() const { assert( ! positions.empty() ); return positions.top(); }
+};
+
+static input_file_status_t input_file_status;
 
 void input_file_status_notify() { input_file_status.notify(); }
 
@@ -636,12 +658,11 @@ binary_integer_usage( const char name[]) {
 }
       
 static void
-verify_ws( const YYLTYPE& loc, const char [] /* input[] */, char ch ) {
+verify_ws( char ch ) {
   if( ! fisspace(ch) ) {
-    dialect_ok(loc, LexSeparatorE, "missing separator space");
+    dialect_ok(yylloc, LexSeparatorE, "missing separator space");
   }
 }
-#define verify_ws(C) verify_ws(yylloc, yytext, C)
 
 int
 binary_integer_usage_of( const char name[] ) {
@@ -1092,9 +1113,14 @@ bool need_nume_set( bool tf ) {
 
 static int datetime_format_of( const char input[] );
 
-static int symbol_function_token( const char name[] ) {
-  const auto e = symbol_function( 0, name );
-  return e ? symbol_index(e) : 0;
+static int
+symbol_function_token( const char name[] ) {
+  const auto L = symbol_function_any( 0, name );
+  if( L ) {
+    auto e = symbol_elem_of(L);
+    return symbol_index(e);
+  }
+  return 0;
 }
 
 bool in_procedure_division(void );
@@ -1110,7 +1136,7 @@ symbol_exists( const char name[] ) {
 
   if( in_procedure_division() && cache.empty() ) {
     for( auto e = symbols_begin(PROGRAM) + 1;
-         PROGRAM == e->program && e < symbols_end(); e++ ) {
+         e < symbols_end() && PROGRAM == e->program; e++ ) {
       if( e->type == SymFile ) {
         cbl_file_t *f(cbl_file_of(e));
         cbl_name_t lname;
@@ -1145,6 +1171,16 @@ typed_name( const char name[] ) {
   int token = repository_function_tok(name);
   switch(token) {
   case 0:
+    if(false) // we don't know how to do this yet. 
+    { // Functions in the symbol table may be used without the FUNCTION keyword. 
+      cbl_label_t *L = symbol_function_any(0, name);
+      if( L ) {
+        auto args = prototype_args(L->name);
+        token = args.second && args.first.empty() ? FUNCTION_UDF_0 : FUNCTION_UDF;
+        yylval.number = symbol_function_token(name);
+        return token;
+      }
+    }
     break;
   case FUNCTION_UDF_0:
     yylval.number = symbol_function_token(name);
@@ -1253,8 +1289,52 @@ integer_of( const char input[], bool is_hex = false) {
   return output;
 }
 
+/*
+ * Loosely parse what might be a refmod expression.  This is used to decide
+ * whether to indicate a refmod to the parser with an LPAREN token, or not,
+ * with a '(' token.  The input is known to have a first line that begins with
+ * '('., includes ':', and ends with ')'.
+ *
+ * Single forward pass: track paren depth, require exactly one ':' at depth 1,
+ * skip quoted regions (doubled quote is escape).  Allows arithmetic and
+ * parentheses in the left part, e.g. ((LENGTH OF x/2) - (y/2)) : 1.
+ */
+static bool
+is_refmod( const char input[], const char enput[] ) {
+	if( input == enput || *input != '(' ) return false;
+	int depth = 0;
+	bool colon_at_depth1 = false;
+	const char *p = input;
 
-
-
-
-
+	while( p < enput ) {
+		char ch = *p++;
+		if( ch == '"' || ch == '\'' ) {
+			/* Skip quoted region; doubled quote is escape.  */
+			const char quote = ch;
+			while( p < enput ) {
+				ch = *p++;
+				if( ch == quote ) {
+					if( p < enput && *p == quote ) { p++; continue; }
+					break;
+				}
+			}
+			continue;
+		}
+		if( ch == '(' ) {
+			depth++;
+			continue;
+		}
+		if( ch == ')' ) {
+			depth--;
+			if( depth < 0 ) return false;
+			if( depth == 0 ) return colon_at_depth1;
+			continue;
+		}
+		if( ch == ':' && depth == 1 ) {
+			if( colon_at_depth1 ) return false;
+			colon_at_depth1 = true;
+			continue;
+		}
+	}
+	return false;
+}

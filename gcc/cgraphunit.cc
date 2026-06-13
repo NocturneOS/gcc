@@ -739,7 +739,7 @@ process_symver_attribute (symtab_node *n)
 
   for (; value != NULL; value = TREE_CHAIN (value))
     {
-      /* Starting from bintuils 2.35 gas supports:
+      /* Starting from binutils 2.35 gas supports:
 	  # Assign foo to bar@V1 and baz@V2.
 	  .symver foo, bar@V1
 	  .symver foo, baz@V2
@@ -1111,10 +1111,13 @@ check_global_declaration (symtab_node *snode)
       if (warning_suppressed_p (decl, OPT_Wunused))
 	;
       else if (snode->referred_to_p (/*include_self=*/false))
-	pedwarn (input_location, 0, "%q+F used but never defined", decl);
-      else
-	warning (OPT_Wunused_function, "%q+F declared %<static%> but never "
-				       "defined", decl);
+	{
+	  if (pedwarn (input_location, 0, "%q+F used but never defined", decl))
+	    suppress_warning (decl, OPT_Wunused);
+	}
+      else if (warning (OPT_Wunused_function,
+			"%q+F declared %<static%> but never defined", decl))
+	suppress_warning (decl, OPT_Wunused);
     }
 
   /* Warn about static fns or vars defined but not used.  */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -143,17 +143,16 @@ class cdf_directives_t
 {
   template <typename T>
   class cdf_stack_t : private std::stack<T> { // cppcheck-suppress noConstructor
-    T default_value;
+    T current_value;
     const T& top() const { return std::stack<T>::top(); }
     bool empty() const { return std::stack<T>::empty(); }
    public:
     void value( const T& value ) {
-      T& output( empty()? default_value : std::stack<T>::top() ); // cppcheck-suppress constVariableReference
-      output = value;
-      dbgmsg("cdf_directives_t::%s: %s", __func__, str(output).c_str());
+      current_value = value;
+      dbgmsg("cdf_directives_t::%s: %s", __func__, str(current_value).c_str());
     }
     T& value() {
-      return empty()? default_value : std::stack<T>::top();
+      return current_value;
     }
     void push() {
       std::stack<T>::push(value());
@@ -164,9 +163,9 @@ class cdf_directives_t
         error_msg(YYLTYPE(), "CDF stack empty"); // cppcheck-suppress syntaxError
         return;
       }
-      default_value = top();
+      current_value = top();
       std::stack<T>::pop();
-      dbgmsg("cdf_directives_t::%s: %s", __func__, str(default_value).c_str());
+      dbgmsg("cdf_directives_t::%s: %s", __func__, str(current_value).c_str());
     }
   protected:
     static std::string str(cbl_call_convention_t arg) {
@@ -234,9 +233,55 @@ cdf_dictionary() {
   return cdf_directives.dictionary.value();
 }
 
+// elements permitted in a program or function prototype
+static const std::set<dspc_t> prototype_elements {
+  dspc_identification_div_e,
+  dspc_options_para_e, 
+  ////_arithmetic_clause_e, disallowed
+  dspc_default_rounded_clause_e, 
+  dspc_entry_convention_clause_e, 
+  dspc_float_binary_clause_e, 
+  dspc_float_decimal_clause_e, 
+  dspc_initialize_clause_e, 
+  dspc_intermediate_rounding_clause_e, 
+
+  dspc_environment_div_e,
+  dspc_configuration_section_e, 
+  dspc_source_computer_paragraph_e, 
+  ////_object_computer_paragraph_e, disallowed
+  
+  // permitted special names clauses
+  dspc_special_names_paragraph_e, 
+  dspc_alphabet_name_clause_e, 
+  dspc_currency_sign_clause_e, 
+  dspc_decimal_point_is_comma_clause_e, 
+  dspc_locale_clause_e, 
+  dspc_symbolic_characters_clause_e, 
+
+  // no i-o section, and we assume no repository paragraph
+
+  dspc_data_div_e,
+  dspc_linkage_section_e,
+  
+  dspc_procedure_div_e, // only header is allowed
+  dspc_procedure_header_e,
+};
+
+bool
+cbl_prototype_ok( const cbl_loc_t& loc, size_t iprog, dspc_t clause ) {
+  bool prototyping = cbl_label_of(symbol_at(iprog))->prototype;
+  if( prototyping && 0 == prototype_elements.count(clause) ) {
+    error_msg( loc, "syntax not allowed for PROTOTYPE" ); 
+    return false;
+  }
+  return true;
+}
+
 void
 cobol_set_indicator_column( int column ) {
   cdf_directives.source_format.value().indicator_column_set(column);
+  dbgmsg("%s: format now %s", __func__,
+         cdf_directives.source_format.value().description());
 }
 source_format_t& cdf_source_format() {
   return cdf_directives.source_format.value();
@@ -252,20 +297,30 @@ void cdf_push_call_convention() { cdf_directives.call_convention.push(); }
 void cdf_push_current_tokens() { cdf_directives.cobol_words.push(); }
 void cdf_push_dictionary() { cdf_directives.dictionary.push(); }
 void cdf_push_enabled_exceptions() { cdf_directives.enabled_exceptions.push(); }
-void cdf_push_source_format() { cdf_directives.source_format.push(); }
+void cdf_push_source_format() {
+  cdf_directives.source_format.push();
+  dbgmsg("%s: format still %s", __func__,
+         cdf_directives.source_format.value().description());
+}
 
 void cdf_pop() { cdf_directives.pop(); }
 void cdf_pop_call_convention() { cdf_directives.call_convention.pop(); }
 void cdf_pop_current_tokens() { cdf_directives.cobol_words.pop(); }
 void cdf_pop_dictionary() { cdf_directives.dictionary.pop(); }
 void cdf_pop_enabled_exceptions() { cdf_directives.enabled_exceptions.pop(); }
-void cdf_pop_source_format() { cdf_directives.source_format.pop(); }
+void cdf_pop_source_format() {
+  cdf_directives.source_format.pop();
+  dbgmsg("%s: format now %s", __func__,
+         cdf_directives.source_format.value().description());
+}
 
 /*
  * Construct a cbl_field_t from a CDF literal, to be installed in the symbol table.
  */
 cbl_field_t
-cdf_literalize( const std::string& name, const cdfval_t& value ) {
+cdf_literalize( const cbl_loc_t& loc,
+                const std::string& name, const cdfval_t& value,
+                bool set_initial ) {
     cbl_field_t field;
 
     if( value.is_numeric() ) {
@@ -274,15 +329,19 @@ cdf_literalize( const std::string& name, const cdfval_t& value ) {
       cbl_field_data_t data(len, len, len,0, initial); // digits == len, no rdigits
       data.valify();
       field = cbl_field_t{ FldLiteralN, constant_e, data, 0, name.c_str()};
+      field.codeset.set();
     } else {
       auto len = strlen(value.string);
       cbl_field_data_t data(len, len);
       data.original(xstrdup(value.string));
       field = cbl_field_t{ FldLiteralA, constant_e, data, 0, name.c_str() };
       field.set_attr(quoted_e);
+      field.codeset.set();
+      if( set_initial ) {
+        field.set_initial(loc);
+      }
     }
 
-    field.codeset.set();
     return field;
 }
 
@@ -295,7 +354,7 @@ cdf_literalize() {
     std::string name(elem.first);
     const cdfval_t& value(elem.second);
 
-    fields.push_back(cdf_literalize(name, value));
+    fields.push_back(cdf_literalize(cbl_loc_t(), name, value, false));
   }
   return fields;
 }
@@ -948,11 +1007,9 @@ symbol_field_type_update( cbl_field_t *field,
     case FldSwitch:
       gcc_unreachable();
     case FldAlphanumeric:
-      // MF allows PIC X(n) to have USAGE COMP-[5x]
+      // MF and GNU allow pic x usage comp-5.
+      // Dialect enforcement in that case is in field_binary_usage.
       if( candidate != FldNumericBin5 ) return false;
-      if( ! (dialect_mf() && field->has_attr(all_x_e)) ) {
-        return false;
-      }
       __attribute__((fallthrough));
     case FldFloat:
     case FldNumericBin5:
@@ -970,25 +1027,38 @@ symbol_field_type_update( cbl_field_t *field,
    *  Concrete type candidate
    */
   switch(field->usage) {
-  case FldInvalid:
-    field->type = candidate;
-    field->attr |= numeric_group_attrs(field);
-    // update encoding
+  case FldInvalid: // no USAGE clause yet, and not now either
+    // maybe update encoding
     switch( field->type ) {
-    case FldNumericDisplay:
     case FldAlphaEdited:
     case FldNumericEdited:
+      field->type = candidate;
+      field->attr |= numeric_group_attrs(field);
       return field->codeset.set();
+    case FldNumericDisplay:
+      // If the field is already defined as Numeric Display, it cannot be
+      // converted to Numeric Edited if it is signed.
+      if( candidate == FldNumericEdited) {
+        if( field->has_attr(signable_e) ) return false;
+      }
+      break;
     default:
+      // If the field is already defined as a binary numeric type (not
+      // Display), it cannot be converted to NumericEdited.
+      if( candidate == FldNumericEdited) {
+        if( is_numeric(field->type) ) return false;
+      }
       break;
     }
+    field->type = candidate;
+    field->attr |= numeric_group_attrs(field);
     return true;
   case FldDisplay:
     if( is_displayable(candidate) ) {
       field->type = candidate;
       field->attr |= numeric_group_attrs(field);
-      if( ! field->codeset.valid() ) return field->codeset.set();
-      return true;
+      if( field->codeset.valid() ) return true;
+      return field->codeset.set();
     }
     break;
   case FldAlphaEdited:
@@ -1408,27 +1478,6 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc,
     data = build_real(float128_type_node, value);
     // Turn that back into a REAL_VALUE_TYPE with
     // REAL_VALUE_TYPE readback_value = TREE_REAL_CST(data.etc.value);
-
-#define FOR_JIM 0
-#if FOR_JIM
-    {
-    // When you know data.etc.value was created with build_real()
-    enum tree_code code = TREE_CODE(TREE_TYPE(data.etc.value));
-    // code will be REAL_TYPE
-
-    REAL_VALUE_TYPE readback_value = TREE_REAL_CST(data.etc.value);
-    char ach[48];
-    size_t number_of_digits = 33;
-    bool crop_trailing_zeroes = true;
-    real_to_decimal(ach,
-                    &readback_value,
-                    sizeof(ach),
-                    number_of_digits,
-                    crop_trailing_zeroes);
-    fprintf(stderr, "FOR_JIM: %s real_value: %s\n", get_tree_code_name(code), ach);
-    }
-#endif
-
     unsigned char *retval =
                         static_cast<unsigned char *>(xmalloc(data.capacity()));
     assert(retval);
@@ -1471,20 +1520,6 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc,
     data = wide_int_to_tree(intTI_type_node, value);
     // turn that back into a FIXED_WIDE_INT with
     // wi::tree_to_wide_ref iii = wi::to_wide( data.etc.value );
-
-#if FOR_JIM
-    {
-    // When you know data.etc.value was created with wide_int_to_tree.
-    enum tree_code code = TREE_CODE(TREE_TYPE(data.etc.value));
-    // code will be INTEGER_TYPE
-
-    wi::tree_to_wide_ref iii = wi::to_wide( data.etc.value );
-    char ach[60];
-    print_dec(iii, ach, SIGNED);
-    fprintf(stderr, "FOR_JIM: %s fixed_value: %s\n", get_tree_code_name(code), ach);
-    }
-#endif
-
     if( data.capacity() == 0 )
       {
       // It falls to us to establish these parameters:
@@ -1586,7 +1621,11 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc,
             }
           if( l_digits - l_rdigits > data.digits - data.rdigits )
             {
-            error_msg(loc, "VALUE has too many integer digits");
+            // This error is caught earlier by validate_numeric_edited
+            if( type != FldNumericEdited )
+              {
+              error_msg(loc, "VALUE has too many integer digits");
+              }
             }
           }
         }
@@ -1606,6 +1645,7 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc,
     switch(type)
       {
       case FldNumericBin5:
+      case FldIndex:
       case FldLiteralN:
         {
         binary_initial(retval, this, value, l_rdigits);
@@ -2149,9 +2189,20 @@ move_corresponding( cbl_refer_t& tgt, cbl_refer_t& src )
   return true;
 }
 
+static cbl_field_type_t
+effective_type( const cbl_refer_t& r ) {
+  auto type = r.field->type;
+  if( type == FldNumericDisplay && r.is_refmod_reference() ) {
+    type = FldAlphanumeric;
+  }
+  return type;
+}
+
 bool
-valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src )
+valid_move( const cbl_refer_t& tgt_ref, const cbl_refer_t& src_ref )
 {
+  const cbl_field_t *tgt = tgt_ref.field, *src = src_ref.field;
+
     // This is the base matrix of allowable moves.  Moves from Alphanumeric are
     // modified based on the attribute bit all_alpha_e, and moves from Numeric
     // types to Alphanumeric and AlphanumericEdited are allowable when the
@@ -2204,6 +2255,21 @@ valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src )
   assert(tgt->type < sizeof(matrix[0]));
   assert(src->type < sizeof(matrix[0]));
 
+  /*
+   * 8.4.3.3.3 Syntax rules
+   * A refmod may apply to: 
+   * "a numeric data item of usage display or national that is not subordinate
+   * to a strongly-typed group item,"
+   * 
+   * 8.4.3.3.4 General rules
+   *
+   * "If the data item referenced by identifier-1 is explicitly or implicitly
+   * described as usage DISPLAY and its category is other than alphanumeric,
+   * identifier-1 is operated upon for purposes of reference modification as if
+   * it were redefined as a data item of class and category alphanumeric of the
+   * same size as the data item referenced by identifier-1."
+   */
+
   // A value of zero  means the move is prohibited.
   // The 1 bit means the move is allowed
   // The 2 bit means the move is allowed if the source has zero rdigits,
@@ -2216,7 +2282,7 @@ valid_move( const struct cbl_field_t *tgt, const struct cbl_field_t *src )
   bool alphabetic = tgt->has_attr(all_alpha_e);
   bool src_alpha =  src->has_attr(all_alpha_e);
 
-  switch( matrix[src->type][tgt->type] )
+  switch( matrix[ effective_type(src_ref) ] [ effective_type(tgt_ref) ] )
     {
     case 0:
       if( src->type == FldLiteralA && is_numericish(tgt) && !is_literal(tgt) ) {
@@ -2625,16 +2691,11 @@ parent_names( const symbol_elem_t *elem,
 
   if( is_filler(cbl_field_of(elem)) ) return;
 
-  // dbgmsg("%s: asked about %s of %s (" HOST_SIZE_T_PRINT_UNSIGNED " away)", __func__,
-  //       cbl_field_of(elem)->name,
-  //       cbl_field_of(group)->name, (fmt_size_t)(elem - group));
-
   for( const symbol_elem_t *e=elem; e && group < e; e = symbol_parent(e) ) {
     names.push_front( cbl_field_of(e)->name );
   }
 }
 
-extern int yylineno;
 class find_corresponding {
 public:
   enum type_t { arith_op, move_op };
@@ -2808,7 +2869,7 @@ date_time_fmt( const char input[] ) {
 
 
 /*
- * Development suppport
+ * Development support
  */
 
 #pragma GCC diagnostic push
@@ -2920,6 +2981,15 @@ void cobol_set_pp_option(int opt) {
   input_filenames.option_m = true;
 }
 
+static bool trunc_binary;
+
+bool cobol_trunc_binary() {
+  return trunc_binary;
+}
+void cobol_trunc_binary( int cobol_trunc_binary ) {
+  trunc_binary = cobol_trunc_binary != 0;
+}
+
 /*
  * Maintain a stack of input filenames.  Ensure the files are unique (by
  * inode), to prevent copybook cycles. Before pushing a new name, Record the
@@ -2948,6 +3018,7 @@ bool cobol_filename( const char *name, ino_t inode ) {
   linemap_add(line_table, LC_ENTER, sysp, name, 1);
   input_filename_vestige = name;
   bool pushed = input_filenames.push( input_file_t(name, inode, 1) );
+  dbgmsg("%s: %s %s", __func__, pushed? "pushed" : "set to", name);
   return pushed;
 }
 
@@ -2956,17 +3027,19 @@ cobol_lineno( int lineno ) {
   if( input_filenames.empty() ) return NULL;
   auto& input( input_filenames.top() );
   input.lineno = lineno;
+  dbgmsg("%s:%d: saved %s, line %d", __func__, __LINE__,
+         input.name, input.lineno);
   return input.name;
 }
 
 /*
  * This function is called from the scanner, usually when a copybook is on top
  * of the input stack, before the parser retrieves the token and resets the
- * current filename.  For that reason, we normaly want to line number of the
+ * current filename.  For that reason, we normally want to line number of the
  * file that is about to become the current one, which is the one behind top().
  *
  * If somehow we arrive here when there is nothing underneath, we return the
- * current line nubmer, or zero if there's no input.  The only consequence is
+ * current line number, or zero if there's no input.  The only consequence is
  * that the reported line number might be wrong.
  */
 int
@@ -2974,6 +3047,8 @@ cobol_lineno() {
   if( input_filenames.empty() ) return 0;
   size_t n = input_filenames.size() < 2? 0 : 1;
   const auto& input( input_filenames.peek(n) );
+  dbgmsg("%s:%d: fetch %s, line %d", __func__, __LINE__,
+         input.name, input.lineno);
   return input.lineno;
 }
 
@@ -2990,10 +3065,9 @@ cobol_filename_restore() {
   old_filenames[top.name] = top.inode;
   input_filename_vestige = top.name;
 
-  input_filenames.pop();
-  if( input_filenames.empty() ) return;
+  dbgmsg("%s: LEAVE %s", __func__, top.name);
 
-  const auto& input = input_filenames.top();
+  input_filenames.pop();
 
   linemap_add(line_table, LC_LEAVE, sysp, NULL, 0);
 }
@@ -3326,6 +3400,8 @@ operator-( const cbl_timespec& now, const cbl_timespec& then ) {
 }
 #endif
 
+void parse_error_reset();
+
 static int
 parse_file( const char filename[] )
 {
@@ -3353,8 +3429,7 @@ parse_file( const char filename[] )
 #endif
 
   parser_leave_file();
-
-
+  
   fclose (yyin);
 
   if( erc ) {

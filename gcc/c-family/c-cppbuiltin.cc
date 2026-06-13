@@ -1079,7 +1079,8 @@ c_cpp_builtins (cpp_reader *pfile)
 	  cpp_define (pfile, "__cpp_conditional_explicit=201806L");
 	  cpp_define (pfile, "__cpp_consteval=202211L");
 	  cpp_define (pfile, "__cpp_constinit=201907L");
-	  cpp_define (pfile, "__cpp_deduction_guides=201907L");
+	  if (cxx_dialect <= cxx20)
+	    cpp_define (pfile, "__cpp_deduction_guides=201907L");
 	  cpp_define (pfile, "__cpp_nontype_template_args=201911L");
 	  cpp_define (pfile, "__cpp_nontype_template_parameter_class=201806L");
 	  cpp_define (pfile, "__cpp_impl_destroying_delete=201806L");
@@ -1096,6 +1097,7 @@ c_cpp_builtins (cpp_reader *pfile)
 	  cpp_define (pfile, "__cpp_auto_cast=202110L");
 	  if (cxx_dialect <= cxx23)
 	    cpp_define (pfile, "__cpp_constexpr=202211L");
+	  cpp_define (pfile, "__cpp_deduction_guides=202207L");
 	  cpp_define (pfile, "__cpp_multidimensional_subscript=202211L");
 	  cpp_define (pfile, "__cpp_named_character_escapes=202207L");
 	  cpp_define (pfile, "__cpp_static_call_operator=202207L");
@@ -1117,9 +1119,10 @@ c_cpp_builtins (cpp_reader *pfile)
 	  cpp_define (pfile, "__cpp_constexpr_virtual_inheritance=202506L");
 	  cpp_define (pfile, "__cpp_expansion_statements=202506L");
 	  if (flag_reflection)
-	    cpp_define (pfile, "__cpp_impl_reflection=202506L");
+	    cpp_define (pfile, "__cpp_impl_reflection=202603L");
 	  else
 	    cpp_warn (pfile, "__cpp_impl_reflection");
+	  cpp_define (pfile, "__cpp_trivial_union=202502L");
 	}
       if (flag_concepts && cxx_dialect > cxx14)
 	cpp_define (pfile, "__cpp_concepts=202002L");
@@ -1375,7 +1378,7 @@ c_cpp_builtins (cpp_reader *pfile)
     }
 
   /* For fixed-point fibt, ibit, max, min, and epsilon.  */
-  if (targetm.fixed_point_supported_p ())
+  if (!c_dialect_cxx () && targetm.fixed_point_supported_p ())
     {
       builtin_define_fixed_point_constants ("SFRACT", "HR",
 					    short_fract_type_node);
@@ -2047,7 +2050,7 @@ builtin_define_type_max (const char *macro, tree type)
   builtin_define_type_minmax (NULL, macro, type);
 }
 
-/* Given a value with COUNT LSBs set, fill BUF with a hexidecimal
+/* Given a value with COUNT LSBs set, fill BUF with a hexadecimal
    representation of that value.  For example, a COUNT of 10 would
    return "0x3ff".  */
 

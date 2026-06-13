@@ -35,7 +35,8 @@ extern bool xtensa_mem_offset (unsigned, machine_mode);
 #ifdef RTX_CODE
 extern int xt_true_regnum (rtx);
 extern int xtensa_valid_move (machine_mode, rtx *);
-extern int smalloffset_mem_p (rtx);
+extern bool smalloffset_address_p (const_rtx);
+extern bool constantpool_address_p (const_rtx);
 extern int constantpool_mem_p (rtx);
 extern void xtensa_extend_reg (rtx, rtx);
 extern void xtensa_expand_conditional_branch (rtx *, machine_mode);
@@ -59,6 +60,8 @@ extern bool xtensa_tls_referenced_p (rtx);
 extern enum rtx_code xtensa_shlrd_which_direction (rtx, rtx);
 extern bool xtensa_postreload_completed_p (void);
 extern char *xtensa_bswapsi2_output (rtx_insn *, const char *);
+extern bool xtensa_expand_load_force_l32 (rtx *, machine_mode, machine_mode,
+					  int);
 
 #ifdef TREE_CODE
 extern void init_cumulative_args (CUMULATIVE_ARGS *, int);
@@ -80,6 +83,7 @@ extern void xtensa_adjust_reg_alloc_order (void);
 extern enum reg_class xtensa_regno_to_class (int regno);
 extern HOST_WIDE_INT xtensa_initial_elimination_offset (int from, int to);
 extern const char **xtensa_get_config_strings (void);
-extern rtl_opt_pass *make_pass_xtensa_largeconst (gcc::context *);
+extern rtl_opt_pass *make_pass_xtensa_largeconst1 (gcc::context *);
+extern rtl_opt_pass *make_pass_xtensa_largeconst2 (gcc::context *);
 
 #endif /* !__XTENSA_PROTOS_H__ */

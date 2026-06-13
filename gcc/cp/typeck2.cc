@@ -280,7 +280,7 @@ cxx_incomplete_type_inform (const_tree type)
     return;
 
   location_t loc = DECL_SOURCE_LOCATION (TYPE_MAIN_DECL (type));
-  tree ptype = strip_top_quals (CONST_CAST_TREE (type));
+  tree ptype = strip_top_quals (const_cast<tree> (type));
 
   /* When defining a template, current_class_type will be the pattern on
      the template definition, while non-self-reference usages of this
@@ -1476,6 +1476,7 @@ digest_init_r (tree type, tree init, int nested, int flags,
 	  tree field = next_aggregate_field (TYPE_FIELDS (type));
 	  if (field && DECL_FIELD_IS_BASE (field))
 	    {
+	      auto_diagnostic_group d;
 	      if (warning_at (loc, 0, "initializing a base class of type %qT "
 			      "results in object slicing", TREE_TYPE (field)))
 		inform (loc, "remove %<{ }%> around initializer");
@@ -2610,9 +2611,13 @@ build_functional_cast_1 (location_t loc, tree exp, tree parms,
 	      return error_mark_node;
 	    }
 	  else if (cxx_dialect < cxx23)
-	    pedwarn (loc, OPT_Wc__23_extensions,
-		     "%<auto(x)%> only available with "
-		     "%<-std=c++23%> or %<-std=gnu++23%>");
+	    {
+	      if ((complain & tf_warning_or_error) == 0)
+		return error_mark_node;
+	      pedwarn (loc, OPT_Wc__23_extensions,
+		       "%<auto(x)%> only available with "
+		       "%<-std=c++23%> or %<-std=gnu++23%>");
+	    }
 	}
       else
 	{

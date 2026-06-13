@@ -58,7 +58,7 @@ unsigned int ctfc_get_num_ctf_vars (ctf_container_ref ctfc)
   return ctfc->ctfc_vars->elements ();
 }
 
-/* Get reference to the CTF string table or the CTF auxilliary
+/* Get reference to the CTF string table or the CTF auxiliary
    string table.  */
 
 ctf_strtable_t *
@@ -292,7 +292,7 @@ ctfc_strtable_add_str (ctf_strtable_t * str_table, const char * name,
      not add null strings, return the offset to the empty string for them.  */
   if ((!name || (name != NULL && !strcmp (name, ""))) && str_offset)
     {
-      ctf_string = CONST_CAST (char *, str_table->ctstab_estr);
+      ctf_string = const_cast<char *> (str_table->ctstab_estr);
       str_offset = 0;
     }
   else
@@ -300,7 +300,7 @@ ctfc_strtable_add_str (ctf_strtable_t * str_table, const char * name,
       gcc_assert (name);
       /* Add null-terminated strings to the string table.  */
       len = strlen (name) + 1;
-      ctf_string = CONST_CAST (char *, ggc_strdup (name));
+      ctf_string = const_cast<char *> (ggc_strdup (name));
 
       ctfc_strtable_append_str (str_table, ctf_string);
       /* Add string to the string table.  Keep number of strings updated.  */
@@ -321,7 +321,7 @@ const char *
 ctf_add_string (ctf_container_ref ctfc, const char * name,
 		uint32_t * name_offset, int aux_str = CTF_STRTAB)
 {
-  /* Get the CTF string table or the CTF auxilliary string table,
+  /* Get the CTF string table or the CTF auxiliary string table,
      as applicable.  */
   ctf_strtable_t *str_table = ctfc_get_strtab (ctfc, aux_str);
   return ctfc_strtable_add_str (str_table, name, name_offset);
@@ -357,7 +357,7 @@ ctf_add_cuname (ctf_container_ref ctfc, const char * filename)
     }
   else
     /* Filename is an absolute path.  */
-    cuname = CONST_CAST (char *, ggc_strdup (filename));
+    cuname = const_cast<char *> (ggc_strdup (filename));
 
   ctf_add_string (ctfc, cuname, &(ctfc->ctfc_cuname_offset));
   /* Add 1 as CTF strings in the CTF string table are null-terminated
@@ -816,8 +816,8 @@ ctf_add_function_arg (ctf_container_ref ctfc, dw_die_ref func,
 
   farg = ggc_cleared_alloc<ctf_func_arg_t> ();
 
-  /* Buffer the strings in the auxilliary string table.  CTF V3 format does not
-     require function argument names.  Use auxilliary string table to keep
+  /* Buffer the strings in the auxiliary string table.  CTF V3 format does not
+     require function argument names.  Use auxiliary string table to keep
      these strings to avoid unnecessary bloat in CTF section in CTF V3.  */
   farg->farg_name = ctf_add_string (ctfc, name, &(farg->farg_name_offset),
 				    CTF_AUX_STRTAB);

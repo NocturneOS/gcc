@@ -153,7 +153,7 @@ public:
   // scope until the change has been aborted or successfully completed.
   obstack_watermark new_change_attempt () { return &m_temp_obstack; }
 
-  // SET and INSN belong to the same EBB, with SET occuring before INSN.
+  // SET and INSN belong to the same EBB, with SET occurring before INSN.
   // Return true if SET is still available at INSN.
   bool remains_available_at_insn (const set_info *set, insn_info *insn);
 
@@ -166,7 +166,7 @@ public:
   // available on entry to BB, without solving a full dataflow problem.
   // If all the values are already live on entry to BB or can be made
   // available there, return a use_array that describes the uses as
-  // if they occured at the start of BB.  These uses are purely temporary,
+  // if they occurred at the start of BB.  These uses are purely temporary,
   // and will not become permanent unless applied using change_insns.
   //
   // If the operation fails, return an invalid use_array.
@@ -308,7 +308,6 @@ private:
   void add_reg_unused_notes (insn_info *);
 
   void add_live_out_use (bb_info *, set_info *);
-  set_info *live_out_value (bb_info *, set_info *);
   void commit_make_use_available (use_info *);
 
   void append_phi (ebb_info *, phi_info *);
@@ -336,6 +335,7 @@ private:
   void create_ebbs (build_info &);
   void add_entry_block_defs (build_info &);
   void calculate_ebb_live_in_for_debug (build_info &);
+  phi_info *create_degenerate_phi (build_info &, set_info *);
   void add_phi_nodes (build_info &);
   void add_artificial_accesses (build_info &, df_ref_flags);
   void add_block_contents (build_info &);

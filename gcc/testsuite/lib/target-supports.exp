@@ -138,10 +138,17 @@ proc current_target_name { } {
 # the Tcl command ARGS and seeing if it returns true.
 
 proc check_cached_effective_target { prop args } {
+    global EFFECTIVE_TARGETS
+    global et_index
     global et_cache
 
+    if { [info exists et_index] } {
+	set et [lindex $EFFECTIVE_TARGETS $et_index]
+    } else {
+	set et "default"
+    }
     set target [current_target_name]
-    if {![info exists et_cache($prop,$target)]} {
+    if {![info exists et_cache($prop,$target,$et)]} {
 	verbose "check_cached_effective_target $prop: checking $target" 2
 	if {[string is true -strict $args] || [string is false -strict $args]} {
 	    error {check_cached_effective_target condition already evaluated; did you pass [...] instead of the expected {...}?}
@@ -150,22 +157,12 @@ proc check_cached_effective_target { prop args } {
 	    if {$code != 0 && $code != 2} {
 		return -code $code $result
 	    }
-	    set et_cache($prop,$target) $result
+	    set et_cache($prop,$target,$et) $result
 	}
     }
-    set value $et_cache($prop,$target)
+    set value $et_cache($prop,$target,$et)
     verbose "check_cached_effective_target $prop: returning $value for $target" 2
     return $value
-}
-
-# Implements a version of check_cached_effective_target that also takes et_index
-# into account when creating the key for the cache.
-proc check_cached_effective_target_indexed { prop args } {
-    global et_index
-    set key "$et_index $prop"
-    verbose "check_cached_effective_target_index $prop: returning $key" 2
-
-    return [check_cached_effective_target $key [list uplevel eval $args]]
 }
 
 # Clear effective-target cache. This is useful after testing
@@ -673,7 +670,6 @@ proc check_effective_target_variadic_mi_thunk { } {
 	 || [istarget h8300-*-*]
 	 || [istarget iq2000-*-*]
 	 || [istarget lm32-*-*]
-	 || [istarget m32c-*-*]
 	 || [istarget m32r-*-*]
 	 || [istarget mcore-*-*]
 	 || [istarget moxie-*-*]
@@ -798,8 +794,6 @@ proc check_profiling_available { test_what } {
 	    verbose "autofdo not supported"
 	    return 0
 	}
-	puts $wrapper
-	global srcdir
 	set status [remote_exec host "$wrapper true -v >/dev/null"]
 	if { [lindex $status 0] != 0 } {
 	    verbose "autofdo not supported because perf does not work"
@@ -863,7 +857,6 @@ proc check_profiling_available { test_what } {
 	     || [istarget fido-*-elf]
 	     || [istarget h8300-*-*]
 	     || [istarget lm32-*-*]
-	     || [istarget m32c-*-elf]
 	     || [istarget m68k-*-elf]
 	     || [istarget m68k-*-uclinux*]
 	     || [istarget mips*-*-elf*]
@@ -989,6 +982,10 @@ proc add_options_for_check_function_bodies { flags } {
 	# off on Solaris/x86 with as and ld.  Similarly it also expects
 	# the .LFB/.LFE labels, which aren't emitted for 32-bit.
 	return "-fdwarf2-cfi-asm -fasynchronous-unwind-tables $flags "
+    } elseif { [istarget *-*-darwin*] } {
+        # Darwin does not currently use .cfi_ instructions and also requires
+        # unwind tables to be forced on for 32bit.
+	return "-fno-dwarf2-cfi-asm -fasynchronous-unwind-tables $flags "
     }
     return $flags
 }
@@ -1563,8 +1560,10 @@ proc check_effective_target_pie { } {
 # Return true if the target supports -mpaired-single (as used on MIPS).
 
 proc check_effective_target_mpaired_single { args } {
-    return [check_no_compiler_messages mpaired_single object {
-	void foo (void) { }
+    return [check_no_compiler_messages "mpaired_single_$args" object {
+	void foo (void) {
+	    asm volatile ("pll.ps $f2,$f4,$f6");
+	}
     } "$args"]
 }
 
@@ -2105,6 +2104,16 @@ proc check_effective_target_riscv_zacas { } {
     }]
 }
 
+# Return 1 if the target arch supports the atomic-acquire and load-release extension, 0 otherwise.
+# Cache the result.
+proc check_effective_target_riscv_zalasr { } {
+    return [check_no_compiler_messages riscv_ext_zalasr assembly {
+       #ifndef __riscv_zalasr
+       #error "Not __riscv_zalasr"
+       #endif
+    }]
+}
+
 # Return 1 if the target arch supports the double precision floating point
 # extension, 0 otherwise.  Cache the result.
 
@@ -2529,7 +2538,7 @@ proc check_effective_target_riscv_v_misalign_ok { } {
 proc riscv_get_arch { } {
     set gcc_march ""
     # ??? do we neeed to add more extensions to the list below?
-    foreach ext { i e m a f d q c b v zicsr zifencei zfh zba zbb zbc zbkb zbkc zbs zvbb zvfh ztso zaamo zalrsc zabha zacas } {
+    foreach ext { i e m a f d q c b v zicsr zifencei zfh zba zbb zbc zbkb zbkc zbs zvbb zvfh ztso zaamo zalrsc zalasr zabha zacas } {
 	if { [check_no_compiler_messages  riscv_ext_$ext assembly [string map [list DEF __riscv_$ext] {
 		#ifndef DEF
 		#error "Not DEF"
@@ -2724,6 +2733,14 @@ proc remove_options_for_riscv_zalrsc { flags } {
 	set modified_flags [add_options_for_riscv_zalrsc $no_a_flags]
     }
     return $modified_flags
+}
+
+proc add_options_for_riscv_zalasr { flags } {
+    return [add_options_for_riscv_z_ext zalasr $flags]
+}
+
+proc remove_options_for_riscv_zalasr { flags } {
+    return [remove_options_for_riscv_z_ext zalasr $flags]
 }
 
 proc add_options_for_riscv_zabha { flags } {
@@ -3100,7 +3117,7 @@ proc check_mpaired_single_hw_available { } {
 		asm volatile ("pll.ps $f2,$f4,$f6");
 		return 0;
 	      }
-	    } ""
+	    } "-mpaired-single"
 	}
     }]
 }
@@ -3800,6 +3817,27 @@ proc check_fork_available {} {
 	return [check_effective_target_hw]
     }
     return [check_function_available "fork"]
+}
+
+# Returns true iff "fork" is working on the target system.
+
+proc check_fork_runtime {} {
+    if { ![check_fork_available] } {
+	return 0
+    }
+
+    return [check_runtime fork_runtime {
+       #include <unistd.h>
+       #include <stdlib.h>
+
+       int main()
+       {
+	 pid_t p = fork();
+	 if (p < 0)
+	   abort();
+	 return 0;
+       }
+    }]
 }
 
 # Returns true iff "mkfifo" is available on the target system.
@@ -4597,7 +4635,9 @@ proc check_effective_target_vect_cmdline_needed { } {
 	     || ([istarget powerpc*-*-*]
 		 && [check_effective_target_powerpc_altivec])
 	     || ([istarget sparc*-*-*] && [check_effective_target_sparc_vis])
-	     || ([istarget arm*-*-*] && [check_effective_target_arm_neon])
+	     || ([istarget arm*-*-*] && ([check_effective_target_arm_neon]
+					 || [check_effective_target_arm_mve])
+		 )
 	     || [istarget aarch64*-*-*]
 	     || [istarget amdgcn*-*-*]
 	     || [istarget riscv*-*-*]
@@ -4613,7 +4653,7 @@ proc check_effective_target_vect_cmdline_needed { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_int { } {
-    return [check_cached_effective_target_indexed vect_int {
+    return [check_cached_effective_target vect_int {
       expr {
 	 [check_effective_target_x86]
 	 || [istarget powerpc*-*-*]
@@ -4644,7 +4684,7 @@ proc check_effective_target_vect_int_div { } {
 # producing si outputs, 0 otherwise.
 
 proc check_effective_target_vect_dotprod_hisi { } {
-    return [check_cached_effective_target_indexed aarch64_sme2 {
+    return [check_cached_effective_target aarch64_sme2 {
 	expr { [check_effective_target_aarch64_sme2]
     }}]
 }
@@ -4655,7 +4695,7 @@ proc check_effective_target_vect_dotprod_hisi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_early_break { } {
-    return [check_cached_effective_target_indexed vect_early_break {
+    return [check_cached_effective_target vect_early_break {
       expr {
 	[istarget aarch64*-*-*]
 	|| [check_effective_target_arm_v8_neon_ok]
@@ -4672,7 +4712,7 @@ proc check_effective_target_vect_early_break { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_early_break_hw { } {
-    return [check_cached_effective_target_indexed vect_early_break_hw {
+    return [check_cached_effective_target vect_early_break_hw {
       expr {
 	[istarget aarch64*-*-*]
 	|| [check_effective_target_arm_v8_neon_hw]
@@ -4706,7 +4746,7 @@ proc add_options_for_vect_early_break { flags } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_byte { } {
-    return [check_cached_effective_target_indexed vect_complex_add_byte {
+    return [check_cached_effective_target vect_complex_add_byte {
       expr {
 	 ([check_effective_target_aarch64_sve2]
 	  && [check_effective_target_aarch64_little_endian])
@@ -4721,7 +4761,7 @@ proc check_effective_target_vect_complex_add_byte { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_short { } {
-    return [check_cached_effective_target_indexed vect_complex_add_short {
+    return [check_cached_effective_target vect_complex_add_short {
       expr {
 	 ([check_effective_target_aarch64_sve2]
 	  && [check_effective_target_aarch64_little_endian])
@@ -4736,7 +4776,7 @@ proc check_effective_target_vect_complex_add_short { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_int { } {
-    return [check_cached_effective_target_indexed vect_complex_add_int {
+    return [check_cached_effective_target vect_complex_add_int {
       expr {
 	 ([check_effective_target_aarch64_sve2]
 	  && [check_effective_target_aarch64_little_endian])
@@ -4751,7 +4791,7 @@ proc check_effective_target_vect_complex_add_int { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_long { } {
-    return [check_cached_effective_target_indexed vect_complex_add_long {
+    return [check_cached_effective_target vect_complex_add_long {
       expr {
 	 ([check_effective_target_aarch64_sve2]
 	  && [check_effective_target_aarch64_little_endian])
@@ -4766,7 +4806,7 @@ proc check_effective_target_vect_complex_add_long { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_half { } {
-    return [check_cached_effective_target_indexed vect_complex_add_half {
+    return [check_cached_effective_target vect_complex_add_half {
       expr {
 	 ([check_effective_target_arm_v8_3a_fp16_complex_neon_ok]
 	  && ([check_effective_target_aarch64_little_endian]
@@ -4784,7 +4824,7 @@ proc check_effective_target_vect_complex_add_half { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_float { } {
-    return [check_cached_effective_target_indexed vect_complex_add_float {
+    return [check_cached_effective_target vect_complex_add_float {
       expr {
 	 ([check_effective_target_arm_v8_3a_complex_neon_ok]
 	  && ([check_effective_target_aarch64_little_endian]
@@ -4802,7 +4842,7 @@ proc check_effective_target_vect_complex_add_float { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_complex_add_double { } {
-    return [check_cached_effective_target_indexed vect_complex_add_double {
+    return [check_cached_effective_target vect_complex_add_double {
       expr {
 	 (([check_effective_target_arm_v8_3a_complex_neon_ok]
 	  && [check_effective_target_aarch64_little_endian])
@@ -4815,7 +4855,7 @@ proc check_effective_target_vect_complex_add_double { } {
 #
 
 proc check_effective_target_vect_intfloat_cvt { } {
-    return [check_cached_effective_target_indexed vect_intfloat_cvt {
+    return [check_cached_effective_target vect_intfloat_cvt {
       expr { [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
 	     || [is-effective-target arm_neon]
@@ -4834,7 +4874,7 @@ proc check_effective_target_vect_intfloat_cvt { } {
 #
 
 proc check_effective_target_vect_doubleint_cvt { } {
-    return [check_cached_effective_target_indexed vect_doubleint_cvt {
+    return [check_cached_effective_target vect_doubleint_cvt {
       expr { ([check_effective_target_x86]
 	      && [check_no_compiler_messages vect_doubleint_cvt assembly {
 		   #ifdef __tune_atom__
@@ -4857,7 +4897,7 @@ proc check_effective_target_vect_doubleint_cvt { } {
 #
 
 proc check_effective_target_vect_intdouble_cvt { } {
-    return [check_cached_effective_target_indexed vect_intdouble_cvt {
+    return [check_cached_effective_target vect_intdouble_cvt {
       expr { ([check_effective_target_x86]
 	      && [check_no_compiler_messages vect_intdouble_cvt assembly {
 		  #ifdef __tune_atom__
@@ -4894,7 +4934,7 @@ proc check_effective_target_int128 { } {
 #
 
 proc check_effective_target_vect_uintfloat_cvt { } {
-    return [check_cached_effective_target_indexed vect_uintfloat_cvt {
+    return [check_cached_effective_target vect_uintfloat_cvt {
       expr { [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
 	     || [istarget aarch64*-*-*]
@@ -4915,7 +4955,7 @@ proc check_effective_target_vect_uintfloat_cvt { } {
 #
 
 proc check_effective_target_vect_floatint_cvt { } {
-    return [check_cached_effective_target_indexed vect_floatint_cvt {
+    return [check_cached_effective_target vect_floatint_cvt {
       expr { [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
 	     || [is-effective-target arm_neon]
@@ -4934,7 +4974,7 @@ proc check_effective_target_vect_floatint_cvt { } {
 #
 
 proc check_effective_target_vect_floatuint_cvt { } {
-    return [check_cached_effective_target_indexed vect_floatuint_cvt {
+    return [check_cached_effective_target vect_floatuint_cvt {
       expr { [istarget powerpc*-*-*]
 	    || [is-effective-target arm_neon]
 	    || ([istarget mips*-*-*]
@@ -4952,7 +4992,7 @@ proc check_effective_target_vect_floatuint_cvt { } {
 #
 
 proc check_effective_target_vect_ext_char_longlong { } {
-    return [check_cached_effective_target_indexed vect_ext_char_longlong {
+    return [check_cached_effective_target vect_ext_char_longlong {
       expr { ([istarget riscv*-*-*]
 	      && [check_effective_target_riscv_v])
 	     || ([istarget loongarch*-*-*]
@@ -4963,7 +5003,7 @@ proc check_effective_target_vect_ext_char_longlong { } {
 #
 
 proc check_effective_target_vect_peeling_profitable { } {
-    return [check_cached_effective_target_indexed vect_peeling_profitable {
+    return [check_cached_effective_target vect_peeling_profitable {
       expr { ([istarget s390*-*-*]
 	      && [check_effective_target_s390_vx])
 	    || [check_effective_target_vect_element_align_preferred] }}]
@@ -4978,7 +5018,7 @@ proc check_effective_target_vect_simd_clones { } {
     # avx2 and avx512f clone.  Only the right clone for the
     # specified arch will be chosen, but still we need to at least
     # be able to assemble avx512f.
-    return [check_cached_effective_target_indexed vect_simd_clones {
+    return [check_cached_effective_target vect_simd_clones {
       expr { ([check_effective_target_x86]
 	      && [check_effective_target_avx512f])
 	     || [istarget amdgcn-*-*]
@@ -5624,8 +5664,11 @@ proc check_effective_target_arm_neon_ok_nocache { } {
     set et_arm_neon_flags ""
     foreach flags {
 	""
+	"-mcpu=unset -march=armv7-a+simd -mfpu=auto"
+
 	"-mfloat-abi=softfp"
 	"-mfloat-abi=softfp -mcpu=unset -march=armv7-a+simd -mfpu=auto"
+
 	"-mfloat-abi=hard"
 	"-mfloat-abi=hard -mcpu=unset -march=armv7-a+simd -mfpu=auto"
     } {
@@ -6219,6 +6262,7 @@ foreach { armfunc armflag armdefs } {
 	v7 "-march=armv7+fp" __ARM_ARCH_7__
 	v7a "-march=armv7-a+fp" __ARM_ARCH_7A__
 	v7a_arm "-march=armv7-a+fp -marm" "__ARM_ARCH_7A__ && !__thumb__"
+	v7a_thumb "-march=armv7-a+fp -mthumb" "__ARM_ARCH_7A__ && __thumb__"
 	v7a_fp_hard "-march=armv7-a+fp -mfpu=auto -mfloat-abi=hard" __ARM_ARCH_7A__
 	v7a_neon "-march=armv7-a+simd -mfpu=auto -mfloat-abi=softfp" "__ARM_ARCH_7A__ && __ARM_NEON__"
 	v7a_neon_thumb "-march=armv7-a+simd -mfpu=auto -mfloat-abi=softfp -mthumb" "__ARM_ARCH_7A__ && __ARM_NEON__ && __thumb__"
@@ -6244,6 +6288,7 @@ foreach { armfunc armflag armdefs } {
 	v8_1m_main "-march=armv8.1-m.main+fp -mthumb" __ARM_ARCH_8M_MAIN__
 	v8_1m_main_pacbti "-march=armv8.1-m.main+pacbti+fp -mthumb"
 		"__ARM_ARCH_8M_MAIN__ && __ARM_FEATURE_BTI && __ARM_FEATURE_PAUTH"
+	v8_1m_main_fp_hard "-march=armv8.1-m.main+pacbti+fp -mthumb -mfpu=auto -mfloat-abi=hard" "__ARM_ARCH_8M_MAIN__ && (__ARM_FP & 2)"
 	v9a "-march=armv9-a+simd" __ARM_ARCH_9A__ } {
     eval [string map [list FUNC $armfunc FLAG $armflag DEFS $armdefs ] {
 	proc check_effective_target_arm_arch_FUNC_ok { } {
@@ -6298,6 +6343,7 @@ foreach { armfunc armflag armdefs } {
 # flags).  See above for setting -march=.
 foreach { armfunc armflag armdefs } {
 	    xscale_arm "-mcpu=xscale -mtune=xscale -mfloat-abi=soft -marm" "__XSCALE__ && !__thumb__"
+	    cortex_a53 "-mcpu=cortex-a53 -mtune=cortex-a53" __ARM_ARCH_8A__
 	    cortex_a57 "-mcpu=cortex-a57 -mtune=cortex-a57" __ARM_ARCH_8A__
 	    cortex_m0 "-mcpu=cortex-m0 -mtune=cortex-m0 -mfloat-abi=soft -mthumb" "__ARM_ARCH_6M__ && __thumb__"
 	    cortex_m0_small "-mcpu=cortex-m0.small-multiply -mtune=cortex-m0.small-multiply -mfloat-abi=soft -mthumb" "__ARM_ARCH_6M__ && __thumb__"
@@ -6346,6 +6392,21 @@ foreach { armfunc armflag armdefs } {
 	    } [add_options_for_arm_cpu_FUNC ""]]
 	}
     }]
+}
+
+# Return 1 if current target supports both single- and double-precision FP
+proc check_effective_target_arm_mixed_fp { } {
+    if { ![istarget arm*-*-*] } {
+	return 0
+    }
+
+    return [check_no_compiler_messages arm_mixed_fp assembly {
+	// Mixed FP means we have hw FP, but only for SFmode (ignores HFmode)
+	#if !defined(__ARM_FP) || ((__ARM_FP & 0xc) != 0x4)
+	#error Not mixed FP
+	#endif
+	int main (void) { return 0; }
+    } "" ]
 }
 
 # Return 1 if GCC was configured with --with-mode=
@@ -6647,6 +6708,23 @@ proc check_effective_target_aarch64_sve2p1_hw { } {
 	main (void)
 	{
 	  asm volatile ("dupq z0.b, z0.b[0]");
+	  return 0;
+	}
+    }]
+}
+
+# Return true if this is an AArch64 target that can run SVE2.2 code.
+
+proc check_effective_target_aarch64_sve2p2_hw { } {
+    if { ![istarget aarch64*-*-*] } {
+	return 0
+    }
+    return [check_runtime aarch64_sve2p2_hw_available {
+	#pragma GCC target "+sve2p2"
+	int
+	main (void)
+	{
+	  asm volatile ("compact z0.b, p0, z1.b");
 	  return 0;
 	}
     }]
@@ -7660,7 +7738,7 @@ proc add_options_for_mips_loongson_mmi { flags } {
 # the Loongson vector modes.
 
 proc check_effective_target_mips_loongson_mmi { args } {
-    return [check_no_compiler_messages loongson assembly {
+    return [check_no_compiler_messages "loongson_$args" assembly {
 	#if !defined(__mips_loongson_mmi)
 	#error !__mips_loongson_mmi
 	#endif
@@ -7685,7 +7763,7 @@ proc check_effective_target_mips_msa { args } {
   if ![check_effective_target_nomips16] {
     return 0
   }
-  return [check_no_compiler_messages msa object {
+  return [check_no_compiler_messages "msa_$args" object {
     #if !defined(__mips_msa)
     #error "MSA NOT AVAIL"
     #else
@@ -7986,6 +8064,54 @@ proc check_effective_target_power10_ok { } {
     }
 }
 
+# Return 1 if this is a PowerPC target where the compiler supports
+# compiling with -mcpu=future (i.e., the compiler recognizes _ARCH_FUTURE),
+# return 0 otherwise.
+
+proc check_effective_target_powerpc_future_compile_ok { } {
+    return [check_no_compiler_messages_nocache powerpc_future_compile_ok assembly {
+	void test (void) {
+	    #ifndef _ARCH_FUTURE
+	      #error does not have powerpc future support.
+	    #else
+	      /* "has powerpc future support" */
+	    #endif
+	}
+    } "-mcpu=future"]
+}
+
+# Return 1 if this is a PowerPC target where the assembler supports
+# assembling future instructions with -mcpu=future (i.e., the assembler
+# can assemble the subwus instruction), return 0 otherwise.
+
+proc check_effective_target_powerpc_future_assemble_ok { } {
+    return [check_no_compiler_messages_nocache powerpc_future_assemble_ok object {
+	unsigned int a, b, c;
+	int main (void) {
+	    asm ("subwus %0,%1,%2" : "=r" (a) : "r" (b), "r" (c));
+	    return 0;
+	}
+    } "-mcpu=future"]
+}
+
+# Return 1 if the target hardware supports executing PowerPC future
+# instructions at runtime (i.e., the subwus instruction executes
+# correctly), return 0 otherwise.
+
+proc check_powerpc_future_hw_available { } {
+    return [check_cached_effective_target powerpc_future_hw_available {
+	check_runtime_nocache powerpc_future_hw_available {
+	    int main() {
+		unsigned int a = 5, b = 3, result = 0xDEADBEEF;
+		asm ("subwus %0,%1,%2" : "=r" (result) : "r" (a), "r" (b));
+		if (result == 0)
+		  return 0;
+		return 1;
+	    }
+	} "-mcpu=future"
+    }]
+}
+
 # Return 1 if this is a PowerPC target supporting -mfloat128 via either
 # software emulation on power7/power8 systems or hardware support on power9.
 
@@ -8261,7 +8387,7 @@ proc check_effective_target_sparc_vis { } {
 # Return 1 if the target supports hardware vector shift operation.
 
 proc check_effective_target_vect_shift { } {
-    return [check_cached_effective_target_indexed vect_shift {
+    return [check_cached_effective_target vect_shift {
       expr {[istarget powerpc*-*-*]
 	     || [istarget ia64-*-*]
 	     || [check_effective_target_x86]
@@ -8282,7 +8408,7 @@ proc check_effective_target_vect_shift { } {
 # Return 1 if the target supports hardware vector shift by register operation.
 
 proc check_effective_target_vect_var_shift { } {
-    return [check_cached_effective_target_indexed vect_var_shift {
+    return [check_cached_effective_target vect_var_shift {
       expr {([check_effective_target_x86]
 	     && [check_avx2_available])
 	    || [istarget aarch64*-*-*]
@@ -8321,7 +8447,7 @@ proc check_effective_target_whole_vector_shift { } {
 # Return 1 if the target supports vector bswap operations.
 
 proc check_effective_target_vect_bswap { } {
-    return [check_cached_effective_target_indexed vect_bswap {
+    return [check_cached_effective_target vect_bswap {
       expr { ([istarget aarch64*-*-*]
 	      || [is-effective-target arm_neon]
 	      || [istarget amdgcn-*-*])
@@ -8334,7 +8460,7 @@ proc check_effective_target_vect_bswap { } {
 # least one vector length.
 
 proc check_effective_target_vect_bool_cmp { } {
-    return [check_cached_effective_target_indexed vect_bool_cmp {
+    return [check_cached_effective_target vect_bool_cmp {
       expr { [check_effective_target_x86]
 	     || [istarget aarch64*-*-*]
 	     || [is-effective-target arm_neon]
@@ -8348,7 +8474,7 @@ proc check_effective_target_vect_bool_cmp { } {
 # one vector length.
 
 proc check_effective_target_vect_char_add { } {
-    return [check_cached_effective_target_indexed vect_char_add {
+    return [check_cached_effective_target vect_char_add {
       expr {
 	 [check_effective_target_x86]
 	 || [istarget powerpc*-*-*]
@@ -8371,7 +8497,7 @@ proc check_effective_target_vect_char_add { } {
 # Return 1 if the target supports hardware vector shift operation for char.
 
 proc check_effective_target_vect_shift_char { } {
-    return [check_cached_effective_target_indexed vect_shift_char {
+    return [check_cached_effective_target vect_shift_char {
       expr { [istarget powerpc*-*-*]
 	     || [is-effective-target arm_neon]
 	     || ([istarget mips*-*-*]
@@ -8420,7 +8546,7 @@ proc check_effective_target_vect_long { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_float { } {
-    return [check_cached_effective_target_indexed vect_float {
+    return [check_cached_effective_target vect_float {
       expr { [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
 	     || [istarget mips-sde-elf]
@@ -8452,7 +8578,7 @@ proc check_effective_target_vect_float_strict { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_double { } {
-    return [check_cached_effective_target_indexed vect_double {
+    return [check_cached_effective_target vect_double {
 	expr { ([check_effective_target_x86]
 		&& [check_no_compiler_messages vect_double assembly {
 		  #ifdef __tune_atom__
@@ -8486,7 +8612,7 @@ proc check_effective_target_vect_double_cond_arith { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_long_long { } {
-    return [check_cached_effective_target_indexed vect_long_long {
+    return [check_cached_effective_target vect_long_long {
       expr { [check_effective_target_x86]
 	     || ([istarget mips*-*-*]
 		 && [et-is-effective-target mips_msa])
@@ -8509,7 +8635,7 @@ proc check_effective_target_vect_long_long { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_no_int_min_max { } {
-    return [check_cached_effective_target_indexed vect_no_int_min_max {
+    return [check_cached_effective_target vect_no_int_min_max {
       expr { [istarget sparc*-*-*]
 	     || [istarget alpha*-*-*]
 	     || ([istarget mips*-*-*]
@@ -8523,7 +8649,7 @@ proc check_effective_target_vect_no_int_min_max { } {
 
 proc check_effective_target_vect_no_int_add { } {
     # Alpha only supports vector add on V8QI and V4HI.
-    return [check_cached_effective_target_indexed vect_no_int_add {
+    return [check_cached_effective_target vect_no_int_add {
       expr { [istarget alpha*-*-*] }}]
 }
 
@@ -8533,7 +8659,7 @@ proc check_effective_target_vect_no_int_add { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_no_bitwise { } {
-    return [check_cached_effective_target_indexed vect_no_bitwise { return 0 }]
+    return [check_cached_effective_target vect_no_bitwise { return 0 }]
 }
 
 # Return 1 if the target plus current options supports vector permutation,
@@ -8542,7 +8668,7 @@ proc check_effective_target_vect_no_bitwise { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_perm { } {
-    return [check_cached_effective_target_indexed vect_perm {
+    return [check_cached_effective_target vect_perm {
       expr { [is-effective-target arm_neon]
 	     || [istarget aarch64*-*-*]
 	     || [istarget powerpc*-*-*]
@@ -8639,7 +8765,7 @@ proc check_effective_target_vect_perm3_int { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_perm_byte { } {
-    return [check_cached_effective_target_indexed vect_perm_byte {
+    return [check_cached_effective_target vect_perm_byte {
       expr { ([is-effective-target arm_neon]
 	      && [is-effective-target arm_little_endian])
 	     || ([istarget aarch64*-*-*]
@@ -8670,7 +8796,7 @@ proc check_effective_target_vect_perm3_byte { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_perm_short { } {
-    return [check_cached_effective_target_indexed vect_perm_short {
+    return [check_cached_effective_target vect_perm_short {
       expr { ([is-effective-target arm_neon]
 	      && [is-effective-target arm_little_endian])
 	     || ([istarget aarch64*-*-*]
@@ -8703,7 +8829,7 @@ proc check_effective_target_vect_perm3_short { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_xorsign { } {
-    return [check_cached_effective_target_indexed xorsign {
+    return [check_cached_effective_target xorsign {
       expr { [check_effective_target_x86]
 	     || [istarget aarch64*-*-*] || [istarget arm*-*-*] }}]
 }
@@ -8714,7 +8840,7 @@ proc check_effective_target_xorsign { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_ifn_copysign { } {
-    return [check_cached_effective_target_indexed ifn_copysign {
+    return [check_cached_effective_target ifn_copysign {
       expr {
 	 ([check_effective_target_x86]
 	  && [is-effective-target sse])
@@ -8737,7 +8863,7 @@ proc check_effective_target_ifn_copysign { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_sum_hi_to_si_pattern { } {
-    return [check_cached_effective_target_indexed vect_widen_sum_hi_to_si_pattern {
+    return [check_cached_effective_target vect_widen_sum_hi_to_si_pattern {
       expr { [istarget powerpc*-*-*]
 	     || ([istarget aarch64*-*-*]
 		 && ![check_effective_target_aarch64_sve])
@@ -8753,7 +8879,7 @@ proc check_effective_target_vect_widen_sum_hi_to_si_pattern { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_sum_hi_to_si { } {
-    return [check_cached_effective_target_indexed vect_widen_sum_hi_to_si {
+    return [check_cached_effective_target vect_widen_sum_hi_to_si {
       expr { [check_effective_target_vect_unpack]
 	     || [istarget powerpc*-*-*]
 	     || [istarget ia64-*-*]
@@ -8769,7 +8895,7 @@ proc check_effective_target_vect_widen_sum_hi_to_si { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_sum_qi_to_hi { } {
-    return [check_cached_effective_target_indexed vect_widen_sum_qi_to_hi {
+    return [check_cached_effective_target vect_widen_sum_qi_to_hi {
       expr { [check_effective_target_vect_unpack]
 	     || [is-effective-target arm_neon]
 	     || [istarget ia64-*-*]
@@ -8783,7 +8909,7 @@ proc check_effective_target_vect_widen_sum_qi_to_hi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_sum_qi_to_si { } {
-    return [check_cached_effective_target_indexed vect_widen_sum_qi_to_si {
+    return [check_cached_effective_target vect_widen_sum_qi_to_si {
       expr { [istarget powerpc*-*-*]
 	     || [istarget loongarch*-*-*]
 	     || [istarget riscv*-*-*] }}]
@@ -8799,7 +8925,7 @@ proc check_effective_target_vect_widen_sum_qi_to_si { } {
 
 
 proc check_effective_target_vect_widen_mult_qi_to_hi { } {
-    return [check_cached_effective_target_indexed vect_widen_mult_qi_to_hi {
+    return [check_cached_effective_target vect_widen_mult_qi_to_hi {
       expr { ([check_effective_target_vect_unpack]
 	       && [check_effective_target_vect_short_mult])
 	      || ([istarget powerpc*-*-*]
@@ -8821,7 +8947,7 @@ proc check_effective_target_vect_widen_mult_qi_to_hi { } {
 
 
 proc check_effective_target_vect_widen_mult_hi_to_si { } {
-    return [check_cached_effective_target_indexed vect_widen_mult_hi_to_si {
+    return [check_cached_effective_target vect_widen_mult_hi_to_si {
       expr { ([check_effective_target_vect_unpack]
 	      && [check_effective_target_vect_int_mult])
 	     || ([istarget powerpc*-*-*]
@@ -8841,7 +8967,7 @@ proc check_effective_target_vect_widen_mult_hi_to_si { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_mult_qi_to_hi_pattern { } {
-    return [check_cached_effective_target_indexed vect_widen_mult_qi_to_hi_pattern {
+    return [check_cached_effective_target vect_widen_mult_qi_to_hi_pattern {
       expr { [istarget powerpc*-*-*]
 	     || ([is-effective-target arm_neon]
 		 && [check_effective_target_arm_little_endian])
@@ -8857,7 +8983,7 @@ proc check_effective_target_vect_widen_mult_qi_to_hi_pattern { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_mult_hi_to_si_pattern { } {
-    return [check_cached_effective_target_indexed vect_widen_mult_hi_to_si_pattern {
+    return [check_cached_effective_target vect_widen_mult_hi_to_si_pattern {
       expr { [istarget powerpc*-*-*]
 	     || [istarget ia64-*-*]
 	     || [istarget loongarch*-*-*]
@@ -8875,7 +9001,7 @@ proc check_effective_target_vect_widen_mult_hi_to_si_pattern { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_mult_si_to_di_pattern { } {
-    return [check_cached_effective_target_indexed vect_widen_mult_si_to_di_pattern {
+    return [check_cached_effective_target vect_widen_mult_si_to_di_pattern {
       expr { [istarget ia64-*-*]
 	     || [check_effective_target_x86]
 	     || [istarget loongarch*-*-*]
@@ -8889,7 +9015,7 @@ proc check_effective_target_vect_widen_mult_si_to_di_pattern { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_widen_shift { } {
-    return [check_cached_effective_target_indexed vect_widen_shift {
+    return [check_cached_effective_target vect_widen_shift {
       expr { [is-effective-target arm_neon] }}]
 }
 
@@ -8899,7 +9025,7 @@ proc check_effective_target_vect_widen_shift { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_sdot_qi { } {
-    return [check_cached_effective_target_indexed vect_sdot_qi {
+    return [check_cached_effective_target vect_sdot_qi {
       expr { [istarget ia64-*-*]
 	     || [istarget aarch64*-*-*]
 	     || [istarget arm*-*-*]
@@ -8917,7 +9043,7 @@ proc check_effective_target_vect_sdot_qi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_udot_qi { } {
-    return [check_cached_effective_target_indexed vect_udot_qi {
+    return [check_cached_effective_target vect_udot_qi {
       expr { [istarget powerpc*-*-*]
 	     || [istarget aarch64*-*-*]
 	     || [istarget arm*-*-*]
@@ -8937,7 +9063,7 @@ proc check_effective_target_vect_udot_qi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_usdot_qi { } {
-    return [check_cached_effective_target_indexed vect_usdot_qi {
+    return [check_cached_effective_target vect_usdot_qi {
       expr { [istarget aarch64*-*-*]
 	     || [istarget arm*-*-*] }}]
 }
@@ -8949,7 +9075,7 @@ proc check_effective_target_vect_usdot_qi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_sdot_hi { } {
-    return [check_cached_effective_target_indexed vect_sdot_hi {
+    return [check_cached_effective_target vect_sdot_hi {
       expr { [istarget powerpc*-*-*]
 	     || [istarget ia64-*-*]
 	     || [check_effective_target_x86]
@@ -8967,7 +9093,7 @@ proc check_effective_target_vect_sdot_hi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_udot_hi { } {
-    return [check_cached_effective_target_indexed vect_udot_hi {
+    return [check_cached_effective_target vect_udot_hi {
       expr { [istarget powerpc*-*-*]
 	     || ([istarget mips*-*-*]
 		 && [et-is-effective-target mips_msa])
@@ -8983,7 +9109,7 @@ proc check_effective_target_vect_udot_hi { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_usad_char { } {
-    return [check_cached_effective_target_indexed vect_usad_char {
+    return [check_cached_effective_target vect_usad_char {
       expr { [check_effective_target_x86]
 	      || ([istarget aarch64*-*-*]
 		  && ![check_effective_target_aarch64_sve])
@@ -9031,7 +9157,7 @@ proc check_effective_target_vect_sdiv_pow2_si {} {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_pack_trunc { } {
-    return [check_cached_effective_target_indexed vect_pack_trunc {
+    return [check_cached_effective_target vect_pack_trunc {
       expr { [istarget powerpc*-*-*]
 	     || [check_effective_target_x86]
 	     || [istarget aarch64*-*-*]
@@ -9054,7 +9180,7 @@ proc check_effective_target_vect_pack_trunc { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_unpack { } {
-    return [check_cached_effective_target_indexed vect_unpack {
+    return [check_cached_effective_target vect_unpack {
       expr { [istarget powerpc*-*-*]
 	     || [check_effective_target_x86]
 	     || [istarget ia64-*-*]
@@ -9078,7 +9204,7 @@ proc check_effective_target_vect_unpack { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_unaligned_stack { } {
-    return [check_cached_effective_target_indexed unaligned_stack { expr 0 }]
+    return [check_cached_effective_target unaligned_stack { expr 0 }]
 }
 
 # Return 1 if the target plus current options does not support a vector
@@ -9087,7 +9213,7 @@ proc check_effective_target_unaligned_stack { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_no_align { } {
-    return [check_cached_effective_target_indexed vect_no_align {
+    return [check_cached_effective_target vect_no_align {
       expr { [istarget mipsisa64*-*-*]
 	     || [istarget mips-sde-elf]
 	     || [istarget sparc*-*-*]
@@ -9103,7 +9229,7 @@ proc check_effective_target_vect_no_align { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_vect_hw_misalign { } {
-    return [check_cached_effective_target_indexed vect_hw_misalign {
+    return [check_cached_effective_target vect_hw_misalign {
 	if { [check_effective_target_x86]
 	     || ([istarget powerpc*-*-*] && [check_p8vector_hw_available])
 	     || [istarget aarch64*-*-*]
@@ -9165,7 +9291,7 @@ proc check_effective_target_no_alignment_constraints { } {
 proc check_effective_target_natural_alignment_32 { } {
     # FIXME: 32bit powerpc: guaranteed only if MASK_ALIGN_NATURAL/POWER.
     # FIXME: m68k has -malign-int
-    return [check_cached_effective_target_indexed natural_alignment_32 {
+    return [check_cached_effective_target natural_alignment_32 {
       if { ([istarget *-*-darwin*] && [is-effective-target lp64])
 	   || [istarget avr-*-*]
 	   || [istarget m68k-*-linux*]
@@ -9174,7 +9300,6 @@ proc check_effective_target_natural_alignment_32 { } {
 	   || [istarget rl78-*-*]
 	   || [istarget pdp11-*-*]
 	   || [istarget msp430-*-*]
-	   || [istarget m32c-*-*]
 	   || [istarget cris-*-*] } {
 	   return 0
 	 } else {
@@ -9189,7 +9314,7 @@ proc check_effective_target_natural_alignment_32 { } {
 # This won't change for different subtargets so cache the result.
 
 proc check_effective_target_natural_alignment_64 { } {
-    return [check_cached_effective_target_indexed natural_alignment_64 {
+    return [check_cached_effective_target natural_alignment_64 {
       expr { [is-effective-target natural_alignment_32]
 	     && [is-effective-target lp64] && ![istarget *-*-darwin*] }
     }]
@@ -9677,7 +9802,7 @@ proc check_effective_target_vector_alignment_reachable_for_64bit { } {
 # Return 1 if the target only requires element alignment for vector accesses
 
 proc check_effective_target_vect_element_align { } {
-    return [check_cached_effective_target_indexed vect_element_align {
+    return [check_cached_effective_target vect_element_align {
       expr { ([istarget arm*-*-*]
 	      && ![check_effective_target_arm_vect_no_misalign])
 	     || [check_effective_target_vect_hw_misalign] }}]
@@ -9741,7 +9866,7 @@ proc check_effective_target_vect_scatter_store { } {
 # Return 1 if the target supports vector conditional operations, 0 otherwise.
 
 proc check_effective_target_vect_condition { } {
-    return [check_cached_effective_target_indexed vect_condition {
+    return [check_cached_effective_target vect_condition {
       expr { [istarget aarch64*-*-*]
 	     || [istarget powerpc*-*-*]
 	     || [istarget ia64-*-*]
@@ -9762,7 +9887,7 @@ proc check_effective_target_vect_condition { } {
 # the comparison has different type from the lhs, 0 otherwise.
 
 proc check_effective_target_vect_cond_mixed { } {
-    return [check_cached_effective_target_indexed vect_cond_mixed {
+    return [check_cached_effective_target vect_cond_mixed {
       expr { [check_effective_target_x86]
 	     || [istarget aarch64*-*-*]
 	     || [istarget powerpc*-*-*]
@@ -9781,7 +9906,7 @@ proc check_effective_target_vect_cond_mixed { } {
 # Return 1 if the target supports vector char multiplication, 0 otherwise.
 
 proc check_effective_target_vect_char_mult { } {
-    return [check_cached_effective_target_indexed vect_char_mult {
+    return [check_cached_effective_target vect_char_mult {
       expr { [istarget aarch64*-*-*]
 	     || [istarget ia64-*-*]
 	     || [check_effective_target_x86]
@@ -9801,7 +9926,7 @@ proc check_effective_target_vect_char_mult { } {
 # Return 1 if the target supports vector short multiplication, 0 otherwise.
 
 proc check_effective_target_vect_short_mult { } {
-    return [check_cached_effective_target_indexed vect_short_mult {
+    return [check_cached_effective_target vect_short_mult {
       expr { [istarget ia64-*-*]
 	     || [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
@@ -9822,7 +9947,7 @@ proc check_effective_target_vect_short_mult { } {
 # Return 1 if the target supports vector int multiplication, 0 otherwise.
 
 proc check_effective_target_vect_int_mult { } {
-    return [check_cached_effective_target_indexed vect_int_mult {
+    return [check_cached_effective_target vect_int_mult {
       expr { [istarget powerpc*-*-*]
 	     || [check_effective_target_x86]
 	     || [istarget ia64-*-*]
@@ -9874,7 +9999,7 @@ proc check_effective_target_vect_long_mult { } {
 # Return 1 if the target supports vector even/odd elements extraction, 0 otherwise.
 
 proc check_effective_target_vect_extract_even_odd { } {
-    return [check_cached_effective_target_indexed extract_even_odd {
+    return [check_cached_effective_target extract_even_odd {
       expr { [istarget aarch64*-*-*]
 	     || [istarget powerpc*-*-*]
 	     || [is-effective-target arm_neon]
@@ -9894,7 +10019,7 @@ proc check_effective_target_vect_extract_even_odd { } {
 # Return 1 if the target supports vector interleaving, 0 otherwise.
 
 proc check_effective_target_vect_interleave { } {
-    return [check_cached_effective_target_indexed vect_interleave {
+    return [check_cached_effective_target vect_interleave {
       expr { [istarget aarch64*-*-*]
 	     || [istarget powerpc*-*-*]
 	     || [is-effective-target arm_neon]
@@ -9915,7 +10040,7 @@ foreach N {2 3 4 5 6 7 8} {
     eval [string map [list N $N] {
 	# Return 1 if the target supports 2-vector interleaving
 	proc check_effective_target_vect_stridedN { } {
-	    return [check_cached_effective_target_indexed vect_stridedN {
+	    return [check_cached_effective_target vect_stridedN {
 		if { (N & -N) == N
 		     && [check_effective_target_vect_interleave]
 		     && [check_effective_target_vect_extract_even_odd] } {
@@ -10026,7 +10151,7 @@ proc check_effective_target_vect32 { } {
 # Return 1 if the target supports vector copysignf calls.
 
 proc check_effective_target_vect_call_copysignf { } {
-    return [check_cached_effective_target_indexed vect_call_copysignf {
+    return [check_cached_effective_target vect_call_copysignf {
       expr { [check_effective_target_x86]
 	     || [istarget powerpc*-*-*]
 	     || [istarget aarch64*-*-*]
@@ -10065,7 +10190,7 @@ proc add_options_for_sqrt_insn { flags } {
 # Return 1 if the target supports vector sqrtf calls.
 
 proc check_effective_target_vect_call_sqrtf { } {
-    return [check_cached_effective_target_indexed vect_call_sqrtf {
+    return [check_cached_effective_target vect_call_sqrtf {
       expr { [istarget aarch64*-*-*]
 	     || [check_effective_target_x86]
 	     || ([istarget powerpc*-*-*] && [check_vsx_hw_available])
@@ -10096,7 +10221,7 @@ proc check_effective_target_vect_call_lrint { } {
 # Return 1 if the target supports vector btrunc calls.
 
 proc check_effective_target_vect_call_btrunc { } {
-    return [check_cached_effective_target_indexed vect_call_btrunc {
+    return [check_cached_effective_target vect_call_btrunc {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10104,7 +10229,7 @@ proc check_effective_target_vect_call_btrunc { } {
 # Return 1 if the target supports vector btruncf calls.
 
 proc check_effective_target_vect_call_btruncf { } {
-    return [check_cached_effective_target_indexed vect_call_btruncf {
+    return [check_cached_effective_target vect_call_btruncf {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10112,7 +10237,7 @@ proc check_effective_target_vect_call_btruncf { } {
 # Return 1 if the target supports vector ceil calls.
 
 proc check_effective_target_vect_call_ceil { } {
-    return [check_cached_effective_target_indexed vect_call_ceil {
+    return [check_cached_effective_target vect_call_ceil {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10120,7 +10245,7 @@ proc check_effective_target_vect_call_ceil { } {
 # Return 1 if the target supports vector ceilf calls.
 
 proc check_effective_target_vect_call_ceilf { } {
-    return [check_cached_effective_target_indexed vect_call_ceilf {
+    return [check_cached_effective_target vect_call_ceilf {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10128,7 +10253,7 @@ proc check_effective_target_vect_call_ceilf { } {
 # Return 1 if the target supports vector floor calls.
 
 proc check_effective_target_vect_call_floor { } {
-    return [check_cached_effective_target_indexed vect_call_floor {
+    return [check_cached_effective_target vect_call_floor {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10136,7 +10261,7 @@ proc check_effective_target_vect_call_floor { } {
 # Return 1 if the target supports vector floorf calls.
 
 proc check_effective_target_vect_call_floorf { } {
-    return [check_cached_effective_target_indexed vect_call_floorf {
+    return [check_cached_effective_target vect_call_floorf {
       expr { [istarget aarch64*-*-*]
 	     || [istarget amdgcn-*-*] }}]
 }
@@ -10144,42 +10269,42 @@ proc check_effective_target_vect_call_floorf { } {
 # Return 1 if the target supports vector lceil calls.
 
 proc check_effective_target_vect_call_lceil { } {
-    return [check_cached_effective_target_indexed vect_call_lceil {
+    return [check_cached_effective_target vect_call_lceil {
       expr { [istarget aarch64*-*-*] }}]
 }
 
 # Return 1 if the target supports vector lfloor calls.
 
 proc check_effective_target_vect_call_lfloor { } {
-    return [check_cached_effective_target_indexed vect_call_lfloor {
+    return [check_cached_effective_target vect_call_lfloor {
       expr { [istarget aarch64*-*-*] }}]
 }
 
 # Return 1 if the target supports vector nearbyint calls.
 
 proc check_effective_target_vect_call_nearbyint { } {
-    return [check_cached_effective_target_indexed vect_call_nearbyint {
+    return [check_cached_effective_target vect_call_nearbyint {
       expr { [istarget aarch64*-*-*] }}]
 }
 
 # Return 1 if the target supports vector nearbyintf calls.
 
 proc check_effective_target_vect_call_nearbyintf { } {
-    return [check_cached_effective_target_indexed vect_call_nearbyintf {
+    return [check_cached_effective_target vect_call_nearbyintf {
       expr { [istarget aarch64*-*-*] }}]
 }
 
 # Return 1 if the target supports vector round calls.
 
 proc check_effective_target_vect_call_round { } {
-    return [check_cached_effective_target_indexed vect_call_round {
+    return [check_cached_effective_target vect_call_round {
       expr { [istarget aarch64*-*-*] }}]
 }
 
 # Return 1 if the target supports vector roundf calls.
 
 proc check_effective_target_vect_call_roundf { } {
-    return [check_cached_effective_target_indexed vect_call_roundf {
+    return [check_cached_effective_target vect_call_roundf {
       expr { [istarget aarch64*-*-*] }}]
 }
 
@@ -10630,13 +10755,7 @@ proc check_effective_target_init_priority {} {
 # arguments with keywords that pass particular arguments.
 
 proc is-effective-target { arg } {
-    global et_index
     set selected 0
-    if { ![info exists et_index] } {
-	# Initialize the effective target index that is used in some
-	# check_effective_target_* procs.
-	set et_index 0
-    }
     if { [info procs check_effective_target_${arg}] != [list] } {
 	set selected [check_effective_target_${arg}]
     } else {
@@ -10647,6 +10766,7 @@ proc is-effective-target { arg } {
 	  "p9vector_hw"    { set selected [check_p9vector_hw_available] }
 	  "p9modulo_hw"    { set selected [check_p9modulo_hw_available] }
 	  "power10_hw"     { set selected [check_power10_hw_available] }
+	  "powerpc_future_hw" { set selected [check_powerpc_future_hw_available] }
 	  "ppc_float128_sw" { set selected [check_ppc_float128_sw_available] }
 	  "ppc_float128_hw" { set selected [check_ppc_float128_hw_available] }
 	  "ppc_recip_hw"   { set selected [check_ppc_recip_hw_available] }
@@ -10680,6 +10800,7 @@ proc is-effective-target-keyword { arg } {
 	  "p9vector_hw"    { return 1 }
 	  "p9modulo_hw"    { return 1 }
 	  "power10_hw"     { return 1 }
+	  "powerpc_future_hw" { return 1 }
 	  "ppc_float128_sw" { return 1 }
 	  "ppc_float128_hw" { return 1 }
 	  "ppc_recip_hw"   { return 1 }
@@ -10718,9 +10839,9 @@ proc et-dg-runtest { runtest testcases flags default-extra-flags } {
 		set dg-do-what-default run
 	    }
 	    $runtest $testcases $target_flags ${default-extra-flags}
+	    unset et_index
 	}
     } else {
-	set et_index 0
 	$runtest $testcases $flags ${default-extra-flags}
     }
 }
@@ -10732,13 +10853,8 @@ proc et-is-effective-target { target } {
     global EFFECTIVE_TARGETS
     global et_index
 
-    if { [info exists EFFECTIVE_TARGETS] } {
-	if { [llength $EFFECTIVE_TARGETS] > $et_index
-	     && [lindex $EFFECTIVE_TARGETS $et_index] == $target } {
-	    return 1
-	} else {
-	    return 0
-	}
+    if { [info exists et_index] } {
+        return [string equal [lindex $EFFECTIVE_TARGETS $et_index] $target]
     } else {
 	return [check_effective_target_${target}]
     }
@@ -11052,7 +11168,7 @@ proc check_effective_target_d_runtime_has_std_library { } {
 
 	extern(C) int main() {
 	    import std.math;
-	    real function(real) pcos = &cos;
+	    real function(real) pcos = &acos;
 	    return 0;
 	}
     }]
@@ -12725,14 +12841,10 @@ set exts {
     "fp" "fp8" "fp8dot2" "fp8dot4" "fp8fma" "i8mm" "ls64" "lse" "lut"
     "sb" "simd" "sve-b16b16" "sve" "sve2" "sve-sm4" "sve-aes" "sve-bitperm"
     "sve-sha3" "f8f16mm" "f8f32mm" "sve-f16f32mm"
-}
-
-# We don't support SME without SVE2, so we'll use armv9 as the base
-# archiecture for SME and the features that require it.
-set exts_sve2 {
     "sme-f8f16" "sme-f8f32"
-    "sme-b16b16" "sme-f16f16" "sme-i16i64" "sme" "sme2" "sme2p1"
-    "ssve-fp8dot2" "ssve-fp8dot4" "ssve-fp8fma" "sve-bfscale"
+    "sme-b16b16" "sme-f16f16" "sme-i16i64" "sme" "sme2" "sme2p1" "sme2p2"
+    "ssve-fp8dot2" "ssve-fp8dot4" "ssve-fp8fma" "sve-bfscale" "sme-lutv2"
+    "ssve-fexpa" "ssve-bitperm"
 }
 
 foreach { aarch64_ext } $exts {
@@ -12742,20 +12854,6 @@ foreach { aarch64_ext } $exts {
 		return [check_no_compiler_messages aarch64_FUNC_assembler object {
 			__asm__ (".arch_extension FUNC");
 		} "-march=armv8-a+FUNC"]
-	  } else {
-		return 0
-	  }
-	}
-    }]
-}
-
-foreach { aarch64_ext } $exts_sve2 {
-    eval [string map [list FUNC $aarch64_ext] {
-	proc check_effective_target_aarch64_asm_FUNC_ok { } {
-	  if { [istarget aarch64*-*-*] } {
-		return [check_no_compiler_messages aarch64_FUNC_assembler object {
-			__asm__ (".arch_extension FUNC");
-		} "-march=armv9-a+FUNC"]
 	  } else {
 		return 0
 	  }
@@ -12778,6 +12876,16 @@ proc check_effective_target_aarch64_asm_sve2p1_ok { } {
 	return [check_no_compiler_messages aarch64_sve2p1_assembler object {
 	    __asm__ (".arch_extension sve2p1; ld1w {z0.q},p7/z,[x0]");
 	} "-march=armv8-a+sve2p1"]
+    } else {
+	return 0
+    }
+}
+
+proc check_effective_target_aarch64_asm_sve2p2_ok { } {
+    if { [istarget aarch64*-*-*] } {
+	return [check_no_compiler_messages aarch64_sve2p2_assembler object {
+	    __asm__ (".arch_extension sve2p2; compact z0.b,p0,z1.b");
+	} "-march=armv8-a+sve2p2"]
     } else {
 	return 0
     }
@@ -13785,7 +13893,7 @@ proc check_effective_target_arm_v8_3a_complex_neon_ok_nocache { } {
     if { [istarget arm*-*-*] } {
 	set flag_opts {
 	    ""
-	    "-mcpu=unset -march=armv8.3-a+simd"
+	    "-mfpu=auto -mcpu=unset -march=armv8.3-a+simd"
 	    "-mfloat-abi=softfp -mfpu=auto -mcpu=unset -march=armv8.3-a+simd"
 	    "-mfloat-abi=hard -mfpu=auto -mcpu=unset -march=armv8.3-a+simd"
 	}
@@ -13888,7 +13996,7 @@ proc add_options_for_arm_v8_3a_fp16_complex_neon { flags } {
 
 proc check_effective_target_arm_v8_3a_complex_neon_hw { } {
     if { ![check_effective_target_arm_v8_3a_complex_neon_ok] } {
-	return 1;
+	return 0;
     }
     return [check_runtime arm_v8_3a_complex_neon_hw_available {
 	#include "arm_neon.h"
@@ -13994,7 +14102,7 @@ proc check_effective_target_glibc { } {
 foreach N {hf sf} {
     eval [string map [list N $N] {
 	proc check_effective_target_vect_complex_rot_N { } {
-	    return [check_cached_effective_target_indexed vect_complex_rot_N {
+	    return [check_cached_effective_target vect_complex_rot_N {
 	    expr { [istarget aarch64*-*-*]
 		    || [istarget arm*-*-*] }}]
 	}
@@ -14009,7 +14117,7 @@ foreach N {hf sf} {
 foreach N {df} {
     eval [string map [list N $N] {
 	proc check_effective_target_vect_complex_rot_N { } {
-	    return [check_cached_effective_target_indexed vect_complex_rot_N {
+	    return [check_cached_effective_target vect_complex_rot_N {
 	    expr { [istarget aarch64*-*-*] }}]
 	}
     }]
@@ -14140,10 +14248,13 @@ proc check_effective_target_movdir { } {
     } "-mmovdiri -mmovdir64b" ]
 }
 
-# Return 1 if the target does not support address sanitizer, 0 otherwise
+# Return 1 if the target does not support address sanitizer, 0 otherwise.
+# Note that this is usable only for compilation test cases.  (Otherwise, use a
+# proper 'asan.exp' file with 'asan_init'/'asan_finish' calls to set up linker
+# paths, etc.)
 
 proc check_effective_target_no_fsanitize_address {} {
-    if ![check_no_compiler_messages fsanitize_address executable {
+    if ![check_no_compiler_messages fsanitize_address assembly {
 	int main (void) { return 0; }
     } "-fsanitize=address" ] {
 	return 1;
@@ -14315,37 +14426,43 @@ proc check_effective_target___OPTIMIZE__ {} {
 # Return 1 if python3 (>= 3.6) is available.
 
 proc check_effective_target_recent_python3 { } {
-    set result [remote_exec host "python3 -c \"import sys; assert sys.version_info >= (3, 6)\""]
-    set status [lindex $result 0]
-    if { $status == 0 } then {
-	return 1;
-    } else {
-	return 0;
-    }
+    return [check_cached_effective_target recent_python3 {
+	set result [remote_exec host "python3 -c \"import sys; assert sys.version_info >= (3, 6)\""]
+	set status [lindex $result 0]
+	if { $status == 0 } then {
+	    return 1;
+	} else {
+	    return 0;
+	}
+    }]
 }
 
 # Return 1 if python3 contains a module
 
 proc check_effective_target_python3_module { module } {
-    set result [remote_exec host "python3 -c \"import $module\""]
-    set status [lindex $result 0]
-    if { $status == 0 } then {
-	return 1;
-    } else {
-	return 0;
-    }
+    return [check_cached_effective_target python3_module_$module {
+	set result [remote_exec host "python3 -c \"import $module\""]
+	set status [lindex $result 0]
+	if { $status == 0 } then {
+	    return 1;
+	} else {
+	    return 0;
+	}
+    }]
 }
 
 # Return 1 if pytest module is available for python3.
 
 proc check_effective_target_pytest3 { } {
-    set result [remote_exec host "python3 -m pytest --color=no -rap -s --tb=no --version"]
-    set status [lindex $result 0]
-    if { $status == 0 } then {
-	return 1;
-    } else {
-	return 0;
-    }
+    return [check_cached_effective_target pytest3 {
+	set result [remote_exec host "python3 -m pytest --color=no -rap -s --tb=no --version"]
+	set status [lindex $result 0]
+	if { $status == 0 } then {
+	    return 1;
+	} else {
+	    return 0;
+	}
+    }]
 }
 
 proc check_effective_target_property_1_needed { } {
@@ -14796,6 +14913,17 @@ proc check_effective_target_alarm { } {
 	  /* Infinite loop to simulate work...  */
 	  while (1);
 	  abort ();
+	}
+    }]
+}
+
+# Return true if sleep is supported on the target.
+
+proc check_effective_target_sleep { } {
+    return [check_no_compiler_messages sleep executable {
+	#include <unistd.h>
+	int main (void) {
+	  sleep (1);
 	}
     }]
 }

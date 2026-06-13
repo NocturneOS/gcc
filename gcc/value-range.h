@@ -55,7 +55,17 @@ enum value_range_discriminator
   VR_UNKNOWN
 };
 
-// Abstract class for ranges of any of the supported types.
+// Abstract class for representing subsets of values for various
+// supported types, such as the possible values of a variable.
+//
+// There are subclasses for each of integer, floating point, and pointer
+// types, each with their own strategies for efficiently representing
+// subsets of values.
+//
+// For efficiency, we can't precisely represent any arbitrary subset
+// of values of a type (which could require 2^N bits for a type of size N)
+// Hence operations on the subclasses may introduce imprecision
+// due to over-approximating the possible subsets.
 //
 // To query what types ranger and the entire ecosystem can support,
 // use value_range::supports_type_p(tree type).  This is a static
@@ -123,13 +133,18 @@ namespace inchash
   extern void add_vrange (const vrange &, hash &, unsigned flags = 0);
 }
 
-// A pair of values representing the known bits in a range.  Zero bits
+// A pair of values representing the known bits of a value.  Zero bits
 // in MASK cover constant values.  Set bits in MASK cover unknown
-// values.  VALUE are the known bits.
-//
-// Set bits in MASK (no meaningful information) must have their
-// corresponding bits in VALUE cleared, as this speeds up union and
-// intersect.
+// values.  VALUE are the known bits for the bits where MASK is zero,
+// and must be zero for the unknown bits where MASK is set (needed as an
+// optimization of union and intersect)
+// For example:
+// VALUE: [..., 0, 1, 0]
+// MASK:  [..., 1, 0, 0]
+//              ^  ^  ^
+//              |  |  known bit: {0}
+//              |  known bit: {1}
+//              unknown bit: {0, 1}
 
 class irange_bitmask
 {
@@ -194,7 +209,7 @@ irange_bitmask::get_precision () const
   return m_mask.get_precision ();
 }
 
-// The following two functions are meant for backwards compatability
+// The following two functions are meant for backwards compatibility
 // with the nonzero bitmask.  A cleared bit means the value must be 0.
 // A set bit means we have no information for the bit.
 
@@ -267,7 +282,8 @@ irange_bitmask::intersect (const irange_bitmask &src)
   return true;
 }
 
-// An integer range without any storage.
+// A subset of possible values for an integer type, leaving
+// allocation of storage to subclasses.
 
 class irange : public vrange
 {
@@ -470,7 +486,9 @@ public:
   tree ubound () const final override;
 };
 
-// The NAN state as an opaque object.
+// The possible NAN state of a floating point value as an opaque object.
+// This represents one of the four subsets of { -NaN, +NaN },
+// i.e. one of {}, { -NaN }, { +NaN}, or { -NaN, +NaN }.
 
 class nan_state
 {
@@ -521,10 +539,10 @@ nan_state::neg_p () const
   return m_neg_nan;
 }
 
-// A floating point range.
+// A subset of possible values for a floating point type.
 //
 // The representation is a type with a couple of endpoints, unioned
-// with the set of { -NAN, +Nan }.
+// with a subset of { -NaN, +NaN }.
 
 class frange final : public vrange
 {
@@ -749,13 +767,13 @@ public:
 //
 // Using any of the various constructors initializes the object
 // appropriately, but the default constructor is uninitialized and
-// must be initialized either with set_type() or by assigning into it.
+// must be initialized either with set_range_class() or by assigning into it.
 //
 // Assigning between incompatible types is allowed.  For example if a
 // temporary holds an irange, you can assign an frange into it, and
 // all the right things will happen.  However, before passing this
 // object to a function accepting a vrange, the correct type must be
-// set.  If it isn't, you can do so with set_type().
+// set.  If it isn't, you can do so with set_range_class().
 
 class value_range
 {
@@ -766,7 +784,7 @@ public:
   value_range (tree, tree, value_range_kind kind = VR_RANGE);
   value_range (const value_range &);
   ~value_range ();
-  void set_type (tree type);
+  void set_range_class (tree type);
   vrange& operator= (const vrange &);
   value_range& operator= (const value_range &);
   bool operator== (const value_range &r) const;
@@ -774,6 +792,7 @@ public:
   operator vrange &();
   operator const vrange &() const;
   void dump (FILE *) const;
+  void print (pretty_printer *) const;
   static bool supports_type_p (const_tree type);
 
   tree type () { return m_vrange->type (); }
@@ -814,7 +833,7 @@ private:
 };
 
 // The default constructor is uninitialized and must be initialized
-// with either set_type() or with an assignment into it.
+// with either set_range_class() or with an assignment into it.
 
 inline
 value_range::value_range ()
@@ -867,9 +886,10 @@ value_range::~value_range ()
 
 // Initialize object to an UNDEFINED range that can hold ranges of
 // TYPE.  Clean-up memory if there was a previous object.
+// Note that this does *not* set the type of the underlying vrange.
 
 inline void
-value_range::set_type (tree type)
+value_range::set_range_class (tree type)
 {
   if (m_vrange)
     m_vrange->~vrange ();
@@ -878,6 +898,7 @@ value_range::set_type (tree type)
 
 // Initialize object to an UNDEFINED range that can hold ranges of
 // TYPE.
+// Note that this does *not* set the type of the underlying vrange.
 
 inline void
 value_range::init (tree type)

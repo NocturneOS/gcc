@@ -46,7 +46,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+sve2+sme"
+#pragma GCC target "+sme"
 #ifndef __ARM_FEATURE_SME
 #error Foo
 #endif
@@ -66,7 +66,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme"
+#pragma GCC target "+nothing+sme"
 #ifdef __ARM_FEATURE_SME_I16I64
 #error Foo
 #endif
@@ -86,7 +86,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme-i16i64"
+#pragma GCC target "+nothing+sme-i16i64"
 #ifndef __ARM_FEATURE_SME_I16I64
 #error Foo
 #endif
@@ -97,7 +97,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme-b16b16"
+#pragma GCC target "+nothing+sme-b16b16"
 #ifndef __ARM_FEATURE_SME_B16B16
 #error Foo
 #endif
@@ -144,7 +144,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme-f16f16"
+#pragma GCC target "+nothing+sme-f16f16"
 #ifndef __ARM_FEATURE_SME_F16F16
 #error Foo
 #endif
@@ -155,7 +155,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme-f64f64"
+#pragma GCC target "+nothing+sme-f64f64"
 #ifndef __ARM_FEATURE_SME_F64F64
 #error Foo
 #endif
@@ -199,7 +199,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sve-b16b16+sme2"
+#pragma GCC target "+nothing+sve-b16b16+sme2"
 #ifndef __ARM_FEATURE_SVE_B16B16
 #error Foo
 #endif
@@ -207,7 +207,7 @@
 #error Foo
 #endif
 
-#pragma GCC target "+nothing+sve2+sme2p1"
+#pragma GCC target "+nothing+sme2p1"
 #ifndef __ARM_FEATURE_SME
 #error Foo
 #endif
@@ -215,6 +215,20 @@
 #error Foo
 #endif
 #ifndef __ARM_FEATURE_SME2p1
+#error Foo
+#endif
+
+#pragma GCC target "+nothing+sve2+sme2p2"
+#ifndef __ARM_FEATURE_SME
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2p1
+#error Foo
+#endif
+#ifndef __ARM_FEATURE_SME2p2
 #error Foo
 #endif
 
@@ -367,5 +381,10 @@
 
 #pragma GCC target "arch=armv8-a+faminmax"
 #ifndef __ARM_FEATURE_FAMINMAX
+#error Foo
+#endif
+
+#pragma GCC target "arch=armv8-a+sve2+ssve-fexpa"
+#ifndef __ARM_FEATURE_SSVE_FEXPA
 #error Foo
 #endif

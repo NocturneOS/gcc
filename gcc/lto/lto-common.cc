@@ -96,7 +96,7 @@ free_with_string (void *arg)
 {
   struct lto_section_slot *s = (struct lto_section_slot *)arg;
 
-  free (CONST_CAST (char *, s->name));
+  free (const_cast<char *> (s->name));
   free (arg);
 }
 
@@ -397,8 +397,8 @@ gimple_canonical_type_eq (const void *p1, const void *p2)
 {
   const_tree t1 = (const_tree) p1;
   const_tree t2 = (const_tree) p2;
-  return gimple_canonical_types_compatible_p (CONST_CAST_TREE (t1),
-					      CONST_CAST_TREE (t2));
+  return gimple_canonical_types_compatible_p (const_cast<tree> (t1),
+					      const_cast<tree> (t2));
 }
 
 /* Main worker for gimple_register_canonical_type.  */
@@ -1819,7 +1819,7 @@ unify_scc (class data_in *data_in, unsigned from,
 typedef int_hash<unsigned, 0, UINT_MAX> code_id_hash;
 
 /* Do registering necessary once new tree fully streamed in (including all
-   trees it reffers to).  */
+   trees it refers to).  */
 
 static void
 process_new_tree (tree t, hash_map <code_id_hash, unsigned> *hm,
@@ -2504,7 +2504,7 @@ get_section_data (struct lto_file_decl_data *file_data,
       *len = f_slot->len;
     }
 
-  free (CONST_CAST (char *, section_name));
+  free (const_cast<char *> (section_name));
   return data;
 }
 
@@ -2531,7 +2531,7 @@ free_section_data (struct lto_file_decl_data *file_data ATTRIBUTE_UNUSED,
 
   munmap ((caddr_t) computed_offset, computed_len);
 #else
-  free (CONST_CAST(char *, offset));
+  free (const_cast<char *> (offset));
 #endif
 }
 
@@ -2549,7 +2549,7 @@ static lto_file *current_lto_file;
       } \
   } while (0)
 
-/* Ensure that TT isn't a replacable var of function decl.  */
+/* Ensure that TT isn't a replaceable var of function decl.  */
 #define LTO_NO_PREVAIL(tt) \
   gcc_checking_assert (!(tt) || !VAR_OR_FUNCTION_DECL_P (tt))
 
@@ -2870,7 +2870,7 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
   canonical_type_hash_cache = NULL;
 
   /* At this stage we know that majority of GGC memory is reachable.
-     Growing the limits prevents unnecesary invocation of GGC.  */
+     Growing the limits prevents unnecessary invocation of GGC.  */
   ggc_grow ();
   report_heap_memory_use ();
 
@@ -2953,7 +2953,7 @@ read_cgraph_and_symbols (unsigned nfiles, const char **fnames)
 
   /* During WPA we want to prevent ggc collecting by default.  Grow limits
      until after the IPA summaries are streamed in.  Basically all IPA memory
-     is explcitly managed by ggc_free and ggc collect is not useful.
+     is explicitly managed by ggc_free and ggc collect is not useful.
      Exception are the merged declarations.  */
   ggc_grow ();
   report_heap_memory_use ();

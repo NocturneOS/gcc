@@ -132,6 +132,14 @@ mscalar-strict-align
 Target Save Alias(mstrict-align)
 Do not generate unaligned scalar memory accesses.
 
+mzilsd-word-align
+Target RejectNegative
+Allow Zilsd/Zclsd memory accesses to be 4-byte aligned.
+
+mzilsd-strict-align
+Target RejectNegative
+Force Zilsd/Zclsd memory accesses to be 8-byte aligned.
+
 mvector-strict-align
 Target Save Var(rvv_vector_strict_align) Init(1)
 Do not create element-misaligned vector memory accesses.
@@ -170,6 +178,12 @@ Omit the frame pointer in leaf functions.
 
 TargetVariable
 int riscv_isa_flags
+
+TargetVariable
+enum riscv_zilsd_align_type riscv_zilsd_align = RISCV_ZILSD_ALIGN_DEFAULT
+
+TargetVariable
+int riscv_zilsd_align_explicit = 0
 
 Mask(64BIT) Var(riscv_isa_flags)
 
@@ -286,9 +300,17 @@ Max number of bytes to compare as part of inlined strcmp/strncmp routines (defau
 Target RejectNegative Joined UInteger Var(gpr2vr_cost) Init(GPR2VR_COST_UNPROVIDED)
 Set the cost value of the rvv instruction when operate from GPR to VR.
 
+-param=vr2gpr-cost=
+Target RejectNegative Joined UInteger Var(vr2gpr_cost) Init(VR2GPR_COST_UNPROVIDED)
+Set the cost value of the rvv instruction when operate from VR to GPR .
+
 -param=fpr2vr-cost=
 Target RejectNegative Joined UInteger Var(fpr2vr_cost) Init(FPR2VR_COST_UNPROVIDED)
 Set the cost value of the rvv instruction when operate from FPR to VR.
+
+-param=vr2fpr-cost=
+Target RejectNegative Joined UInteger Var(vr2fpr_cost) Init(VR2FPR_COST_UNPROVIDED)
+Set the cost value of the rvv instruction when operate from VR to FPR.
 
 -param=riscv-autovec-mode=
 Target Undocumented RejectNegative Joined Var(riscv_autovec_mode) Save
@@ -415,3 +437,20 @@ Specifies whether the fence.tso instruction should be used.
 mautovec-segment
 Target Integer Var(riscv_mautovec_segment) Init(1)
 Enable (default) or disable generation of vector segment load/store instructions.
+
+Enum
+Name(arcv_mpy_option) Type(enum arcv_mpy_option_enum)
+Valid arguments to -mmpy_option=:
+
+EnumValue
+Enum(arcv_mpy_option) String(1c) Value(ARCV_MPY_OPTION_1C)
+
+EnumValue
+Enum(arcv_mpy_option) String(2c) Value(ARCV_MPY_OPTION_2C)
+
+EnumValue
+Enum(arcv_mpy_option) String(10c) Value(ARCV_MPY_OPTION_10C)
+
+mmpy-option=
+Target RejectNegative Joined Enum(arcv_mpy_option) Var(arcv_mpy_option) Init(ARCV_MPY_OPTION_2C)
+The type of MPY unit used by the RMX-100 core (to be used in combination with -mtune=arc-v-rmx-100-series) (default: 2c).

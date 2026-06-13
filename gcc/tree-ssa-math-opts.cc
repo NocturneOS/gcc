@@ -102,8 +102,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "fold-const.h"
 #include "gimple-iterator.h"
 #include "gimple-fold.h"
-#include "gimplify.h"
-#include "gimplify-me.h"
 #include "stor-layout.h"
 #include "tree-cfg.h"
 #include "tree-dfa.h"
@@ -1582,7 +1580,7 @@ powi_as_mults (gimple_stmt_iterator *gsi, location_t loc,
 /* ARG0 and N are the two arguments to a powi builtin in GSI with
    location info LOC.  If the arguments are appropriate, create an
    equivalent sequence of statements prior to GSI using an optimal
-   number of multiplications, and return an expession holding the
+   number of multiplications, and return an expression holding the
    result.  */
 
 static tree
@@ -1999,7 +1997,7 @@ expand_pow_as_sqrts (gimple_stmt_iterator *gsi, location_t loc,
 /* ARG0 and ARG1 are the two arguments to a pow builtin call in GSI
    with location info LOC.  If possible, create an equivalent and
    less expensive sequence of statements prior to GSI, and return an
-   expession holding the result.  */
+   expression holding the result.  */
 
 static tree
 gimple_expand_builtin_pow (gimple_stmt_iterator *gsi, location_t loc,
@@ -2027,6 +2025,9 @@ gimple_expand_builtin_pow (gimple_stmt_iterator *gsi, location_t loc,
       && ((TREE_CODE (arg0) == REAL_CST
 	   && REAL_VALUE_ISSIGNALING_NAN (TREE_REAL_CST (arg0)))
 	  || REAL_VALUE_ISSIGNALING_NAN (TREE_REAL_CST (arg1))))
+    return NULL_TREE;
+
+  if (flag_errno_math)
     return NULL_TREE;
 
   /* If the exponent is equivalent to an integer, expand to an optimal
@@ -2095,7 +2096,7 @@ gimple_expand_builtin_pow (gimple_stmt_iterator *gsi, location_t loc,
 
 
   /* Attempt to expand the POW as a product of square root chains.
-     Expand the 0.25 case even when otpimising for size.  */
+     Expand the 0.25 case even when optimising for size.  */
   if (flag_unsafe_math_optimizations
       && sqrtfn
       && hw_sqrt_exists
@@ -2736,7 +2737,7 @@ convert_mult_to_widen (gimple *stmt, gimple_stmt_iterator *gsi)
     return false;
 
   /* if any one of rhs1 and rhs2 is subject to abnormal coalescing,
-     avoid the tranform. */
+     avoid the transform. */
   if ((TREE_CODE (rhs1) == SSA_NAME
        && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (rhs1))
       || (TREE_CODE (rhs2) == SSA_NAME
@@ -2801,7 +2802,7 @@ convert_mult_to_widen (gimple *stmt, gimple_stmt_iterator *gsi)
 	}
     }
 
-  /* Ensure that the inputs to the handler are in the correct precison
+  /* Ensure that the inputs to the handler are in the correct precision
      for the opcode.  This will be the full mode size.  */
   actual_precision = GET_MODE_PRECISION (actual_mode);
   if (2 * actual_precision > TYPE_PRECISION (type))
@@ -2979,6 +2980,11 @@ convert_plusminus_to_widen (gimple_stmt_iterator *gsi, gimple *stmt,
   if (to_mode == from_mode)
     return false;
 
+  /* For fixed point types, the mode classes could be different
+     so reject that case. */
+  if (GET_MODE_CLASS (from_mode) != GET_MODE_CLASS (to_mode))
+    return false;
+
   from_unsigned1 = TYPE_UNSIGNED (type1);
   from_unsigned2 = TYPE_UNSIGNED (type2);
   optype = type1;
@@ -3044,7 +3050,7 @@ convert_plusminus_to_widen (gimple_stmt_iterator *gsi, gimple *stmt,
   if (handler == CODE_FOR_nothing)
     return false;
 
-  /* Ensure that the inputs to the handler are in the correct precison
+  /* Ensure that the inputs to the handler are in the correct precision
      for the opcode.  This will be the full mode size.  */
   actual_precision = GET_MODE_PRECISION (actual_mode);
   if (actual_precision != TYPE_PRECISION (type1)
@@ -3105,7 +3111,6 @@ convert_plusminus_to_widen (gimple_stmt_iterator *gsi, gimple *stmt,
 static void
 convert_mult_to_fma_1 (tree mul_result, tree op1, tree op2)
 {
-  tree type = TREE_TYPE (mul_result);
   gimple *use_stmt;
   imm_use_iterator imm_iter;
   gcall *fma_stmt;
@@ -3167,14 +3172,14 @@ convert_mult_to_fma_1 (tree mul_result, tree op1, tree op2)
 	{
 	  if (ops[0] == result)
 	    /* a * b - c -> a * b + (-c)  */
-	    addop = gimple_build (&seq, NEGATE_EXPR, type, addop);
+	    addop = gimple_build (&seq, NEGATE_EXPR, TREE_TYPE (addop), addop);
 	  else
 	    /* a - b * c -> (-b) * c + a */
 	    negate_p = !negate_p;
 	}
 
       if (negate_p)
-	mulop1 = gimple_build (&seq, NEGATE_EXPR, type, mulop1);
+	mulop1 = gimple_build (&seq, NEGATE_EXPR, TREE_TYPE (mulop1), mulop1);
 
       if (seq)
 	gsi_insert_seq_before (&gsi, seq, GSI_SAME_STMT);
@@ -3458,6 +3463,7 @@ convert_mult_to_fma (gimple *mul_stmt, tree op1, tree op2,
 	  use_operand_p tmp_use_p;
 	  if (single_imm_use (cast_lhs, &tmp_use_p, &tmp_use))
 	    use_stmt = tmp_use;
+	  result = cast_lhs;
 	}
 
       /* For now restrict this operations to single basic blocks.  In theory
@@ -3510,6 +3516,10 @@ convert_mult_to_fma (gimple *mul_stmt, tree op1, tree op2,
       tree_code code;
       if (!can_interpret_as_conditional_op_p (use_stmt, &cond, &code, ops,
 					      &else_value, &len, &bias))
+	return false;
+
+      /* The multiplication result must be one of the addition operands.  */
+      if (ops[0] != result && ops[1] != result)
 	return false;
 
       switch (code)
@@ -5411,7 +5421,11 @@ match_uaddc_usubc (gimple_stmt_iterator *gsi, gimple *stmt, tree_code code)
 			TYPE_MODE (type)) == CODE_FOR_nothing
       || (rhs[2]
 	  && optab_handler (code == PLUS_EXPR ? uaddc5_optab : usubc5_optab,
-			    TYPE_MODE (type)) == CODE_FOR_nothing))
+			    TYPE_MODE (type)) == CODE_FOR_nothing)
+      || !types_compatible_p (type,
+			      TREE_TYPE (TREE_TYPE (gimple_call_lhs (ovf1))))
+      || !types_compatible_p (type,
+			      TREE_TYPE (TREE_TYPE (gimple_call_lhs (ovf2)))))
     return false;
   tree arg1, arg2, arg3 = NULL_TREE;
   gimple *re1 = NULL, *re2 = NULL;
@@ -6591,25 +6605,6 @@ math_opts_dom_walker::after_dom_children (basic_block bb)
 	{
 	  switch (gimple_call_combined_fn (stmt))
 	    {
-	    CASE_CFN_POW:
-	      if (gimple_call_lhs (stmt)
-		  && TREE_CODE (gimple_call_arg (stmt, 1)) == REAL_CST
-		  && real_equal (&TREE_REAL_CST (gimple_call_arg (stmt, 1)),
-				 &dconst2)
-		  && convert_mult_to_fma (stmt,
-					  gimple_call_arg (stmt, 0),
-					  gimple_call_arg (stmt, 0),
-					  &fma_state))
-		{
-		  unlink_stmt_vdef (stmt);
-		  if (gsi_remove (&gsi, true)
-		      && gimple_purge_dead_eh_edges (bb))
-		    *m_cfg_changed_p = true;
-		  release_defs (stmt);
-		  continue;
-		}
-	      break;
-
 	    case CFN_COND_MUL:
 	      if (convert_mult_to_fma (stmt,
 				       gimple_call_arg (stmt, 1),

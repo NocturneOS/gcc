@@ -1897,11 +1897,9 @@ symtab_node::set_init_priority (priority_type priority)
   if (is_a <cgraph_node *> (this))
     gcc_assert (DECL_STATIC_CONSTRUCTOR (this->decl));
 
-  if (priority == DEFAULT_INIT_PRIORITY)
-    {
-      gcc_assert (get_init_priority() == priority);
-      return;
-    }
+  if (priority == DEFAULT_INIT_PRIORITY
+      && get_init_priority() == priority)
+    return;
   h = priority_info ();
   h->init = priority;
 }
@@ -1915,11 +1913,9 @@ cgraph_node::set_fini_priority (priority_type priority)
 
   gcc_assert (DECL_STATIC_DESTRUCTOR (this->decl));
 
-  if (priority == DEFAULT_INIT_PRIORITY)
-    {
-      gcc_assert (get_fini_priority() == priority);
-      return;
-    }
+  if (priority == DEFAULT_INIT_PRIORITY
+      && get_fini_priority() == priority)
+    return;
   h = priority_info ();
   h->fini = priority;
 }
@@ -2052,7 +2048,7 @@ symtab_node::noninterposable_alias (symtab_node *node, void *data)
   return false;
 }
 
-/* If node cannot be overwriten by static or dynamic linker to point to
+/* If node cannot be overwritten by static or dynamic linker to point to
    different definition, return NODE. Otherwise look for alias with such
    property and if none exists, introduce new one.  */
 
@@ -2414,7 +2410,7 @@ symtab_node::equal_address_to (symtab_node *s2, bool memory_accessed)
      We probably should be consistent and use this fact here, too, but for
      the moment return false only when we are called from the alias oracle.
      Return 0 in C constant initializers and C++ manifestly constant
-     expressions, the likelyhood that different vars will be aliases is
+     expressions, the likelihood that different vars will be aliases is
      small and returning -1 lets us reject too many initializers.  */
   if (memory_accessed || folding_initializer)
     return 0;

@@ -202,16 +202,6 @@ lhd_register_builtin_type (tree ARG_UNUSED (type),
 {
 }
 
-/* Return a version of the TYPE, qualified as indicated by the
-   TYPE_QUALS, if one exists.  If no qualified version exists yet,
-   creates it and returns it.  */
-tree
-lhd_build_lang_qualified_type (tree type, tree ARG_UNUSED (otype),
-			       int type_quals)
-{
-  return build_qualified_type (type, type_quals);
-}
-
 /* Invalid use of an incomplete type.  */
 void
 lhd_incomplete_type_error (location_t ARG_UNUSED (loc),
@@ -656,7 +646,8 @@ lhd_omp_array_size (tree, gimple_seq *)
   return NULL_TREE;
 }
 
-/* Returns true when additional mappings for a decl are needed.  */
+/* Return false, implying that no additional data-mapping operations
+   are required for the tree containing a map clause.  */
 
 bool
 lhd_omp_deep_mapping_p (const gimple *, tree)
@@ -664,7 +655,8 @@ lhd_omp_deep_mapping_p (const gimple *, tree)
   return false;
 }
 
-/* Returns number of additional mappings for a decl.  */
+/* Return NULL_TREE, implying that no additional data-mapping operations
+   are required for the tree containing a map clause.  */
 
 tree
 lhd_omp_deep_mapping_cnt (const gimple *, tree, gimple_seq *)
@@ -672,7 +664,8 @@ lhd_omp_deep_mapping_cnt (const gimple *, tree, gimple_seq *)
   return NULL_TREE;
 }
 
-/* Do the additional mappings.  */
+/* Do nothing as no additional data-mapping operations
+   are required for the second argument that contains a map clause.  */
 
 void
 lhd_omp_deep_mapping (const gimple *, tree, unsigned HOST_WIDE_INT, tree, tree,

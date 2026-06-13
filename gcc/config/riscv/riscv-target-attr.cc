@@ -156,7 +156,7 @@ riscv_target_attr_parser::parse_arch (const char *str)
 
 	  const char *result = m_subset_list->parse_single_ext (token + 1);
 	  /* Check parse_single_ext has consume all string.  */
-	  if (*result != '\0')
+	  if (result == nullptr || *result != '\0')
 	    {
 	      if (m_loc)
 		error_at (*m_loc, "unexpected arch for %<target()%> "
@@ -320,7 +320,7 @@ riscv_process_one_target_attr (char *arg_str,
     }
 
   std::unique_ptr<char[]> buf (new char[len+1]);
-  char *str_to_check = buf.get();
+  char *str_to_check = buf.get ();
   strcpy (str_to_check, arg_str);
 
   /* Split attribute name from argument (if present).  */
@@ -479,8 +479,8 @@ riscv_process_target_attr (tree args,
 
 /* Implement TARGET_OPTION_VALID_ATTRIBUTE_P.
    This is used to process attribute ((target ("..."))).
-   Note, that riscv_set_current_function() has not been called before,
-   so we need must not mess with the current global_options, which
+   Note that riscv_set_current_function () has not been called before,
+   so we must not mess with the current global_options, which
    likely belong to another function.  */
 
 bool

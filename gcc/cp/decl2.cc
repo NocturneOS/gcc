@@ -157,7 +157,7 @@ struct priority_map_traits
   {
     entry.m_key = 0;
   }
-  // Entries are not deleteable
+  // Entries are not deletable
   template <typename T> static bool is_deleted (const T &)
   {
     return false;
@@ -1303,8 +1303,7 @@ grokfield (const cp_declarator *declarator,
 
 	  /* If this is a typedef that names the class for linkage purposes
 	     (7.1.3p8), apply any attributes directly to the type.  */
-	  if (OVERLOAD_TYPE_P (TREE_TYPE (value))
-	      && value == TYPE_NAME (TYPE_MAIN_VARIANT (TREE_TYPE (value))))
+	  if (TYPE_DECL_FOR_LINKAGE_PURPOSES_P (value))
 	    attrflags = ATTR_FLAG_TYPE_IN_PLACE;
 
 	  cplus_decl_attributes (&value, attrlist, attrflags);
@@ -1634,6 +1633,12 @@ grokbitfield (const cp_declarator *declarator,
 		"static member %qD cannot be a bit-field", value);
       return NULL_TREE;
     }
+
+  /* [class.bit]/2 "An unnamed bit-field shall not be declared with
+     a cv-qualified type."  */
+  if (!DECL_NAME (value) && TYPE_QUALS (type) != TYPE_UNQUALIFIED)
+    pedwarn (DECL_SOURCE_LOCATION (value), 0,
+	     "unnamed bit-field cannot be cv-qualified");
 
   int flags = LOOKUP_IMPLICIT;
   if (init && DIRECT_LIST_INIT_P (init))
@@ -3299,7 +3304,7 @@ determine_visibility (tree decl)
   enum symbol_visibility orig_visibility = DECL_VISIBILITY (decl);
 
   /* The decl may be a template instantiation, which could influence
-     visibilty.  */
+     visibility.  */
   tree template_decl = NULL_TREE;
   if (TREE_CODE (decl) == TYPE_DECL)
     {
@@ -3665,7 +3670,7 @@ constrain_class_visibility (tree type)
    types and declarations when it gets a name for linkage purposes from a
    typedef.  */
 // FIXME: It is now a DR for such a class type to contain anything
-// other than C.  So at minium most of this can probably be deleted.
+// other than C.  So at minimum most of this can probably be deleted.
 
 /* First reset the visibility of all the types.  */
 
@@ -4857,7 +4862,7 @@ one_static_initialization_or_destruction (bool initp, tree decl, tree init,
 
 /* Helper function for emit_partial_init_fini_fn and handle_tls_init.
    For structured bindings, disable stmts_are_full_exprs_p ()
-   on STATIC_INIT_DECOMP_BASE_P nodes, reenable it on the
+   on STATIC_INIT_DECOMP_BASE_P nodes, re-enable it on the
    first STATIC_INIT_DECOMP_NONBASE_P node and emit all the
    STATIC_INIT_DECOMP_BASE_P and STATIC_INIT_DECOMP_NONBASE_P
    consecutive nodes in a single STATEMENT_LIST wrapped with
@@ -5319,7 +5324,13 @@ decl_defined_p (tree decl)
   else
     {
       gcc_assert (VAR_P (decl));
-      return !DECL_EXTERNAL (decl);
+      return (!DECL_EXTERNAL (decl)
+	      /* An initialized variable is defined even if we've decided not
+		 to emit it, unless it's initialized within the class and not
+		 inline.  Note that finish_static_member_decl doesn't set
+		 DECL_IN_AGGR_P for inline variables, so we don't need to check
+		 DECL_INLINE_VAR_P here.  */
+	      || (DECL_INITIAL (decl) && !DECL_IN_AGGR_P (decl)));
     }
 }
 

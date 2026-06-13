@@ -136,6 +136,7 @@ am__aclocal_m4_deps = $(top_srcdir)/../config/acx.m4 \
 	$(top_srcdir)/../config/override.m4 \
 	$(top_srcdir)/../config/tls.m4 \
 	$(top_srcdir)/../config/toolexeclibdir.m4 \
+	$(top_srcdir)/../config/visibility.m4 \
 	$(top_srcdir)/../ltoptions.m4 $(top_srcdir)/../ltsugar.m4 \
 	$(top_srcdir)/../ltversion.m4 $(top_srcdir)/../lt~obsolete.m4 \
 	$(top_srcdir)/acinclude.m4 $(top_srcdir)/../libtool.m4 \
@@ -589,9 +590,7 @@ libgomp_la_SOURCES = alloc.c atomic.c barrier.c critical.c env.c \
 @PLUGIN_GCN_TRUE@libgomp_plugin_gcn_la_SOURCES = plugin/plugin-gcn.c simple-allocator.c \
 @PLUGIN_GCN_TRUE@				plugin/mutex.c
 
-@PLUGIN_GCN_TRUE@libgomp_plugin_gcn_la_CPPFLAGS = $(AM_CPPFLAGS) \
-@PLUGIN_GCN_TRUE@	-D_GNU_SOURCE
-
+@PLUGIN_GCN_TRUE@libgomp_plugin_gcn_la_CPPFLAGS = $(AM_CPPFLAGS)
 @PLUGIN_GCN_TRUE@libgomp_plugin_gcn_la_LDFLAGS = $(libgomp_plugin_gcn_version_info) \
 @PLUGIN_GCN_TRUE@	$(lt_host_flags)
 

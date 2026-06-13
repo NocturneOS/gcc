@@ -92,7 +92,7 @@
        does not check VICTAL correctness of declarers. This is done separately.
 
   The parser sets up symbol tables and populates them as far as needed to parse
-  the source. After the bottom-up parser terminates succesfully, the symbol tables
+  the source. After the bottom-up parser terminates successfully, the symbol tables
   are completed.
 
    (4) Next, modes are collected and rules for well-formedness and structural
@@ -670,6 +670,7 @@ a68_new_node (void)
   CDECL (z) = NULL_TREE;
   DYNAMIC_STACK_ALLOCS (z) = false;
   PUBLICIZED (z) = false;
+  NEGATED (z) = false;
   return z;
 }
 
@@ -778,6 +779,7 @@ a68_new_tag (void)
   PRIO (z) = 0;
   USE (z) = false;
   IN_PROC (z) = false;
+  NEST_PROC (z) = false;
   HEAP (z) = false;
   YOUNGEST_ENVIRON (z) = PRIMAL_SCOPE;
   LOC_ASSIGNED (z) = false;

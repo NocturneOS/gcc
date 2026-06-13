@@ -168,7 +168,7 @@ public:
 static class data *idata;
 
 /* This variable points to the end of the insn chain.  This is where
-   everything relevant from the machien description is appended to.  */
+   everything relevant from the machine description is appended to.  */
 static class data **idata_end;
 
 
@@ -609,7 +609,7 @@ operand_data_hasher::equal (const operand_data * op_info1,
   return compare_operands (op_info1, op_info2);
 }
 
-/* Hashtable of konwn pattern operands.  */
+/* Hashtable of known pattern operands.  */
 static hash_table<operand_data_hasher> *operand_datas;
 
 /* Scan the list of operands we've already committed to output and either
@@ -1302,7 +1302,7 @@ note_constraint (md_rtx_info *info)
   new_cdata = XNEWVAR (class constraint_data,
 		       sizeof (class constraint_data) + namelen);
   new (new_cdata) constraint_data ();
-  strcpy (CONST_CAST (char *, new_cdata->name), name);
+  strcpy (const_cast<char *> (new_cdata->name), name);
   new_cdata->namelen = namelen;
   new_cdata->loc = info->loc;
   new_cdata->next_this_letter = *slot;

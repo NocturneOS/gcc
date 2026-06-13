@@ -593,7 +593,7 @@ static aarch64_simd_builtin_datum aarch64_simd_builtin_data[] = {
   CRC32_BUILTIN (crc32cw, SI) \
   CRC32_BUILTIN (crc32cx, DI)
 
-/* The next 8 FCMLA instrinsics require some special handling compared the
+/* The next 8 FCMLA intrinsics require some special handling compared the
    normal simd intrinsics.  */
 #define AARCH64_SIMD_FCMLA_LANEQ_BUILTINS \
   FCMLA_LANEQ_BUILTIN (0, v2sf, fcmla, V2SF, false) \
@@ -892,23 +892,27 @@ enum aarch64_builtins
   AARCH64_WSRF,
   AARCH64_WSRF64,
   AARCH64_WSR128,
-  AARCH64_PLD,
-  AARCH64_PLDX,
-  AARCH64_PLI,
-  AARCH64_PLIX,
+  AARCH64_PREFETCH_PLD,
+  AARCH64_PREFETCH_PLDX,
+  AARCH64_PREFETCH_PLD_RANGE,
+  AARCH64_PREFETCH_PLDX_RANGE,
+  AARCH64_PREFETCH_PLI,
+  AARCH64_PREFETCH_PLIX,
+  AARCH64_PREFETCH_PLDIR,
   /* Armv8.9-A / Armv9.4-A builtins.  */
   AARCH64_BUILTIN_CHKFEAT,
   AARCH64_BUILTIN_GCSPR,
   AARCH64_BUILTIN_GCSPOPM,
   AARCH64_BUILTIN_GCSSS,
   /* Armv9.6-A builtins.  */
+  AARCH64_BUILTIN_STSHH,
   AARCH64_BUILTIN_STSHH_QI,
   AARCH64_BUILTIN_STSHH_HI,
   AARCH64_BUILTIN_STSHH_SI,
   AARCH64_BUILTIN_STSHH_DI,
   AARCH64_BUILTIN_STSHH_SF,
   AARCH64_BUILTIN_STSHH_DF,
-  AARCH64_BUILTIN_PLDIR,
+  AARCH64_BUILTIN_STSHH_PTR,
   AARCH64_BUILTIN_MAX
 };
 
@@ -2216,14 +2220,16 @@ aarch64_init_rwsr_builtins (void)
   AARCH64_INIT_RWSR_BUILTINS_DECL (WSR128, wsr128, fntype);
 }
 
-/* Add builtins for data and instrution prefetch.  */
+/* Add builtins for data and instruction prefetch.  */
 static void
-aarch64_init_prefetch_builtin (void)
+aarch64_init_prefetch_builtins (void)
 {
-#define AARCH64_INIT_PREFETCH_BUILTIN(INDEX, N)				\
-  aarch64_builtin_decls[INDEX] =					\
-    aarch64_general_add_builtin ("__builtin_aarch64_" N, ftype, INDEX,  \
-				 prefetch_attrs)
+#define AARCH64_INIT_PREFETCH_BUILTINS_DECL(N, F) \
+  aarch64_builtin_decls[AARCH64_PREFETCH_##F] \
+    = aarch64_general_simulate_builtin (N, ftype, \
+					AARCH64_PREFETCH_##F, \
+					prefetch_attrs);
+
 
   tree ftype;
   tree cv_argtype;
@@ -2233,17 +2239,32 @@ aarch64_init_prefetch_builtin (void)
   cv_argtype = build_pointer_type (cv_argtype);
 
   ftype = build_function_type_list (void_type_node, cv_argtype, NULL);
-  AARCH64_INIT_PREFETCH_BUILTIN (AARCH64_PLD, "pld");
-  AARCH64_INIT_PREFETCH_BUILTIN (AARCH64_PLI, "pli");
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pld", PLD);
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pli", PLI);
 
   ftype = build_function_type_list (void_type_node, unsigned_type_node,
 				    unsigned_type_node, unsigned_type_node,
 				    cv_argtype, NULL);
-  AARCH64_INIT_PREFETCH_BUILTIN (AARCH64_PLDX, "pldx");
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pldx", PLDX);
 
   ftype = build_function_type_list (void_type_node, unsigned_type_node,
 				    unsigned_type_node, cv_argtype, NULL);
-  AARCH64_INIT_PREFETCH_BUILTIN (AARCH64_PLIX, "plix");
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__plix", PLIX);
+
+  ftype = build_function_type_list (void_type_node, cv_argtype, NULL_TREE);
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pldir", PLDIR);
+
+  ftype = build_function_type_list (void_type_node, unsigned_type_node,
+				    unsigned_type_node, integer_type_node,
+				    unsigned_type_node, integer_type_node,
+				    size_type_node, cv_argtype, NULL);
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pldx_range", PLDX_RANGE);
+
+  ftype = build_function_type_list (void_type_node, unsigned_type_node,
+				    unsigned_type_node,
+				    long_long_unsigned_type_node, cv_argtype,
+				    NULL);
+  AARCH64_INIT_PREFETCH_BUILTINS_DECL ("__pld_range", PLD_RANGE);
 }
 
 /* Initialize the memory tagging extension (MTE) builtins.  */
@@ -2314,6 +2335,7 @@ aarch64_init_ls64_builtins_types (void)
   const char *tuple_type_name = "__arm_data512_t";
   tree node_type = get_typenode_from_name (UINT64_TYPE);
   tree array_type = build_array_type_nelts (node_type, 8);
+  array_type = build_distinct_type_copy (array_type);
   SET_TYPE_MODE (array_type, V8DImode);
 
   gcc_assert (TYPE_MODE_RAW (array_type) == TYPE_MODE (array_type));
@@ -2398,6 +2420,7 @@ handle_arm_acle_h (void)
   aarch64_init_ls64_builtins ();
   aarch64_init_tme_builtins ();
   aarch64_init_memtag_builtins ();
+  aarch64_init_prefetch_builtins ();
 }
 
 /* Initialize fpsr fpcr getters and setters.  */
@@ -2482,6 +2505,14 @@ aarch64_init_pcdphint_builtins (void)
   tree ftype;
 
   ftype = build_function_type_list (void_type_node, ptr_type_node,
+				    void_type_node,
+				    unsigned_type_node,
+				    unsigned_type_node, NULL_TREE);
+  aarch64_builtin_decls[AARCH64_BUILTIN_STSHH]
+    = aarch64_general_add_builtin ("__builtin_aarch64_stshh", ftype,
+				   AARCH64_BUILTIN_STSHH);
+
+  ftype = build_function_type_list (void_type_node, ptr_type_node,
 				    unsigned_char_type_node,
 				    unsigned_type_node,
 				    unsigned_type_node, NULL_TREE);
@@ -2529,14 +2560,14 @@ aarch64_init_pcdphint_builtins (void)
     = aarch64_general_add_builtin ("__builtin_aarch64_stshh_df", ftype,
 				   AARCH64_BUILTIN_STSHH_DF);
 
-  tree cv_argtype = build_qualified_type (void_type_node, TYPE_QUAL_CONST
-					  | TYPE_QUAL_VOLATILE);
-  cv_argtype = build_pointer_type (cv_argtype);
+  ftype = build_function_type_list (void_type_node, ptr_type_node,
+				    ptr_type_node,
+				    unsigned_type_node,
+				    unsigned_type_node, NULL_TREE);
+  aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_PTR]
+    = aarch64_general_add_builtin ("__builtin_aarch64_stshh_ptr", ftype,
+				   AARCH64_BUILTIN_STSHH_PTR);
 
-  ftype = build_function_type_list (void_type_node, cv_argtype, NULL_TREE);
-  aarch64_builtin_decls[AARCH64_BUILTIN_PLDIR]
-    = aarch64_general_add_builtin ("__builtin_aarch64_pldir", ftype,
-				   AARCH64_BUILTIN_PLDIR);
 }
 
 /* Initialize all builtins in the AARCH64_BUILTIN_GENERAL group.  */
@@ -2563,7 +2594,6 @@ aarch64_general_init_builtins (void)
   aarch64_init_data_intrinsics ();
 
   aarch64_init_rwsr_builtins ();
-  aarch64_init_prefetch_builtin ();
 
   tree ftype_jcvt
     = build_function_type_list (intSI_type_node, double_type_node, NULL);
@@ -3653,9 +3683,13 @@ require_const_argument (tree exp, unsigned int argno, HOST_WIDE_INT minval,
   auto argval = wi::to_widest (arg);
 
   if (argval < minval || argval > maxval)
-    error_at (EXPR_LOCATION (exp),
-	      "argument %d must be a constant immediate "
-	      "in range [%wd,%wd]", argno + 1, minval, maxval);
+    {
+      error_at (EXPR_LOCATION (exp),
+		"argument %d must be a constant immediate "
+		"in range [%wd,%wd]",
+		argno + 1, minval, maxval);
+      return -1;
+    }
 
   HOST_WIDE_INT retval = argval.to_shwi ();
   return retval;
@@ -3682,14 +3716,14 @@ aarch64_expand_prefetch_builtin (tree exp, int fcode)
      sensible defaults.  */
   switch (fcode)
     {
-    case AARCH64_PLDX:
+    case AARCH64_PREFETCH_PLDX:
       break;
-    case AARCH64_PLIX:
+    case AARCH64_PREFETCH_PLIX:
       kind_id = 2;
       break;
-    case AARCH64_PLI:
-    case AARCH64_PLD:
-      kind_id  = (fcode == AARCH64_PLD) ? 0 : 2;
+    case AARCH64_PREFETCH_PLI:
+    case AARCH64_PREFETCH_PLD:
+      kind_id  = (fcode == AARCH64_PREFETCH_PLD) ? 0 : 2;
       level_id = 0;
       rettn_id = 0;
       break;
@@ -3726,8 +3760,109 @@ aarch64_expand_prefetch_builtin (tree exp, int fcode)
   maybe_expand_insn (CODE_FOR_aarch64_pldx, 2, ops);
 }
 
-/* Expand an expression EXP that calls a MEMTAG built-in FCODE
-   with result going to TARGET.  */
+/* Expand a prefetch range builtin EXP.  */
+void
+aarch64_expand_prefetch_range_builtin (tree exp, int fcode)
+{
+  char prfop[11];
+  class expand_operand ops[3];
+
+  static const char *kind_s[] = {"PLD", "PST"};
+  static const char *rettn_s[] = {"KEEP", "STRM"};
+
+  int argno = 0;
+
+  int kind_id = require_const_argument (exp, argno++, 0, ARRAY_SIZE (kind_s));
+  int rettn_id = require_const_argument (exp, argno++, 0, ARRAY_SIZE (rettn_s));
+
+  rtx metadata = NULL_RTX;
+
+  switch (fcode)
+    {
+    case AARCH64_PREFETCH_PLDX_RANGE:
+      {
+	/* length must be in [-2^21,2^21).  */
+	int length = require_const_argument (exp, argno++, -(1 << 21), 1 << 21);
+
+	/* count must be in [1,2^16].  */
+	int count = require_const_argument (exp, argno++, 1, (1 << 16) + 1);
+
+	/* stride must be in [-2^21,2^21).  */
+	int stride = require_const_argument (exp, argno++, -(1 << 21), 1 << 21);
+
+	/* There is no requirements on reuse_distance other than to be a
+	   non-negative integer.  However it is meaningless for
+	   values less than 2^15 or greater than 2^29.  */
+	uint64_t reuse_distance = require_const_argument (exp, argno++, 0,
+							  LONG_LONG_MAX);
+
+	if (seen_error ())
+	  return;
+
+	gcc_assert (length >= -(1 << 21) && length < (1 << 21));
+	gcc_assert (count >= 1 && count <= (1 << 16));
+	gcc_assert (stride >= -(1 << 21) && stride < (1 << 21));
+
+	uint64_t length_bits = ((uint64_t) length) & ((1 << 22) - 1);
+	uint64_t count_bits = ((uint64_t) count - 1) & ((1 << 16) - 1);
+	uint64_t stride_bits = ((uint64_t) stride) & ((1 << 22) - 1);
+
+	uint64_t reuse_distance_bits = 0;
+	  /* If reuse distance > 512MiB or = 0 then use 0 to represent distance
+	     unknown.  */
+	if (reuse_distance != 0 && reuse_distance <= (1ULL << 29))
+	  {
+	    /* Find the largest n such that (2 ^ (15-n)) * 32KB >= reuse
+	       distance.  */
+	    if (reuse_distance <= (1ULL << 15))
+	      reuse_distance_bits = 15;
+	    else
+	      reuse_distance_bits = __builtin_clzll (reuse_distance - 1) - 34;
+
+	    /* Reuse distance is a 4 bit value.  */
+	    gcc_assert (reuse_distance_bits < (1 << 4));
+	  }
+
+	uint64_t metadata_val = length_bits
+				| (count_bits << 22)
+				| (stride_bits << 38)
+				| (reuse_distance_bits << 60);
+
+	metadata = GEN_INT (metadata_val);
+	break;
+      }
+    case AARCH64_PREFETCH_PLD_RANGE:
+      {
+	tree metadata_arg = CALL_EXPR_ARG (exp, argno++);
+	metadata = copy_to_mode_reg (E_DImode, expand_normal (metadata_arg));
+	break;
+      }
+    default:
+      gcc_unreachable ();
+    }
+
+  /* Any -1 id variable is to be user-supplied.  Here we fill these in and run
+     bounds checks on them.  "PLI" is used only implicitly by AARCH64_PLI &
+     AARCH64_PLIX, never explicitly.  */
+  rtx address = expand_expr (CALL_EXPR_ARG (exp, argno), NULL_RTX, Pmode,
+			     EXPAND_NORMAL);
+  address = gen_rtx_MEM (Pmode, address);
+
+  if (seen_error ())
+    return;
+
+  sprintf (prfop, "%s%s", kind_s[kind_id], rettn_s[rettn_id]);
+
+  rtx const_str = rtx_alloc (CONST_STRING);
+  PUT_CODE (const_str, CONST_STRING);
+  XSTR (const_str, 0) = ggc_strdup (prfop);
+
+  create_fixed_operand (&ops[0], const_str);
+  create_input_operand (&ops[1], metadata, E_DImode);
+  create_address_operand (&ops[2], address);
+  expand_insn (CODE_FOR_aarch64_rprfm, 3, ops);
+}
+
 static rtx
 aarch64_expand_builtin_memtag (int fcode, tree exp, rtx target)
 {
@@ -4572,13 +4707,19 @@ aarch64_general_expand_builtin (unsigned int fcode, tree exp, rtx target,
     case AARCH64_WSRF64:
     case AARCH64_WSR128:
       return aarch64_expand_rwsr_builtin (exp, target, fcode);
-    case AARCH64_PLD:
-    case AARCH64_PLDX:
-    case AARCH64_PLI:
-    case AARCH64_PLIX:
+    case AARCH64_PREFETCH_PLD:
+    case AARCH64_PREFETCH_PLDX:
+    case AARCH64_PREFETCH_PLI:
+    case AARCH64_PREFETCH_PLIX:
       aarch64_expand_prefetch_builtin (exp, fcode);
       return target;
-
+    case AARCH64_PREFETCH_PLDIR:
+      aarch64_expand_pldir_builtin (exp);
+      return target;
+    case AARCH64_PREFETCH_PLD_RANGE:
+    case AARCH64_PREFETCH_PLDX_RANGE:
+      aarch64_expand_prefetch_range_builtin (exp, fcode);
+      return target;
     case AARCH64_BUILTIN_CHKFEAT:
       {
 	rtx x16_reg = gen_rtx_REG (DImode, R16_REGNUM);
@@ -4599,15 +4740,10 @@ aarch64_general_expand_builtin (unsigned int fcode, tree exp, rtx target,
     case AARCH64_BUILTIN_STSHH_DI:
     case AARCH64_BUILTIN_STSHH_SF:
     case AARCH64_BUILTIN_STSHH_DF:
+    case AARCH64_BUILTIN_STSHH_PTR:
       aarch64_expand_stshh_builtin (exp, fcode);
       return target;
-
-    case AARCH64_BUILTIN_PLDIR:
-      {
-	aarch64_expand_pldir_builtin (exp);
-	return target;
-      }
-    }
+  }
 
   if (fcode >= AARCH64_SIMD_BUILTIN_BASE && fcode <= AARCH64_SIMD_BUILTIN_MAX)
     return aarch64_simd_expand_builtin (fcode, exp, target);
@@ -5767,6 +5903,46 @@ aarch64_resolve_overloaded_memtag (location_t loc,
   return NULL_TREE;
 }
 
+static tree
+aarch64_resolve_overloaded_builtin_stshh (void *pass_params)
+{
+  vec<tree, va_gc> *params = static_cast<vec<tree, va_gc> *> (pass_params);
+  if (vec_safe_length (params) != 4)
+    return NULL_TREE;
+
+  tree addr = (*params)[0];
+  tree val = (*params)[1];
+  addr = tree_strip_nop_conversions (addr);
+  val = tree_strip_nop_conversions (val);
+
+  tree addr_type = TREE_TYPE (addr);
+  if (!POINTER_TYPE_P (addr_type))
+    return NULL_TREE;
+
+  tree ptr_type = TYPE_MAIN_VARIANT (TREE_TYPE (addr_type));
+
+  if (POINTER_TYPE_P (ptr_type))
+    return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_PTR];
+
+  switch (TYPE_MODE (ptr_type))
+    {
+    case QImode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_QI];
+    case HImode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_HI];
+    case SImode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_SI];
+    case DImode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_DI];
+    case SFmode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_SF];
+    case DFmode:
+      return aarch64_builtin_decls[AARCH64_BUILTIN_STSHH_DF];
+    default:
+      return NULL_TREE;
+    }
+}
+
 /* Called at aarch64_resolve_overloaded_builtin in aarch64-c.cc.  */
 tree
 aarch64_resolve_overloaded_builtin_general (location_t loc, tree function,
@@ -5777,6 +5953,9 @@ aarch64_resolve_overloaded_builtin_general (location_t loc, tree function,
   if (fcode >= AARCH64_MEMTAG_BUILTIN_START
       && fcode <= AARCH64_MEMTAG_BUILTIN_END)
     return aarch64_resolve_overloaded_memtag(loc, function, pass_params);
+
+  if (fcode == AARCH64_BUILTIN_STSHH)
+    return aarch64_resolve_overloaded_builtin_stshh (pass_params);
 
   return NULL_TREE;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -34,13 +34,17 @@
     {".CBL", "@cobol", 0, 0, 0},
     {"@cobol",
         "cobol1 %i %(cc1_options) "
-        "%{D*} %{E} %{I*} %{M} %{fmax-errors*} %{fsyntax-only*} "
+        "%I "
+        "%{B*} %{D*} %{E} %{I*} %{M} %{fmax-errors*} %{fsyntax-only*} "
+        "%{idirafter}"
         "%{fcobol-exceptions*} "
         "%{copyext} "
+        "%{fdefaultbyte} "
         "%{fexec-charset*} "
         "%{fexec-national-charset*} "
-        "%{fstatic-call} %{fdefaultbyte} "
         "%{ffixed-form} %{ffree-form} %{indicator-column*} "
+        "%{fstatic-call} "
+        "%{ftrunc} "
         "%{preprocess} "
         "%{dialect} "
         "%{include} "

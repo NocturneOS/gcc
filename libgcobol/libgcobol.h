@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -130,17 +130,6 @@ extern "C"  __int128 __gg__integer_from_qualified_field(cblc_field_t *var,
 void __gg__abort(const char *msg);
 
 int __gg__fc_char(const cblc_field_t *field);
-
-extern "C"
-void __gg__convert_encoding(char *psz,
-                            cbl_encoding_t from,
-                            cbl_encoding_t to );
-
-extern "C"
-void __gg__convert_encoding_length(char *pch,
-                                   size_t length,
-                                   cbl_encoding_t from,
-                                   cbl_encoding_t to );
 
 const unsigned short *__gg__current_collation();
 

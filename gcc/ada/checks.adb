@@ -1533,7 +1533,8 @@ package body Checks is
 
       --  Also, if the expression is of an access type whose designated type is
       --  incomplete, then the access value must be null and we suppress the
-      --  check.
+      --  check. We also need to suppress it for a class-wide type whose root
+      --  type has no discriminants.
 
       if Known_Null (N) then
          return;
@@ -1541,7 +1542,10 @@ package body Checks is
       elsif Is_Access_Type (S_Typ) then
          S_Typ := Designated_Type (S_Typ);
 
-         if Ekind (S_Typ) = E_Incomplete_Type then
+         if Ekind (S_Typ) = E_Incomplete_Type
+           or else (Is_Class_Wide_Type (S_Typ)
+                     and then not Has_Discriminants (Root_Type (S_Typ)))
+         then
             return;
          end if;
       end if;
@@ -3363,6 +3367,12 @@ package body Checks is
       --  for floating-point types. But the additional less precise tests below
       --  catch these cases.
 
+      --  Under GNATProve mode, when the type of the expression is Universal
+      --  Integer we cannot determine if the expression is in the range of the
+      --  target type. Required because, Universal_Integer is implemented as a
+      --  128-bit type but, in theory, its values may be out of range for
+      --  128-bit target types.
+
       --  Note: skip this if we are given a source_typ, since the point of
       --  supplying a Source_Typ is to stop us looking at the expression.
       --  We could sharpen this test to be out parameters only ???
@@ -3370,6 +3380,8 @@ package body Checks is
       if Is_Discrete_Type (Target_Typ)
         and then not Is_Unconstrained_Subscr_Ref
         and then No (Source_Typ)
+        and then not (Etype (Expr) = Universal_Integer
+                        and then GNATprove_Mode)
       then
          declare
             Thi : constant Node_Id := Type_High_Bound (Target_Typ);

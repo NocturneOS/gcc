@@ -100,7 +100,10 @@
 #include "coretypes.h"
 #include "options.h"
 
+#include <string>
+
 #include "a68.h"
+#include "a68-pretty-print.h"
 
 /* Bottom-up parser, reduces all constructs.  */
 
@@ -267,7 +270,7 @@ strange_separator (NODE_T *p)
      reduce (p, NO_NOTE, NO_TICK, PARTICULAR_PROGRAM, LABEL, ENCLOSED_CLAUSE, STOP);
      reduce (p, NO_NOTE, NO_TICK, PARTICULAR_PROGRAM, ENCLOSED_CLAUSE, STOP);
 
-   We know that at much only one of these reductions will succeed, becuase if
+   We know that at much only one of these reductions will succeed, because if
    the first reduction succeeds, then P gets changed to LABEL which cannot
    match ENCLOSED_CLAUSE.
 
@@ -301,7 +304,7 @@ strange_separator (NODE_T *p)
 
    Note how, when presented with a sequence of labels like `l1: l2: l3: ...',
    the first call to "reduce" will succeed, turning Q into a LABEL.  Then the
-   second call to "reduce" will also succed, reducing to another LABEL and
+   second call to "reduce" will also succeed, reducing to another LABEL and
    setting SIGA to "true".  In subsequent iterations of the loop the first call
    will always fail, and the second call will keep succeeding as more sequences
    of DEFINING_IDENTIFIER, COLON_SYMBOL get matched.  */
@@ -374,14 +377,14 @@ ignore_superfluous_semicolons (NODE_T *p)
 
       if (NEXT (p) != NO_NODE && IS (NEXT (p), SEMI_SYMBOL) && NEXT_NEXT (p) == NO_NODE)
 	{
-	  a68_warning (NEXT (p), 0,
-		       "skipped superfluous A", ATTRIBUTE (NEXT (p)));
+	  a68_attr_format_token a (ATTRIBUTE (NEXT (p)));
+	  a68_warning (NEXT (p), 0, "skipped superfluous %e", &a);
 	  NEXT (p) = NO_NODE;
 	}
       else if (IS (p, SEMI_SYMBOL) && a68_is_semicolon_less (NEXT (p)))
 	{
-	  a68_warning (p, 0,
-		       "skipped superfluous A", ATTRIBUTE (p));
+	  a68_attr_format_token a (ATTRIBUTE (p));
+	  a68_warning (p, 0, "skipped superfluous %e", &a);
 	  if (PREVIOUS (p) != NO_NODE)
 	    NEXT (PREVIOUS (p)) = NEXT (p);
 	  PREVIOUS (NEXT (p)) = PREVIOUS (p);
@@ -538,7 +541,7 @@ a68_bottom_up_parser (NODE_T *p)
 
    looking for declarations of indicants, priorities and operators
    (a68_extract_{indicants,priorities,operators}).  Using this information , it
-   determines the nature of bold tags occuring in the branch, by turning
+   determines the nature of bold tags occurring in the branch, by turning
    BOLD_TAG nodes into either INDICANT nodes or OPERATOR nodes
    (a68_elaborate_bold_tags).
 
@@ -791,8 +794,7 @@ reduce_declarers (NODE_T *p, enum a68_attribute expect)
 
 	  if (SUB_NEXT (q) == NO_NODE)
 	    {
-	      a68_error (NEXT (q),
-			 "Y expected", "appropriate declarer");
+	      a68_error (NEXT (q), "appropriate declarer expected");
 	      reduce (q, NO_NOTE, NO_TICK, DECLARER, LONGETY, INDICANT, STOP);
 	    }
 	  else
@@ -807,8 +809,7 @@ reduce_declarers (NODE_T *p, enum a68_attribute expect)
 		}
 	      else
 		{
-		  a68_error (NEXT (q),
-			     "Y expected", "appropriate declarer");
+		  a68_error (NEXT (q), "appropriate declarer expected");
 		  reduce (q, NO_NOTE, NO_TICK, DECLARER, LONGETY, INDICANT, STOP);
 		}
 	    }
@@ -819,8 +820,7 @@ reduce_declarers (NODE_T *p, enum a68_attribute expect)
 
 	  if (SUB_NEXT (q) == NO_NODE)
 	    {
-	      a68_error (NEXT (q),
-			 "Y expected", "appropriate declarer");
+	      a68_error (NEXT (q), "appropriate declarer expected");
 	      reduce (q, NO_NOTE, NO_TICK, DECLARER, SHORTETY, INDICANT, STOP);
 	    }
 	  else
@@ -833,8 +833,7 @@ reduce_declarers (NODE_T *p, enum a68_attribute expect)
 		}
 	      else
 		{
-		  a68_error (NEXT (q),
-			     "Y expected", "appropriate declarer");
+		  a68_error (NEXT (q), "appropriate declarer expected");
 		  reduce (q, NO_NOTE, NO_TICK, DECLARER, LONGETY, INDICANT, STOP);
 		}
 	    }
@@ -1347,8 +1346,12 @@ ambiguous_patterns (NODE_T *p)
 	case COMPLEX_PATTERN:
 	case BITS_PATTERN:
 	  if (last_pat != NO_NODE)
-	    a68_error (q, "A and A must be separated by a comma-symbol",
-		       ATTRIBUTE (last_pat), ATTRIBUTE (q));
+	    {
+	      a68_attr_format_token a1 (ATTRIBUTE (last_pat));
+	      a68_attr_format_token a2 (ATTRIBUTE (q));
+	      a68_error (q, "%e and %e must be separated by a comma-symbol",
+			 &a1, &a2);
+	    }
 	  last_pat = q;
 	  break;
 	case COMMA_SYMBOL:
@@ -1756,7 +1759,10 @@ reduce_formulae (NODE_T * p)
 		  reduce (q, NO_NOTE, &siga, FORMULA, MONADIC_FORMULA, OPERATOR, FORMULA, STOP);
 		}
 	      if (prio == 0 && siga)
-		a68_error (op, "S has no priority declaration");
+		{
+		  a68_symbol_format_token s (op);
+		  a68_error (op, "%e has no priority declaration", &s);
+		}
 	      siga = true;
 	      while (siga)
 		{
@@ -1769,7 +1775,10 @@ reduce_formulae (NODE_T * p)
 		  if (operator_with_priority (q, prio))
 		    reduce (q, NO_NOTE, &siga, FORMULA, FORMULA, OPERATOR, FORMULA, STOP);
 		  if (prio == 0 && siga)
-		    a68_error (op2, "S has no priority declaration");
+		    {
+		      a68_symbol_format_token s (op2);
+		      a68_error (op2, "%e has no priority declaration", &s);
+		    }
 		}
 	    }
 	}
@@ -1868,7 +1877,7 @@ reduce_formal_holes (NODE_T *p)
 		       && IS (SUB (SUB (SUB (s))), DENOTATION)
 		       && IS (SUB (SUB (SUB (SUB (s)))), ROW_CHAR_DENOTATION)))
 		{
-		  a68_error (s, "expected row char denotation");
+		  a68_error (s, "expected %<row char%> denotation");
 		}
 	    }
 	}
@@ -2299,7 +2308,10 @@ reduce_serial_clauses (NODE_T *p)
 	  if (IS (u, EXIT_SYMBOL))
 	    {
 	      if (NEXT (u) == NO_NODE || !IS (NEXT (u), LABELED_UNIT))
-		a68_error (u, "S must be followed by a labeled unit");
+		{
+		  a68_symbol_format_token s (u);
+		  a68_error (u, "%e must be followed by a labeled unit", &s);
+		}
 	    }
 	}
 
@@ -2819,10 +2831,18 @@ recover_from_error (NODE_T * p, enum a68_attribute expect, bool suppress)
       if (strlen (seq) == 0)
 	{
 	  if (ERROR_COUNT (&A68_JOB) == 0)
-	    a68_error (w, "expected A", expect);
+	    {
+	      a68_attr_format_token a (expect);
+	      a68_error (w, "expected %e", &a);
+	    }
 	}
       else
-	a68_error (w, "Y is an invalid A", seq, expect);
+	{
+	  std::string fmt = seq;
+	  fmt += " is an invalid %e";
+	  a68_attr_format_token a (expect);
+	  a68_error (w, fmt.c_str (), &a);
+	}
 
     if (ERROR_COUNT (&A68_JOB) >= MAX_ERRORS)
       longjmp (A68_PARSER (bottom_up_crash_exit), 1);
@@ -2895,7 +2915,8 @@ reduce_erroneous_units (NODE_T *p)
 	 guide an unsuspecting user.  */
     if (a68_whether (q, SELECTOR, -SECONDARY, STOP))
       {
-	a68_error (NEXT (q), "expected A", SECONDARY);
+	a68_attr_format_token a (SECONDARY);
+	a68_error (NEXT (q), "expected %e", &a);
 	reduce (q, NO_NOTE, NO_TICK, UNIT, SELECTOR, WILDCARD, STOP);
       }
 
@@ -2904,14 +2925,16 @@ reduce_erroneous_units (NODE_T *p)
 	|| a68_whether (q, TERTIARY, IS_SYMBOL, -TERTIARY, STOP)
 	|| a68_whether (q, -TERTIARY, IS_SYMBOL, -TERTIARY, STOP))
       {
-	a68_error (NEXT (q), "expected A", TERTIARY);
+	a68_attr_format_token a (TERTIARY);
+	a68_error (NEXT (q), "expected %e", &a);
 	reduce (q, NO_NOTE, NO_TICK, UNIT, WILDCARD, IS_SYMBOL, WILDCARD, STOP);
       }
     else if (a68_whether (q, -TERTIARY, ISNT_SYMBOL, TERTIARY, STOP)
 	     || a68_whether (q, TERTIARY, ISNT_SYMBOL, -TERTIARY, STOP)
 	     || a68_whether (q, -TERTIARY, ISNT_SYMBOL, -TERTIARY, STOP))
       {
-	a68_error (NEXT (q), "expected A", TERTIARY);
+	a68_attr_format_token a (TERTIARY);
+	a68_error (NEXT (q), "expected %e", &a);
 	reduce (q, NO_NOTE, NO_TICK, UNIT, WILDCARD, ISNT_SYMBOL, WILDCARD, STOP);
       }
     }
@@ -2933,10 +2956,13 @@ a68_bottom_up_error_check (NODE_T *p)
 	  int k = 0;
 	  a68_count_pictures (SUB (p), &k);
 	  if (!(k == 0 || k == 2))
-	    a68_error (p, "incorrect number of pictures for A",
-		       ATTRIBUTE (p));
+	    {
+	      a68_attr_format_token a (ATTRIBUTE (p));
+	      a68_error (p, "incorrect number of pictures for %e", &a);
+	    }
 	}
-      else if (a68_is_one_of (p, DEFINING_INDICANT, DEFINING_IDENTIFIER, DEFINING_OPERATOR, STOP))
+      else if (a68_is_one_of (p,
+			      DEFINING_INDICANT, DEFINING_IDENTIFIER, DEFINING_OPERATOR, STOP))
 	{
 	  if (PUBLICIZED (p) && !PUBLIC_RANGE (TABLE (p)))
 	    a68_error (p,

@@ -937,7 +937,7 @@ public:
   /* Flag of that the above array has been initialized.  */
   bool x_ira_prohibited_mode_move_regs_initialized_p;
 
-  /* Number of real occurences of hard regs before IRA.  */
+  /* Number of real occurrences of hard regs before IRA.  */
   size_t x_ira_hard_regno_nrefs[FIRST_PSEUDO_REGISTER];
 };
 
@@ -1437,18 +1437,6 @@ ira_hard_reg_set_intersection_p (int hard_regno, machine_mode mode,
   return false;
 }
 
-/* Return number of hard registers in hard register SET.  */
-inline int
-hard_reg_set_size (HARD_REG_SET set)
-{
-  int i, size;
-
-  for (size = i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-    if (TEST_HARD_REG_BIT (set, i))
-      size++;
-  return size;
-}
-
 /* The function returns TRUE if hard registers starting with
    HARD_REGNO and containing value of MODE are fully in set
    HARD_REGSET.  */
@@ -1726,5 +1714,14 @@ ira_caller_save_loop_spill_p (ira_allocno_t a, ira_allocno_t subloop_a,
   int call_cost = ira_caller_save_cost (subloop_a);
   return call_cost && call_cost >= spill_cost;
 }
+
+/* True if X is a constant that can be forced into the constant pool.
+   MODE is the mode of the operand, or VOIDmode if not known.  */
+#define CONST_POOL_OK_P(MODE, X)		\
+  ((MODE) != VOIDmode				\
+   && CONSTANT_P (X)				\
+   && GET_CODE (X) != HIGH			\
+   && GET_MODE_SIZE (MODE).is_constant ()	\
+   && !targetm.cannot_force_const_mem (MODE, X))
 
 #endif /* GCC_IRA_INT_H */

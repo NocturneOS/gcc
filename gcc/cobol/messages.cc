@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Symas Corporation
+ * Copyright (c) 2021-2026 Symas Corporation
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -66,7 +66,7 @@
 
 
 /*
- * As of now, every diagnositc has one id, one message, one kind, and is
+ * As of now, every diagnostic has one id, one message, one kind, and is
  * associated with "one" dialect. The dialect could be ORed. If it is, that
  * means among the dialects it belongs to, it is always of the same kind.
  *

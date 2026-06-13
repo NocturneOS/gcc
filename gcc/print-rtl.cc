@@ -190,8 +190,7 @@ void
 print_mem_expr (FILE *outfile, const_tree expr)
 {
   fputc (' ', outfile);
-  print_generic_expr (outfile, CONST_CAST_TREE (expr),
-		      dump_flags | TDF_SLIM);
+  print_generic_expr (outfile, const_cast<tree> (expr), dump_flags | TDF_SLIM);
 }
 #endif
 
@@ -580,7 +579,7 @@ rtx_writer::print_rtx_operand_code_r (const_rtx in_rtx)
     else if (m_compact)
       {
 	/* In compact mode, print pseudos with '< and '>' wrapping the regno,
-	   offseting it by (LAST_VIRTUAL_REGISTER + 1), so that the
+	   offsetting it by (LAST_VIRTUAL_REGISTER + 1), so that the
 	   first non-virtual pseudo is dumped as "<0>".  */
 	gcc_assert (regno > LAST_VIRTUAL_REGISTER);
 	fprintf (m_outfile, " <%d>", regno - (LAST_VIRTUAL_REGISTER + 1));

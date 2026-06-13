@@ -335,7 +335,7 @@ get_array_length (tree exp, Type *type)
   switch (tb->ty)
     {
     case TY::Tsarray:
-      return size_int (tb->isTypeSArray ()->dim->toUInteger ());
+      return size_int (dmd::toUInteger (tb->isTypeSArray ()->dim));
 
     case TY::Tarray:
       return d_array_length (exp);
@@ -1037,15 +1037,15 @@ lower_struct_comparison (tree_code code, StructDeclaration *sd,
 	  /* Compare inner data structures.  */
 	  tcmp = lower_struct_comparison (code, ts->sym, t1ref, t2ref);
 	}
-      else if (type->ty != TY::Tvector && type->isIntegral ())
+      else if (type->ty != TY::Tvector && dmd::isIntegral (type))
 	{
 	  /* Integer comparison, no special handling required.  */
 	  tcmp = build_boolop (code, t1ref, t2ref);
 	}
-      else if (type->ty != TY::Tvector && type->isFloating ())
+      else if (type->ty != TY::Tvector && dmd::isFloating (type))
 	{
 	  /* Floating-point comparison, don't compare padding in type.  */
-	  if (!type->isComplex ())
+	  if (!dmd::isComplex (type))
 	    tcmp = build_float_identity (code, t1ref, t2ref);
 	  else
 	    {
@@ -1520,7 +1520,7 @@ tree
 build_boolop (tree_code code, tree arg0, tree arg1)
 {
   /* Aggregate comparisons may get lowered to a call to builtin memcmp,
-     so need to remove all side effects incase its address is taken.  */
+     so need to remove all side effects in case its address is taken.  */
   if (AGGREGATE_TYPE_P (TREE_TYPE (arg0)))
     arg0 = d_save_expr (arg0);
   if (AGGREGATE_TYPE_P (TREE_TYPE (arg1)))
@@ -1879,7 +1879,7 @@ build_array_from_val (Type *type, tree val)
   if (TREE_CODE (etype) == ARRAY_TYPE && TREE_TYPE (val) != etype)
     val = build_array_from_val (type->nextOf (), val);
 
-  size_t dims = type->isTypeSArray ()->dim->toInteger ();
+  size_t dims = dmd::toInteger (type->isTypeSArray ()->dim);
   vec <constructor_elt, va_gc> *elms = NULL;
   vec_safe_reserve (elms, dims);
 
@@ -1994,9 +1994,9 @@ build_assert_call (const Loc &loc, libcall_fn libcall, tree msg)
 
 
   if (msg != NULL_TREE)
-    return build_libcall (libcall, Type::tvoid, 3, msg, file, line);
+    return build_libcall (libcall, 3, msg, file, line);
   else
-    return build_libcall (libcall, Type::tvoid, 2, file, line);
+    return build_libcall (libcall, 2, file, line);
 }
 
 /* Builds a CALL_EXPR at location LOC in the source file to execute when an
@@ -2007,10 +2007,10 @@ build_array_bounds_call (const Loc &loc)
 {
   /* Terminate the program with a trap if no D runtime present.  */
   if (checkaction_trap_p ())
-    return build_call_expr (builtin_decl_explicit (BUILT_IN_TRAP), 0);
+    return build_trap_call ();
   else
     {
-      return build_libcall (LIBCALL_ARRAYBOUNDSP, Type::tvoid, 2,
+      return build_libcall (LIBCALL_ARRAYBOUNDSP, 2,
 			    build_filename_from_loc (loc),
 			    size_int (loc.linnum ()));
     }
@@ -2036,10 +2036,10 @@ build_bounds_index_condition (IndexExp *ie, tree index, tree length)
   tree boundserr;
 
   if (checkaction_trap_p ())
-    boundserr = build_call_expr (builtin_decl_explicit (BUILT_IN_TRAP), 0);
+    boundserr = build_trap_call ();
   else
     {
-      boundserr = build_libcall (LIBCALL_ARRAYBOUNDS_INDEXP, Type::tvoid, 4,
+      boundserr = build_libcall (LIBCALL_ARRAYBOUNDS_INDEXP, 4,
 				 build_filename_from_loc (ie->e2->loc),
 				 size_int (ie->e2->loc.linnum ()),
 				 index, length);
@@ -2082,14 +2082,10 @@ build_bounds_slice_condition (SliceExp *se, tree lower, tree upper, tree length)
 	  tree boundserr;
 
 	  if (checkaction_trap_p ())
-	    {
-	      boundserr =
-		build_call_expr (builtin_decl_explicit (BUILT_IN_TRAP), 0);
-	    }
+	    boundserr = build_trap_call ();
 	  else
 	    {
-	      boundserr = build_libcall (LIBCALL_ARRAYBOUNDS_SLICEP,
-					 Type::tvoid, 5,
+	      boundserr = build_libcall (LIBCALL_ARRAYBOUNDS_SLICEP, 5,
 					 build_filename_from_loc (se->loc),
 					 size_int (se->loc.linnum ()),
 					 lower, upper, length);
@@ -2157,8 +2153,16 @@ checkaction_trap_p (void)
     }
 }
 
+/* Build a call to built-in trap().  */
+
+tree
+build_trap_call ()
+{
+  return build_call_expr (builtin_decl_explicit (BUILT_IN_TRAP), 0);
+}
+
 /* Returns the TypeFunction class for Type T.
-   Assumes T is already ->toBasetype().  */
+   Assumes T is already the main variant type (toBasetype).  */
 
 TypeFunction *
 get_function_type (Type *t)
@@ -2350,7 +2354,8 @@ d_build_call (TypeFunction *tf, tree callable, tree object,
 		 - The ABI of the function expects the callee to destroy its
 		 arguments; when the caller is handles destruction, then `targ'
 		 has already been made into a temporary. */
-	      if (!can_elide_copy_p (arg)
+	      if (TREE_CODE (targ) != TARGET_EXPR
+		  && !can_elide_copy_p (arg)
 		  && (arg->op == EXP::structLiteral
 		      || (!sd->postblit && !sd->dtor)
 		      || target.isCalleeDestroyingArgs (tf)))
@@ -2396,6 +2401,10 @@ d_build_call (TypeFunction *tf, tree callable, tree object,
 	  if (TYPE_MAIN_VARIANT (TREE_TYPE (arg)) == noreturn_type_node)
 	    break;
 	}
+
+      /* Trap after evaluating all call arguments, as it is not expected that
+	 we get to this point after the `noreturn' parameter.  */
+      saved_args = compound_expr (saved_args, build_trap_call ());
 
       /* Add a stub result type for the expression.  */
       tree result = build_zero_cst (TREE_TYPE (ctype));
@@ -2625,7 +2634,7 @@ get_frame_for_symbol (Dsymbol *sym)
 	  int offset;
 	  if (cdo->isBaseOf (cd, &offset) && offset != 0)
 	    {
-	      /* Generate a new frame to pass to the overriden function that
+	      /* Generate a new frame to pass to the overridden function that
 		 has the `this' pointer adjusted.  */
 	      gcc_assert (offset != OFFSET_RUNTIME);
 
@@ -2754,7 +2763,7 @@ build_vthis (AggregateDeclaration *decl)
 	{
 	  tree ffo = get_frameinfo (fdo);
 	  if (FRAMEINFO_CREATES_FRAME (ffo) || FRAMEINFO_STATIC_CHAIN (ffo)
-	      || fdo->hasNestedFrameRefs ())
+	      || dmd::hasNestedFrameRefs (fdo))
 	    vthis_value = get_frame_for_symbol (decl);
 	  else if (cd != NULL)
 	    {
@@ -2924,7 +2933,7 @@ build_closure (FuncDeclaration *fd)
 
       /* Allocate memory for closure.  */
       tree arg = convert (build_ctype (Type::tsize_t), TYPE_SIZE_UNIT (type));
-      tree init = build_libcall (LIBCALL_ALLOCMEMORY, Type::tvoidptr, 1, arg);
+      tree init = build_libcall (LIBCALL_ALLOCMEMORY, 1, arg);
 
       tree init_exp = build_assign (INIT_EXPR, decl,
 				    build_nop (TREE_TYPE (decl), init));
@@ -2986,7 +2995,7 @@ get_frameinfo (FuncDeclaration *fd)
   DECL_LANG_FRAMEINFO (fds) = ffi;
 
   const bool requiresClosure = fd->requiresClosure;
-  if (fd->needsClosure ())
+  if (dmd::needsClosure (fd))
     {
       /* This can shift due to templates being expanded that access alias
          symbols, give it a decent error for now.  */
@@ -2998,7 +3007,7 @@ get_frameinfo (FuncDeclaration *fd)
       FRAMEINFO_CREATES_FRAME (ffi) = 1;
       FRAMEINFO_IS_CLOSURE (ffi) = 1;
     }
-  else if (fd->hasNestedFrameRefs ())
+  else if (dmd::hasNestedFrameRefs (fd))
     {
       /* Functions with nested refs must create a static frame for local
 	 variables to be referenced from.  */
