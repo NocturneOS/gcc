@@ -1,3 +1,144 @@
+2026-06-24  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125939
+	* cp-tree.h (build_const_lref): Declare.
+	* method.cc (build_stub_type): Pass tf_ignore_bad_quals to
+	cp_build_qualified_type.
+	* reflect.cc (build_const_lref): New.
+	(get_range_elts): Use it.
+	(eval_is_copy_constructible_type): Likewise.
+	(eval_is_copy_assignable_type): Likewise.
+	(eval_is_trivially_copy_assignable_type): Likewise.
+	(eval_is_nothrow_copy_constructible_type): Likewise.
+	(eval_is_nothrow_copy_assignable_type): Likewise.
+	* tree.cc (trivially_copy_constructible_p): Likewise.
+	(handle_annotation_attribute): Likewise.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* semantics.cc (finish_omp_barrier): Push GOMP_BARRIER_EXPLICIT
+	onto the argument vector.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125334
+	* module.cc (depset::hash::find_dependencies): Don't add_dependency
+	dependent ADL functions.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125768
+	* module.cc (trees_out::decl_node): When not streaming,
+	recurse into DECL_ORIGINAL_TYPE of an imported typedef.
+
+2026-06-23  Kwok Cheung Yeung  <kcyeung@baylibre.com>
+	    Sandra Loosemore  <sloosemore@baylibre.com>
+
+	* parser.cc (cp_parser_omp_iterators): Use iterator constructors
+	and macros for accessing iterator elements.
+	(cp_parser_omp_clause_affinity): Likewise.
+	(cp_parser_omp_clause_depend): Likewise.
+	(cp_parser_omp_clause_from_to): Likewise.
+	(cp_parser_omp_clause_map): Likewise.
+	* pt.cc (tsubst_omp_clause_decl): Likewise.
+	* semantics.cc (cp_omp_finish_iterators): Likewise.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125745
+	* cp-ubsan.cc (cp_ubsan_instrument_vptr): Use build_vfield_ref.
+
+2026-06-22  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125697
+	* cp-tree.h (trivially_copy_constructible_p): Declare.
+	* parser.cc (warn_for_range_copy): Use it.
+	* reflect.cc (eval_is_trivially_copy_constructible_type): Use it.
+	* tree.cc (trivially_copy_constructible_p): New.
+
+2026-06-22  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125889
+	* reflect.cc (class_members_of): Also append LAMBDA_FUNCTION_P
+	from the implicitly_declared vector.
+
+2026-06-22  Georg-Johann Lay  <avr@gjlay.de>
+
+	* call.cc: Remove -*- C++ -*- tags for Emacs.
+	* class.cc: Same.
+	* constexpr.cc: Same.
+	* decl.cc: Same.
+	* init.cc: Same.
+	* mangle.cc: Same.
+	* mapper-resolver.cc: Same.
+	* parser.cc: Same.
+	* pt.cc: Same.
+
+2026-06-21  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125408
+	* expr.cc (mark_use): Fix condition for changing rvalue to lvalue.
+
+2026-06-21  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125408
+	* tree.cc (cp_walk_subtrees): Walk into the DECL_ORIGINAL_TYPE of a
+	typedef DECL_EXPR.
+
+2026-06-18  Marek Polacek  <polacek@redhat.com>
+
+	* decl.cc (check_initializer): Don't call
+	build_aggr_init_full_exprs for {} of an aggregate.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125764
+	* reflect.cc (eval_can_substitute): Don't call
+	convert_from_reference on types.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125759
+	* reflect.cc (get_reflection): Do STRIP_REFERENCE_REF.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125492
+	* reflect.cc (eval_size_of): Add a separate throw_exception for
+	function types.
+
+2026-06-17  Wang Jinghao  <zheng.xianyuwang@gmail.com>
+
+	* reflect.cc (eval_is_explicit_object_parameter): Call
+	maybe_update_function_parm before checking the parameter
+	against DECL_ARGUMENTS.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125613
+	* pt.cc (check_explicit_specialization): Detect mismatches in
+	exception specifications in explicit instantiations.
+
+2026-06-17  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR c++/125851
+	* name-lookup.cc (get_cxx_dialect_name): Handle cxx29.
+
+2026-06-16  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125770
+	* decl2.cc (mark_used): Check complain & tf_error before giving
+	an error.
+
+2026-06-16  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125539
+	* cvt.cc (ocp_convert): In a template, always call
+	perform_implicit_conversion.  Pass flags to
+	perform_implicit_conversion_flags.
+	* decl.cc (check_initializer): Remove a call to
+	build_implicit_conv_flags.
+
 2026-06-12  Jakub Jelinek  <jakub@redhat.com>
 
 	PR c++/125674

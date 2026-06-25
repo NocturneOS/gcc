@@ -1,4 +1,4 @@
-/* Process declarations and variables for -*- C++ -*- compiler.
+/* Process declarations and variables for the C++ compiler.
    Copyright (C) 1988-2026 Free Software Foundation, Inc.
    Contributed by Michael Tiemann (tiemann@cygnus.com)
 
@@ -8587,15 +8587,9 @@ check_initializer (tree decl, tree init, int flags, vec<tree, va_gc> **cleanups)
 
       if (((type_build_ctor_call (type) || CLASS_TYPE_P (type))
 	   && !(flags & LOOKUP_ALREADY_DIGESTED)
-	   && !(init && BRACE_ENCLOSED_INITIALIZER_P (init)
-		&& CP_AGGREGATE_TYPE_P (type)
-		&& (CLASS_TYPE_P (type)
-		    /* The call to build_aggr_init below could end up
-		       calling build_vec_init, which may break when we
-		       are processing a template.  */
-		    || processing_template_decl
-		    || !TYPE_NEEDS_CONSTRUCTING (type)
-		    || type_has_extended_temps (type))))
+	   && !(init
+		&& BRACE_ENCLOSED_INITIALIZER_P (init)
+		&& CP_AGGREGATE_TYPE_P (type)))
 	  || (DECL_DECOMPOSITION_P (decl) && TREE_CODE (type) == ARRAY_TYPE))
 	{
 	  init_code = build_aggr_init_full_exprs (decl, init, flags);
@@ -8625,12 +8619,7 @@ check_initializer (tree decl, tree init, int flags, vec<tree, va_gc> **cleanups)
 	      /* In C++20, the call to build_aggr_init could have created
 		 an INIT_EXPR with a CONSTRUCTOR as the RHS to handle
 		 A(1, 2).  */
-	      tree rhs = TREE_OPERAND (init_code, 1);
-	      if (processing_template_decl && TREE_CODE (rhs) == TARGET_EXPR)
-		/* Avoid leaking TARGET_EXPR into template trees.  */
-		rhs = build_implicit_conv_flags (type, init, flags);
-	      init = rhs;
-
+	      init = TREE_OPERAND (init_code, 1);
 	      init_code = NULL_TREE;
 	      /* Don't call digest_init; it's unnecessary and will complain
 		 about aggregate initialization of non-aggregate classes.  */

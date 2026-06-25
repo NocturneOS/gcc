@@ -236,6 +236,24 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
       && !TYPE_UNSIGNED (TREE_TYPE (@0)))
   (abs @0)))
 
+/* Following match patterns are used by the match_spaceship function to detect
+   all possible spaceship combinations.  */
+#if GIMPLE
+(if (INTEGRAL_TYPE_P (type))
+  (for op (lt ne)
+  (match (spaceship @0 @1)
+    (cond^ (le @0 @1) (negate (convert? (op @0 @1))) integer_onep)))
+  (for op (lt ne)
+  (match (spaceship @0 @1)
+    (cond^ (le @1 @0) (convert? (op @1 @0)) integer_minus_onep)))
+  (for op (gt ne)
+  (match (spaceship @0 @1)
+    (cond^ (ge @0 @1) (convert? (op @0 @1)) integer_minus_onep))))
+  (for op (gt ne)
+  (match (spaceship @0 @1)
+    (cond^ (ge @1 @0) (negate (convert? (op @1 @0))) integer_onep)))
+#endif
+
 /* Simplifications of operations with one constant operand and
    simplifications to constants or single values.  */
 
@@ -1715,9 +1733,8 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 /* X % Y is smaller than Y.  */
 (for cmp (lt ge)
  (simplify
-  (cmp:c (trunc_mod @0 @1) @1)
-  (if (TYPE_UNSIGNED (TREE_TYPE (@0)))
-   { constant_boolean_node (cmp == LT_EXPR, type); })))
+  (cmp:c (trunc_mod tree_expr_nonnegative_p@0 tree_expr_nonnegative_p@1) @1)
+  { constant_boolean_node (cmp == LT_EXPR, type); }))
 
 /* x | ~0 -> ~0  */
 (simplify
@@ -1831,6 +1848,15 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	&& wi::to_wide (@1) != wi::min_value (TYPE_PRECISION (type),
 					      SIGNED))
     (minus (plus @1 { build_minus_one_cst (type); }) @0))))
+
+/* (~X) >> (type1)X -> -1 for signed X.
+   The cast needs not to be truncating cast.  */
+(simplify
+ (rshift (bit_not @0) (convert?@1 @0))
+ (if (INTEGRAL_TYPE_P (type)
+      && !TYPE_UNSIGNED (type)
+      && TYPE_PRECISION (type) <= TYPE_PRECISION (TREE_TYPE (@1)))
+  { build_minus_one_cst (type); }))
 #endif
 
 /* ~(X >> Y) -> ~X >> Y if ~X can be simplified.  */
@@ -2517,6 +2543,11 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (mult zero_one_valued_p@0 zero_one_valued_p@1)
  (if (INTEGRAL_TYPE_P (type))
   (bit_and @0 @1)))
+
+/* Transform { 0 or 1 } * -{ 0 or 1 } into -({ 0 or 1 } & { 0 or 1 }).  */
+(simplify
+ (mult:c (negate zero_one_valued_p@0) zero_one_valued_p@1)
+ (negate (bit_and @0 @1)))
 
 /* Fold `(a ? b : 0) | (a ? 0 : c)` into (a ? b : c).
     Handle also ^ and + in replacement of `|`. */
@@ -4927,6 +4958,23 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
      (if (stype && (width == 1 || type_has_mode_precision_p (stype)))
       (convert (convert:stype @0))))))))
 
+/* PR125405: (x & ((1 << (N - 1)) - 1)) - (x & (1 << (N - 1)))
+   -> sign_extend<N> (x). */
+(simplify
+ (minus (bit_and @0 INTEGER_CST@1) (bit_and @0 integer_pow2p@2))
+ (if (INTEGRAL_TYPE_P (type)
+      && TYPE_PRECISION (type) <= MAX_FIXED_MODE_SIZE
+      && wi::to_wide (@1) + 1 == wi::to_wide (@2))
+  (with {
+    int width = wi::exact_log2 (wi::to_wide (@2)) + 1;
+    tree ntype = NULL_TREE;
+
+    if (width > 0 && width < TYPE_PRECISION (type))
+      ntype = build_nonstandard_integer_type (width, SIGNED);
+   }
+   (if (ntype && type_has_mode_precision_p (ntype))
+    (convert (convert:ntype @0))))))
+
 /* Optimize x >> x into 0 */
 (simplify
  (rshift @0 @0)
@@ -5042,6 +5090,29 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
         { build_zero_cst (type); }
         (op @0 { build_int_cst (TREE_TYPE (@1), prec - 1); })))
       (op @0 { build_int_cst (TREE_TYPE (@1), low); })))))))
+
+/* Fold x | (x >> (TYPE_PRECISION (type) - 1)) to max (x, -1)
+   Fold x | (~ (x >> (TYPE_PRECISION (type) - 1))) to min (x, -1)
+   Fold x & (x >> (TYPE_PRECISION (type) - 1)) to min (x, 0)
+   Fold x & (~ (x >> (TYPE_PRECISION (type) - 1))) to max (x, 0)
+*/
+#ifdef GIMPLE
+(for bitop (bit_ior bit_and)
+     result (max min)
+     rresult (min max)
+ (simplify
+  (bitop:c @0 (rshift @0 INTEGER_CST@1))
+  (if (INTEGRAL_TYPE_P (type)
+       && !TYPE_UNSIGNED (type)
+       && wi::eq_p (wi::to_wide (@1), TYPE_PRECISION (type) - 1))
+   (result @0 { build_int_cst (type, bitop == BIT_IOR_EXPR ? -1 : 0); })))
+ (simplify
+  (bitop:c @0 (bit_not (rshift @0 INTEGER_CST@1)))
+  (if (INTEGRAL_TYPE_P (type)
+       && !TYPE_UNSIGNED (type)
+       && wi::eq_p (wi::to_wide (@1), TYPE_PRECISION (type) - 1))
+   (rresult @0 { build_int_cst (type, bitop == BIT_IOR_EXPR ? -1 : 0); }))))
+#endif
 
 /* Fold `1 >> a` into `a == 0` for scalar integral types. */
 (simplify
@@ -6673,6 +6744,15 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
  (simplify
   (bitop (neeql @0 @1) (neeqr (bit_ior @0 @1) integer_zerop))
   { constant_boolean_node (bitop == BIT_IOR_EXPR, type); }))
+
+/* (a == 0) | ((a | b) == 0) -> (a == 0) -- PR125442
+   (a != 0) & ((a | b) != 0) -> (a != 0) -- PR125442 */
+
+(for bitop (bit_and bit_ior)
+     neeq  (ne      eq)
+(simplify
+  (bitop:c (neeq@2 @0 integer_zerop) (neeq (bit_ior:c @0 @1) integer_zerop))
+  @2))
 #endif
 
 /* These was part of minmax phiopt.  */
@@ -8249,11 +8329,10 @@ DEFINE_INT_AND_FLOAT_ROUND_FN (RINT)
 	 (if (cmp == GT_EXPR)
 	  (lt (view_convert:st @0) { build_zero_cst (st); })))))))))))
 
-/* unsigned < (typeof unsigned)(unsigned != 0) is always false.  */
+/* For nonnegative x, x < (typeof x)(x != 0) is always false.  */
 (simplify
- (lt:c @0 (convert (ne @0 integer_zerop)))
- (if (TYPE_UNSIGNED (TREE_TYPE (@0)))
-  { constant_boolean_node (false, type); }))
+ (lt:c @0 (convert (ne tree_expr_nonnegative_p@0 integer_zerop)))
+ { constant_boolean_node (false, type); })
 
 /* x != (typeof x)(x == CST) -> CST == 0 ? 1 : (CST == 1 ? (x!=0&&x!=1) : x != 0) */
 /* x != (typeof x)(x != CST) -> CST == 1 ? 1 : (CST == 0 ? (x!=0&&x!=1) : x != 1) */

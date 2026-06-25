@@ -294,9 +294,10 @@ section.
 @item @anchor{GCOBOL-prerequisite}GCOBOL
 
 The COBOL compiler, gcobol, first appeared in GCC 15.  To build the
-COBOL parser, you need GNU Bison 3.5.1 or later (but not 3.8.0). To build
-the lexer requires GNU Flex 2.6.4, the current version as of this writing,
-released on 2017-05-06.
+COBOL parser, you need GNU Bison 3.8.2, the current version of as of
+this writing, released 2021-09-25. To build the lexer requires GNU
+Flex 2.6.4, also the current version as of this writing, released on
+2017-05-06.
 
 The gcobol documentation is maintained as manpages using troff
 mdoc. GNU groff is required to convert them to PDF format.  Conversion
@@ -598,7 +599,7 @@ Necessary to build GCC during development because the generated output
 files are not included in the version-controlled source repository.
 They are included in releases.
 
-@item Bison version 3.5.1 or later (but not 3.8.0)
+@item Bison version 3.8.2 (or later)
 
 Necessary when modifying @file{*.y} files in the COBOL front end.
 
@@ -1886,12 +1887,12 @@ On MIPS targets, make @option{-mlxc1-sxc1} the default when no
 On MIPS targets, make @option{-mno-lxc1-sxc1} the default when no
 @option{-mlxc1-sxc1} option is passed.  The indexed load/store
 instructions are not directly a problem but can lead to unexpected
-behaviour when deployed in an application intended for a 32-bit address
+behavior when deployed in an application intended for a 32-bit address
 space but run on a 64-bit processor.  The issue is seen because all
 known MIPS 64-bit Linux kernels execute o32 and n32 applications
-with 64-bit addressing enabled which affects the overflow behaviour
+with 64-bit addressing enabled which affects the overflow behavior
 of the indexed addressing mode.  GCC will assume that ordinary
-32-bit arithmetic overflow behaviour is the same whether performed
+32-bit arithmetic overflow behavior is the same whether performed
 as an @code{addu} instruction or as part of the address calculation
 in @code{lwxc1} type instructions.  This assumption holds true in a
 pure 32-bit environment and can hold true in a 64-bit environment if

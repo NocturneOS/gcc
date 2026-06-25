@@ -4901,7 +4901,9 @@ package body Sem_Ch13 is
 
             Typ := Etype (First_Entity (E));
 
-            if No (First_Entity (Typ)) then
+            if Comes_From_Source (Aspect)
+              and then No (First_Entity (Typ))
+            then
                Error_Msg_N
                  ("Initialize can only apply to contructors"
                    & " whose type has one or more components", N);
@@ -5415,7 +5417,7 @@ package body Sem_Ch13 is
          --  Case 4: Aspects requiring special handling
 
          --  Pre/Post/Test_Case/Contract_Cases/Always_Terminates/
-         --  Exceptional_Cases/Exit_Cases/Program_Exit and
+         --  Exceptional_Cases/Exit_Cases/Modifies/Program_Exit and
          --  Subprogram_Variant whose corresponding pragmas take care of
          --  the delay.
 
@@ -5428,6 +5430,8 @@ package body Sem_Ch13 is
 
          when Pre_Post_Aspects => Pre_Post : declare
             Pname : Name_Id;
+
+            Class_Wide_Expr : Node_Id := Empty;
 
          begin
             if A_Id in Aspect_Pre | Aspect_Precondition then
@@ -5465,11 +5469,11 @@ package body Sem_Ch13 is
               and then not Is_Ignored_Ghost_Entity_In_Codegen (E)
             then
                if A_Id = Aspect_Pre then
+                  Class_Wide_Expr := New_Copy_Tree (Expr);
                   if Is_Ignored_In_Codegen (Aspect) then
-                     Set_Ignored_Class_Preconditions (E,
-                       New_Copy_Tree (Expr));
+                     Set_Ignored_Class_Preconditions (E, Class_Wide_Expr);
                   else
-                     Set_Class_Preconditions (E, New_Copy_Tree (Expr));
+                     Set_Class_Preconditions (E, Class_Wide_Expr);
                   end if;
 
                --  Postconditions may split into separate aspects, and we
@@ -5479,11 +5483,11 @@ package body Sem_Ch13 is
                elsif No (Class_Postconditions (E))
                  and then No (Ignored_Class_Postconditions (E))
                then
+                  Class_Wide_Expr := New_Copy_Tree (Expr);
                   if Is_Ignored_In_Codegen (Aspect) then
-                     Set_Ignored_Class_Postconditions (E,
-                       New_Copy_Tree (Expr));
+                     Set_Ignored_Class_Postconditions (E, Class_Wide_Expr);
                   else
-                     Set_Class_Postconditions (E, New_Copy_Tree (Expr));
+                     Set_Class_Postconditions (E, Class_Wide_Expr);
                   end if;
                end if;
             end if;
@@ -5500,6 +5504,14 @@ package body Sem_Ch13 is
                       Expression => Relocate_Expression (Expr))),
                     Pragma_Name                => Pname);
             end;
+
+            --  If class-wide expression was copied, then attach it to the AST,
+            --  so that its original context can be retrieved by climbing the
+            --  chain of parents.
+
+            if Present (Class_Wide_Expr) then
+               Set_Parent (Class_Wide_Expr, Aitem);
+            end if;
 
             --  For Pre/Post cases, insert immediately after the entity
             --  declaration, since that is the required pragma placement.
@@ -5602,6 +5614,14 @@ package body Sem_Ch13 is
                  Make_Pragma_Argument_Association (Loc,
                    Expression => Relocate_Node (Expr))),
                Pragma_Name                  => Name_Exit_Cases);
+            Insert_Aitem;
+
+         when Aspect_Modifies =>
+            Make_Aitem_Pragma
+              (Pragma_Argument_Associations => New_List (
+                 Make_Pragma_Argument_Association (Loc,
+                   Expression => Relocate_Node (Expr))),
+               Pragma_Name                  => Name_Modifies);
             Insert_Aitem;
 
          when Aspect_Program_Exit =>
@@ -5893,10 +5913,10 @@ package body Sem_Ch13 is
 
       --  Note that there is a special handling for Pre, Post, Test_Case,
       --  Contract_Cases, Always_Terminates, Exit_Cases, Exceptional_Cases,
-      --  Program_Exit and Subprogram_Variant aspects. In these cases, we do
-      --  not have to worry about delay issues, since the pragmas themselves
-      --  deal with delay of visibility for the expression analysis. Thus, we
-      --  just insert the pragma after the node N.
+      --  Modifies, Program_Exit and Subprogram_Variant aspects. In these
+      --  cases, we do not have to worry about delay issues, since the pragmas
+      --  themselves deal with delay of visibility for the expression analysis.
+      --  Thus, we just insert the pragma after the node N.
 
       Aspect : Node_Id := First (Aspect_Specifications (N));
 
@@ -8043,51 +8063,7 @@ package body Sem_Ch13 is
             procedure Associate_Storage_Pool
               (Ent : Entity_Id; Pool : Entity_Id)
             is
-               function Object_From (Pool : Entity_Id) return Entity_Id;
-               --  Return the entity of which Pool is a part of
-
-               -----------------
-               -- Object_From --
-               -----------------
-
-               function Object_From
-                 (Pool : Entity_Id) return Entity_Id
-               is
-                  N : Node_Id := Pool;
-               begin
-                  if Present (Renamed_Object (Pool)) then
-                     N := Renamed_Object (Pool);
-                  end if;
-
-                  while Present (N) loop
-                     case Nkind (N) is
-                        when N_Defining_Identifier =>
-                           return N;
-
-                        when N_Identifier | N_Expanded_Name =>
-                           return Entity (N);
-
-                        when N_Indexed_Component | N_Selected_Component |
-                             N_Explicit_Dereference
-                        =>
-                           N := Prefix (N);
-
-                        when N_Type_Conversion =>
-                           N := Expression (N);
-
-                        when others =>
-                           --  ??? we probably should handle more cases but
-                           --  this is good enough in practice for this check
-                           --  on a corner case.
-
-                           return Empty;
-                     end case;
-                  end loop;
-
-                  return Empty;
-               end Object_From;
-
-               Obj : Entity_Id;
+               Base : Node_Or_Entity_Id;
 
             begin
                Set_Associated_Storage_Pool (Ent, Pool);
@@ -8126,11 +8102,14 @@ package body Sem_Ch13 is
                      return;
                   end if;
 
-                  Obj := Object_From (Pool);
+                  Base := Get_Pool_Object_Or_Dereference (Pool);
 
                   --  check (C)
 
-                  if Present (Obj) and then Is_Formal (Obj) then
+                  if Present (Base)
+                    and then Nkind (Base) = N_Defining_Identifier
+                    and then Is_Formal (Base)
+                  then
                      Error_Msg_N
                        ("subpool cannot be part of a parameter", Ent);
                      return;
@@ -8138,9 +8117,12 @@ package body Sem_Ch13 is
 
                   --  check (D)
 
-                  if Present (Obj)
-                    and then Ekind (Etype (Obj)) = E_General_Access_Type
-                    and then not Is_Library_Level_Entity (Etype (Obj))
+                  if Present (Base)
+                    and then Nkind (Base) = N_Explicit_Dereference
+                    and then
+                      Ekind (Etype (Prefix (Base))) = E_General_Access_Type
+                    and then not
+                      Is_Library_Level_Entity (Etype (Prefix (Base)))
                   then
                      Error_Msg_N
                        ("subpool cannot be part of the dereference of a " &
@@ -12268,6 +12250,7 @@ package body Sem_Ch13 is
             | Aspect_Initializes
             | Aspect_Max_Entry_Queue_Length
             | Aspect_Max_Queue_Length
+            | Aspect_Modifies
             | Aspect_Obsolescent
             | Aspect_Part_Of
             | Aspect_Post

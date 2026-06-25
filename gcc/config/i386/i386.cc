@@ -22462,7 +22462,22 @@ ix86_insn_cost (rtx_insn *insn, bool speed)
       == AVX_PARTIAL_XMM_UPDATE_TRUE)
     insn_cost += COSTS_N_INSNS (3);
 
-  return insn_cost + pattern_cost (PATTERN (insn), speed);
+  rtx pat = PATTERN (insn);
+  /* A USE of a memory is more expensive than a use of a REG.
+     For example *<absneg>mode2_1's use of a signbit mask.  */
+  if (GET_CODE (pat) == PARALLEL)
+    {
+      for (int i = 0; i < XVECLEN (pat, 0); i++)
+	{
+	  rtx x = XVECEXP (pat, 0, i);
+	  if (GET_CODE (x) == USE && MEM_P (XEXP (x, 0)))
+	    insn_cost += !speed ? COSTS_N_BYTES (4)
+				: TARGET_64BIT ? COSTS_N_INSNS (1) + 1
+					       : COSTS_N_INSNS (3) + 1;
+	}
+    }
+
+  return insn_cost + pattern_cost (pat, speed);
 }
 
 /* Return cost of SSE/AVX FP->FP conversion (extensions and truncates).  */
@@ -25594,6 +25609,31 @@ asm_preferred_eh_data_format (int code, int global)
   return DW_EH_PE_absptr;
 }
 
+/* Cost of constructing or destructing a vector in VECMODE from/to elements
+   of ELMODE.  */
+static int
+ix86_vector_cd_cost (machine_mode vecmode, machine_mode elmode)
+{
+  if (GET_MODE_BITSIZE (vecmode) < 128)
+    return ((GET_MODE_BITSIZE (vecmode) / GET_MODE_BITSIZE (elmode) - 1)
+	    * ix86_cost->sse_op);
+
+  int n = GET_MODE_BITSIZE (vecmode) / 128;
+  int cost = 0;
+  /* Element inserts/extracts into/from N SSE vectors, the possible
+     GPR <-> XMM moves have to be accounted for elsewhere.  */
+  if (GET_MODE_BITSIZE (elmode) < 128)
+    cost += n * (128 / GET_MODE_BITSIZE (elmode) - 1) * ix86_cost->sse_op;
+  if (GET_MODE_BITSIZE (vecmode) >= 256
+      && GET_MODE_BITSIZE (elmode) < 256)
+    /* N/2 vinserti128/vextracti128 for SSE <-> AVX256.  */
+    cost += n * ix86_vec_cost (V32QImode, ix86_cost->sse_op) / 2;
+  if (GET_MODE_BITSIZE (vecmode) == 512)
+    /* One vinserti64x4/vextracti64x4 for AVX256 <-> AVX512.  */
+    cost += ix86_vec_cost (vecmode, ix86_cost->sse_op);
+  return cost;
+}
+
 /* Worker for ix86_builtin_vectorization_cost and the fallback calls
    from ix86_vector_costs::add_stmt_cost.  */
 static int
@@ -25684,29 +25724,8 @@ ix86_default_vector_cost (enum vect_cost_for_stmt type_of_cost,
         return ix86_vec_cost (mode, ix86_cost->sse_op);
 
       case vec_construct:
-	{
-	  int n = GET_MODE_NUNITS (mode);
-	  /* N - 1 element inserts into an SSE vector, the possible
-	     GPR -> XMM move is accounted for in add_stmt_cost.  */
-	  if (GET_MODE_BITSIZE (mode) <= 128)
-	    return (n - 1) * ix86_cost->sse_op;
-	  /* One vinserti128 for combining two SSE vectors for AVX256.  */
-	  else if (GET_MODE_BITSIZE (mode) == 256)
-	    return ((n - 2) * ix86_cost->sse_op
-		    + ix86_vec_cost (mode, ix86_cost->sse_op));
-	  /* One vinserti64x4 and two vinserti128 for combining SSE
-	     and AVX256 vectors to AVX512.  */
-	  else if (GET_MODE_BITSIZE (mode) == 512)
-	    {
-	      machine_mode half_mode
-		= mode_for_vector (GET_MODE_INNER (mode),
-				   GET_MODE_NUNITS (mode) / 2).require ();
-	      return ((n - 4) * ix86_cost->sse_op
-		      + 2 * ix86_vec_cost (half_mode, ix86_cost->sse_op)
-		      + ix86_vec_cost (mode, ix86_cost->sse_op));
-	    }
-	  gcc_unreachable ();
-	}
+      case vec_deconstruct:
+	return ix86_vector_cd_cost (mode, GET_MODE_INNER (mode));
 
       default:
         gcc_unreachable ();
@@ -25823,7 +25842,7 @@ ix86_enum_va_list (int idx, const char **pname, tree *ptree)
    is passed in MODE.  */
 
 static int
-ix86_reassociation_width (unsigned int op, machine_mode mode)
+ix86_reassociation_width (tree_code op, machine_mode mode)
 {
   int width = 1;
   /* Vector part.  */
@@ -25844,13 +25863,14 @@ ix86_reassociation_width (unsigned int op, machine_mode mode)
 	   || ix86_tune == PROCESSOR_ZNVER3 || ix86_tune == PROCESSOR_ZNVER4
 	   || ix86_tune == PROCESSOR_C86_4G_M4
 	   || ix86_tune == PROCESSOR_C86_4G_M6
-	   || ix86_tune == PROCESSOR_C86_4G_M7)
-   	  && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
+	   || ix86_tune == PROCESSOR_C86_4G_M7
+	   || ix86_tune == PROCESSOR_C86_4G_M8)
+	  && INTEGRAL_MODE_P (mode) && op != PLUS_EXPR && op != MINUS_EXPR)
 	return 1;
       /* Znver5 can do 2 integer multiplications per cycle with latency
 	 of 3.  */
       if ((ix86_tune == PROCESSOR_ZNVER5 || ix86_tune == PROCESSOR_ZNVER6)
-	  && INTEGRAL_MODE_P (mode) && op != PLUS && op != MINUS)
+	  && INTEGRAL_MODE_P (mode) && op != PLUS_EXPR && op != MINUS_EXPR)
 	width = 6;
 
       /* Account for targets that splits wide vectors into multiple parts.  */
@@ -26495,8 +26515,15 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
 	  break;
 
 	default:
-	  if (truth_value_p (subcode))
+	  if (TREE_CODE_CLASS (subcode) == tcc_comparison)
 	    {
+	      tree op_type;
+	      if (kind == vector_stmt)
+		op_type = SLP_TREE_VECTYPE (SLP_TREE_CHILDREN (node)[0]);
+	      else
+		op_type = vect_comparison_type (stmt_info);
+	      mode = TYPE_MODE (op_type);
+
 	      if (SSE_FLOAT_MODE_SSEMATH_OR_HFBF_P (mode))
 		/* CMPccS? insructions are cheap, so use sse_op.  While they
 		   produce a mask which may need to be turned to 0/1 by and,
@@ -26709,18 +26736,23 @@ ix86_vector_costs::add_stmt_cost (int count, vect_cost_for_stmt kind,
      latency and execution resources for the many scalar loads
      (AGU and load ports).  Try to account for this by scaling the
      construction cost by the number of elements involved.  */
-  if ((kind == vec_construct || kind == vec_to_scalar)
+  if ((kind == vec_construct || kind == vec_deconstruct)
       && ((node
 	   && (((SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_ELEMENTWISE
-		 || (SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_STRIDED_SLP
-		     && SLP_TREE_LANES (node) == 1))
+		 || SLP_TREE_MEMORY_ACCESS_TYPE (node) == VMAT_STRIDED_SLP)
 		&& (TREE_CODE (DR_STEP (STMT_VINFO_DATA_REF
 					(SLP_TREE_REPRESENTATIVE (node))))
 		    != INTEGER_CST))
 	       || mat_gather_scatter_p (SLP_TREE_MEMORY_ACCESS_TYPE (node))))))
     {
-      stmt_cost = ix86_default_vector_cost (kind, mode);
-      stmt_cost *= (TYPE_VECTOR_SUBPARTS (vectype) + 1);
+      auto lsdata = static_cast<vect_load_store_data *> (node->data);
+      tree ls_type = lsdata->ls_type ? lsdata->ls_type : vectype;
+      tree ls_eltype
+	= lsdata->ls_eltype ? lsdata->ls_eltype : TREE_TYPE (ls_type);
+      stmt_cost = ix86_vector_cd_cost (TYPE_MODE (ls_type),
+				       TYPE_MODE (ls_eltype));
+      stmt_cost *= (GET_MODE_BITSIZE (TYPE_MODE (ls_type))
+		    / GET_MODE_BITSIZE (TYPE_MODE (ls_eltype)) + 1);
     }
   else if ((kind == vec_construct || kind == scalar_to_vec)
 	   && node

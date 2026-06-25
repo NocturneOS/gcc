@@ -1,4 +1,4 @@
-/* Handle parameterized types (templates) for GNU -*- C++ -*-.
+/* Handle parameterized types (templates) for GNU C++.
    Copyright (C) 1992-2026 Free Software Foundation, Inc.
    Written by Ken Raeburn (raeburn@cygnus.com) while at Watchmaker Computing.
    Rewritten by Jason Merrill (jason@cygnus.com).
@@ -3276,10 +3276,39 @@ check_explicit_specialization (tree declarator,
 		  targs = new_targs;
 		}
 
+	      tree e1;
 	      tree inst = instantiate_template (tmpl, targs, tf_error);
 	      if (variable_template_p (tmpl)
 		  && !check_explicit_inst_of_var_template (inst, decl))
 		return error_mark_node;
+	      /* [except.spec] In an explicit instantiation
+		 a noexcept-specifier may be specified, but is not required.
+		 If a noexcept-specifier is specified in an explicit
+		 instantiation, the exception specification shall be the same
+		 as the exception specification of all other declarations of
+		 that function.  */
+	      else if (DECL_FUNCTION_TEMPLATE_P (tmpl)
+		       && (e1 = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (decl)))
+		       /* This could be the implicit noexcept(true) given
+			  to destructors, but here we are interested only
+			  in user-written noexcept-specs which would have
+			  been evaluated by now.  */
+		       && !UNEVALUATED_NOEXCEPT_SPEC_P (e1)
+		       && maybe_instantiate_noexcept (inst))
+		{
+		  tree e2 = TYPE_RAISES_EXCEPTIONS (TREE_TYPE (inst));
+		  if (!comp_except_specs (e1, e2, ce_normal))
+		    {
+		      auto_diagnostic_group d;
+		      error ("exception specification %qX in explicit "
+			     "instantiation does not match the instantiated "
+			     "one %qX", e1, e2 ? e2 : noexcept_false_spec);
+		      inform (DECL_SOURCE_LOCATION (tmpl),
+			      "template declared here");
+		      return error_mark_node;
+		    }
+		}
+
 	      return inst;
 	    }
 
@@ -18669,16 +18698,16 @@ tsubst_omp_clause_decl (tree decl, tree args, tsubst_flags_t complain,
 	  for (tree it = TREE_PURPOSE (decl); it; it = TREE_CHAIN (it))
 	    {
 	      *tp = copy_node (it);
-	      TREE_VEC_ELT (*tp, 0)
-		= tsubst_decl (TREE_VEC_ELT (it, 0), args, complain);
-	      DECL_CONTEXT (TREE_VEC_ELT (*tp, 0)) = current_function_decl;
-	      pushdecl (TREE_VEC_ELT (*tp, 0));
-	      TREE_VEC_ELT (*tp, 1)
-		= tsubst_stmt (TREE_VEC_ELT (it, 1), args, complain, in_decl);
-	      TREE_VEC_ELT (*tp, 2)
-		= tsubst_stmt (TREE_VEC_ELT (it, 2), args, complain, in_decl);
-	      TREE_VEC_ELT (*tp, 3)
-		= tsubst_stmt (TREE_VEC_ELT (it, 3), args, complain, in_decl);
+	      OMP_ITERATOR_VAR (*tp)
+		= tsubst_decl (OMP_ITERATOR_VAR (it), args, complain);
+	      DECL_CONTEXT (OMP_ITERATOR_VAR (*tp)) = current_function_decl;
+	      pushdecl (OMP_ITERATOR_VAR (*tp));
+	      OMP_ITERATOR_BEGIN (*tp)
+		= tsubst_stmt (OMP_ITERATOR_BEGIN (it), args, complain, in_decl);
+	      OMP_ITERATOR_END (*tp)
+		= tsubst_stmt (OMP_ITERATOR_END (it), args, complain, in_decl);
+	      OMP_ITERATOR_STEP (*tp)
+		= tsubst_stmt (OMP_ITERATOR_STEP (it), args, complain, in_decl);
 	      TREE_CHAIN (*tp) = NULL_TREE;
 	      tp = &TREE_CHAIN (*tp);
 	    }

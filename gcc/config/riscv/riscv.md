@@ -4190,8 +4190,12 @@
 	      (use (match_operand 2 ""))])]
   ""
 {
-  rtx target = riscv_legitimize_call_address (XEXP (operands[0], 0));
-  emit_call_insn (gen_call_internal (target, operands[1]));
+  rtx addr = XEXP (operands[0], 0);
+  rtx target = riscv_legitimize_call_address (addr);
+  if (riscv_call_needs_lpad_p (addr))
+    emit_call_insn (gen_call_internal_cfi (target, operands[1]));
+  else
+    emit_call_insn (gen_call_internal (target, operands[1]));
   DONE;
 })
 
@@ -4206,6 +4210,37 @@
    call\t%0@plt"
   [(set_attr "type" "call")])
 
+;; Zicfilp-protected call: .option push/pop guards prevent c.jal compression
+;; and jal linker relaxation from moving the return address off the lpad.
+;; .p2align 2 ensures the lpad is 4-byte aligned.
+(define_insn "call_internal_cfi"
+  [(call (mem:SI (match_operand 0 "call_insn_operand" "l,S,U"))
+	 (match_operand 1 "" ""))
+   (clobber (reg:SI RETURN_ADDR_REGNUM))]
+  "TARGET_ZICFILP"
+  {
+    output_asm_insn (".p2align\t2", operands);
+    output_asm_insn (".option push", operands);
+    output_asm_insn (".option norelax", operands);
+    output_asm_insn (".option norvc", operands);
+    switch (which_alternative)
+      {
+      case 0:
+	output_asm_insn ("jalr\t%0", operands);
+	break;
+      case 1:
+	output_asm_insn ("call\t%0", operands);
+	break;
+      default:
+	output_asm_insn ("call\t%0@plt", operands);
+	break;
+      }
+    output_asm_insn (".option pop", operands);
+    return "lpad\t0";
+  }
+  [(set_attr "type" "call")
+   (set_attr "length" "8,12,12")])
+
 (define_expand "call_value"
   [(parallel [(set (match_operand 0 "")
 		   (call (match_operand 1 "")
@@ -4213,8 +4248,13 @@
 	      (use (match_operand 3 ""))])]
   ""
 {
-  rtx target = riscv_legitimize_call_address (XEXP (operands[1], 0));
-  emit_call_insn (gen_call_value_internal (operands[0], target, operands[2]));
+  rtx addr = XEXP (operands[1], 0);
+  rtx target = riscv_legitimize_call_address (addr);
+  if (riscv_call_needs_lpad_p (addr))
+    emit_call_insn (gen_call_value_internal_cfi (operands[0], target,
+						 operands[2]));
+  else
+    emit_call_insn (gen_call_value_internal (operands[0], target, operands[2]));
   DONE;
 })
 
@@ -4229,6 +4269,38 @@
    call\t%1
    call\t%1@plt"
   [(set_attr "type" "call")])
+
+;; Zicfilp-protected call: .option push/pop guards prevent c.jal compression
+;; and jal linker relaxation from moving the return address off the lpad.
+;; .p2align 2 ensures the lpad is 4-byte aligned.
+(define_insn "call_value_internal_cfi"
+  [(set (match_operand 0 "" "")
+	(call (mem:SI (match_operand 1 "call_insn_operand" "l,S,U"))
+	      (match_operand 2 "" "")))
+   (clobber (reg:SI RETURN_ADDR_REGNUM))]
+  "TARGET_ZICFILP"
+  {
+    output_asm_insn (".p2align\t2", operands);
+    output_asm_insn (".option push", operands);
+    output_asm_insn (".option norelax", operands);
+    output_asm_insn (".option norvc", operands);
+    switch (which_alternative)
+      {
+      case 0:
+	output_asm_insn ("jalr\t%1", operands);
+	break;
+      case 1:
+	output_asm_insn ("call\t%1", operands);
+	break;
+      default:
+	output_asm_insn ("call\t%1@plt", operands);
+	break;
+      }
+    output_asm_insn (".option pop", operands);
+    return "lpad\t0";
+  }
+  [(set_attr "type" "call")
+   (set_attr "length" "8,12,12")])
 
 ;; Call subroutine returning any type.
 
@@ -4275,8 +4347,23 @@
      [(unspec_volatile [(match_operand 0 "const_int_operand")]
 	               UNSPECV_GPR_SAVE)])]
   ""
-  "call\tt0,__riscv_save_%0"
-  [(set_attr "type" "call")])
+  {
+    if (is_zicfilp_p ())
+      {
+	output_asm_insn (".p2align\t2", operands);
+	output_asm_insn (".option push", operands);
+	output_asm_insn (".option norelax", operands);
+	output_asm_insn (".option norvc", operands);
+	output_asm_insn ("call\tt0,__riscv_save_%0", operands);
+	output_asm_insn (".option pop", operands);
+	return "lpad\t0";
+      }
+    return "call\tt0,__riscv_save_%0";
+  }
+  [(set_attr "type" "call")
+   (set (attr "length") (if_then_else (match_test "is_zicfilp_p ()")
+				      (const_string "12")
+				      (const_string "8")))])
 
 (define_insn "gpr_restore"
   [(unspec_volatile [(match_operand 0 "const_int_operand")] UNSPECV_GPR_RESTORE)]
@@ -5250,6 +5337,67 @@
   operands[5] = GEN_INT (new_mask);
   operands[7] = gen_lowpart (SImode, operands[6]);
 })
+
+;; If through a series of combinations/simplifications we ultimately
+;; recover an equality test against a small constant we can win because
+;; that's a 2 instruction sequence.  addi to set a zero/nonzero status
+;; followed be seqz/snez to canonicalize into 0/1.
+;;
+;; Since we're going to use the negated constant in an addi to get the
+;; zero/nonzero status we need to verify the negated constant is a
+;; small operand, not the original constant.
+(define_split
+  [(set (match_operand:X 0 "register_operand")
+	(any_eq:X (match_operand:X 1 "register_operand")
+		  (match_operand 2 "const_int_operand")))]
+  "(SMALL_OPERAND (-UINTVAL (operands[2]))
+    && operands[2] != CONST0_RTX (GET_MODE (operands[1])))"
+  [(set (match_dup 0) (plus:X (match_dup 1) (match_dup 2)))
+   (set (match_dup 0) (any_eq:X (match_dup 0) (const_int 0)))]
+{ operands[2] = GEN_INT (-UINTVAL (operands[2])); })
+
+;; So the idea here is to realize that with a single insn we
+;; can mask off all the relevant bits in the source operand.
+;; A second insn generates zero/non-zero
+;; The third and final insn canonicalizes that result to 0/1.
+;;
+;; There's probably some HImode cases we could handle too.  I haven't
+;; thought hard about them.
+(define_insn_and_split "seq_sne_qi"
+  [(set (match_operand:X 0 "register_operand" "=r")
+	(any_eq:X (subreg:QI
+		   (ashift:X (match_operand:X 1 "register_operand" "r")
+			     (match_operand 2 "const_int_operand")) 0)
+		  (match_operand 3 "const_int_operand")))]
+  "(INTVAL (operands[2]) > 0 && INTVAL (operands[2]) < 8
+    && INTVAL (operands[3]) >= -128 && INTVAL (operands[3]) <= 127
+    && (INTVAL (operands[3])
+	& ((HOST_WIDE_INT_1U << INTVAL (operands[2])) - 1)) == 0)"
+  "#"
+  "&& 1"
+  [(const_int 0)]
+{
+  operands[3] = GEN_INT (-((INTVAL (operands[3]) & 0xff)
+			   >> INTVAL (operands[2])));
+  operands[2] = GEN_INT (0xff >> INTVAL (operands[2]));
+
+  /* We generate code here rather than in the split RTL template so that we
+     can elide the PLUS if it is not needed.  */
+  rtx x = gen_rtx_AND (word_mode, operands[1], operands[2]);
+  emit_insn (gen_rtx_SET (operands[0], x));
+
+  if (operands[3] != CONST0_RTX (word_mode))
+    {
+      x = gen_rtx_PLUS (word_mode, operands[0], operands[3]);
+      emit_insn (gen_rtx_SET (operands[0], x));
+    }
+
+  x = gen_rtx_fmt_ee (<CODE>, word_mode, operands[0], CONST0_RTX (word_mode));
+  emit_insn (gen_rtx_SET (operands[0], x));
+  DONE;
+}
+  [(set_attr "type" "slt")
+   (set_attr "mode" "<X:MODE>")])
 
 (include "bitmanip.md")
 (include "crypto.md")

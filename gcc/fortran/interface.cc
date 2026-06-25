@@ -4270,7 +4270,7 @@ gfc_compare_actual_formal (gfc_actual_arglist **ap, gfc_formal_arglist *formal,
 	      case INTENT_OUT:
 		{
 		  gfc_symbol *s = e->symtree->n.sym;
-		  gfc_value_set_at (s, &e->where, VALUE_INTENT_OUT);
+		  gfc_expr_set_at (e, &e->where, VALUE_INTENT_OUT);
 
 		  /* INTENT(OUT) allocates variables as far as we know.  */
 		  if (s->attr.allocatable)
@@ -4714,8 +4714,9 @@ gfc_procedure_use (gfc_symbol *sym, gfc_actual_arglist **ap, locus *where)
 
       if (implicit)
 	for (a = *ap; a; a = a->next)
-	  gfc_value_set_and_used (a->expr, &a->expr->where, VALUE_ARG,
-				  VALUE_MAYBE_USED);
+	  if (a->expr)
+	    gfc_value_set_and_used (a->expr, &a->expr->where, VALUE_ARG,
+				    VALUE_MAYBE_USED);
 
       return true;
     }

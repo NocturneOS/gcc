@@ -71,7 +71,7 @@ package Accessibility is
    --  The Allow_Alt_Model parameter allows the alternative level calculation
    --  under the restriction No_Dynamic_Accessibility_Checks to be performed.
 
-   procedure Apply_Accessibility_Check_For_Allocator
+   procedure Apply_Accessibility_Check_For_Class_Wide_Allocator
      (N              : Node_Id;
       Exp            : Node_Id;
       Ref            : Node_Id;
@@ -111,6 +111,13 @@ package Accessibility is
    --  type of the object is not deeper than the level of Typ. Insert_Node
    --  indicates the node where the check should be inserted.
 
+   procedure Apply_Accessibility_Check_For_Discriminated_Allocator
+     (N : Node_Id);
+   --  If the subtype determined by the subtype indication or the qualified
+   --  expression of an allocator N has access discriminants, insert checks
+   --  that the accessibility level of each entity designated by an access
+   --  discriminant is not deeper than the level of the allocator.
+
    procedure Apply_Accessibility_Check_For_Return
      (Exp  : Node_Id;
       Func : Entity_Id);
@@ -120,8 +127,8 @@ package Accessibility is
    procedure Check_Return_Construct_Accessibility
      (Return_Stmt : Node_Id;
       Stm_Entity  : Entity_Id);
-   --  Apply legality rule of 6.5 (5.9) to the access discriminants of an
-   --  aggregate in a return statement.
+   --  Apply legality rules of 6.5(5.9) and 6.8(5) to the access discriminants
+   --  of an identifier or aggregate in a return statement.
 
    function Deepest_Type_Access_Level
      (Typ             : Entity_Id;

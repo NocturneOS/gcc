@@ -4909,6 +4909,16 @@ trivial_type_p (const_tree t)
     return scalarish_type_p (t);
 }
 
+/* Returns true iff type T is a trivially copy constructible type.  */
+
+bool
+trivially_copy_constructible_p (tree t)
+{
+  tree arg = make_tree_vec (1);
+  TREE_VEC_ELT (arg, 0) = build_const_lref (t);
+  return is_trivially_xible (INIT_EXPR, t, arg);
+}
+
 /* Returns 1 iff type T is an implicit-lifetime type, as defined in
    [basic.types.general] and [class.prop].  */
 
@@ -5971,9 +5981,7 @@ handle_annotation_attribute (tree *node, tree ARG_UNUSED (name),
     {
       tree arg = make_tree_vec (1);
       tree type = TREE_TYPE (TREE_VALUE (args));
-      TREE_VEC_ELT (arg, 0)
-	= build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST,
-			   /*rvalue=*/false);
+      TREE_VEC_ELT (arg, 0) = build_const_lref (type);
       if (!is_xible (INIT_EXPR, type, arg))
 	{
 	  auto_diagnostic_group d;
@@ -6407,6 +6415,10 @@ cp_walk_subtrees (tree *tp, int *walk_subtrees_p, walk_tree_fn func,
 	  WALK_SUBTREE (DECL_SIZE (decl));
 	  WALK_SUBTREE (DECL_SIZE_UNIT (decl));
 	}
+      if (is_typedef_decl (TREE_OPERAND (t, 0)))
+	/* We avoid walking into typedefs above, but we do want to walk
+	   into them if we're looking at the actual declaration.  */
+	WALK_SUBTREE (DECL_ORIGINAL_TYPE (TREE_OPERAND (t, 0)));
       break;
 
     case LAMBDA_EXPR:

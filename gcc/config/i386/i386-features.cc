@@ -1169,7 +1169,19 @@ scalar_chain::convert_op (rtx *op, rtx_insn *insn)
     {
       gcc_assert (SUBREG_P (*op));
       if (GET_MODE (*op) != vmode)
-	*op = gen_lowpart (vmode, *op);
+	{
+	  rtx inner = SUBREG_REG (*op);
+	  poly_uint64 byte = SUBREG_BYTE (*op);
+	  if (targetm.modes_tieable_p (vmode, GET_MODE (inner))
+	      && validate_subreg (vmode, GET_MODE (inner), inner, byte))
+	    *op = gen_lowpart (vmode, *op);
+	  else
+	    {
+	      tmp = gen_reg_rtx (GET_MODE (*op));
+	      emit_insn_before (gen_rtx_SET (tmp, *op), insn);
+	      *op = gen_rtx_SUBREG (vmode, tmp, 0);
+	    }
+	}
     }
 }
 
@@ -3806,7 +3818,7 @@ replace_vector_const (machine_mode vector_mode, rtx vector_const,
       SET_SRC (set) = replace;
       if (CONST_INT_P (replace))
 	{
-	  dest = gen_rtx_SUBREG (scalar_mode, dest, 0);
+	  dest = gen_lowpart (scalar_mode, dest);
 	  SET_DEST (set) = dest;
 	}
       /* Drop possible dead definitions.  */
@@ -4031,6 +4043,11 @@ ix86_broadcast_inner (rtx op, machine_mode mode,
     return nullptr;
 
   rtx_insn *insn = DF_REF_INSN (ref);
+
+  /* Skip JUMP which happens with asm goto.  */
+  if (JUMP_P (insn))
+    return nullptr;
+
   rtx set = single_set (insn);
   if (!set)
     return nullptr;
@@ -5036,6 +5053,17 @@ pass_x86_cse::x86_cse (void)
 		    rtvec v = rtvec_alloc (nunits);
 		    for (int j = 0; j < nunits ; j++)
 		      RTVEC_ELT (v, j) = load->val;
+		    if (CONST_INT_P (load->val)
+			&& GET_MODE_CLASS (mode) != MODE_VECTOR_INT)
+		      {
+			gcc_assert (load->size <= UNITS_PER_WORD);
+			machine_mode imode = GET_MODE_INNER (mode);
+			class scalar_mode i_mode
+			  = int_mode_for_mode (imode).require ();
+			mode = mode_for_vector (i_mode,
+						nunits).require ();
+		      }
+
 		    broadcast_source = gen_rtx_CONST_VECTOR (mode, v);
 		  }
 

@@ -858,10 +858,10 @@
 	       (const_int 2)
 
 	       (eq_attr "type" "vstux,vstox,vssegts,vssegtux,vssegtox,vfcvtftoi,vfwcvtitof,vfwcvtftoi,
-				vfwcvtftof,vmsfs,vired,viwred,vfredu,vfredo,vfwredu,vfwredo,vwsll")
+				vfwcvtftof,vmsfs,vired,viwred,vfredu,vfredo,vfwredu,vfwredo,vwsll,viwalu,vfwalu,viwmul,vfwmul")
 	       (const_int 3)
 
-	       (eq_attr "type" "viwalu,viwmul,viwmuladd,vfwalu,vfwmul,vfwmuladd")
+	       (eq_attr "type" "viwmuladd,vfwmuladd")
 	       (const_int 4)]
 	(const_int INVALID_ATTRIBUTE)))
 
@@ -4090,19 +4090,19 @@
 
 ;; Vector Double-Widening Sign-extend and Zero-extend.
 (define_insn "@pred_<optab><mode>_vf2"
-  [(set (match_operand:VWEXTI 0 "register_operand"            "=&vr,&vr")
+  [(set (match_operand:VWEXTI 0 "register_operand"		 "=vr, vr, vd, vd")
 	(if_then_else:VWEXTI
 	  (unspec:<VM>
-	    [(match_operand:<VM> 1 "vector_mask_operand"         "vmWc1,vmWc1")
-	     (match_operand 4 "vector_length_operand"            "  rvl,  rvl")
-	     (match_operand 5 "const_int_operand"                "    i,    i")
-	     (match_operand 6 "const_int_operand"                "    i,    i")
-	     (match_operand 7 "const_int_operand"                "    i,    i")
+	    [(match_operand:<VM> 1 "vector_mask_operand"         "Wc1,Wc1, vm, vm")
+	     (match_operand 4 "vector_length_operand"            "rvl,rvl,rvl,rvl")
+	     (match_operand 5 "const_int_operand"                "  i,  i,  i,  i")
+	     (match_operand 6 "const_int_operand"                "  i,  i,  i,  i")
+	     (match_operand 7 "const_int_operand"                "  i,  i,  i,  i")
 	     (reg:SI VL_REGNUM)
 	     (reg:SI VTYPE_REGNUM)] UNSPEC_VPREDICATE)
 	  (any_extend:VWEXTI
-	    (match_operand:<V_DOUBLE_TRUNC> 3 "register_operand" "   vr,   vr"))
-	  (match_operand:VWEXTI 2 "vector_merge_operand"         "   vu,    0")))]
+	    (match_operand:<V_DOUBLE_TRUNC> 3 "register_operand" "Wtt,Wtt,Wtt,Wtt"))
+	  (match_operand:VWEXTI 2 "vector_merge_operand"         " vu,  0, vu,  0")))]
   "TARGET_VECTOR && !TARGET_XTHEADVECTOR"
   "v<sz>ext.vf2\t%0,%3%p1"
   [(set_attr "type" "vext")
@@ -4256,7 +4256,6 @@
   "TARGET_VECTOR"
   "vw<plus_minus:insn><any_extend:u>.wx\t%0,%3,%z4%p1"
   [(set_attr "type" "vi<widen_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<V_DOUBLE_TRUNC>")])
 
 (define_insn "@pred_single_widen_add<any_extend:su><mode>_extended_scalar"
@@ -4279,7 +4278,6 @@
   "TARGET_VECTOR"
   "vwadd<any_extend:u>.wx\t%0,%3,%z4%p1"
   [(set_attr "type" "viwalu")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<V_DOUBLE_TRUNC>")])
 
 (define_insn "@pred_single_widen_sub<any_extend:su><mode>_extended_scalar"
@@ -4302,7 +4300,6 @@
   "TARGET_VECTOR"
   "vwsub<any_extend:u>.wx\t%0,%3,%z4%p1"
   [(set_attr "type" "viwalu")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<V_DOUBLE_TRUNC>")])
 
 (define_insn "@pred_widen_mulsu<mode>"
@@ -4523,7 +4520,6 @@
   "TARGET_VECTOR"
   "v<insn>.vx\t%0,%3,%4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_insn "@pred_<optab><mode>_scalar"
@@ -4545,7 +4541,6 @@
   "TARGET_VECTOR"
   "v<insn>.vx\t%0,%3,%4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_expand "@pred_<optab><mode>_scalar"
@@ -4600,7 +4595,6 @@
   "TARGET_VECTOR"
   "v<insn>.vx\t%0,%3,%4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_insn "*pred_<optab><mode>_extended_scalar"
@@ -4623,7 +4617,6 @@
   "TARGET_VECTOR && !TARGET_64BIT"
   "v<insn>.vx\t%0,%3,%4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_expand "@pred_<optab><mode>_scalar"
@@ -4678,7 +4671,6 @@
   "TARGET_VECTOR"
   "v<insn>.vx\t%0,%3,%z4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_insn "*pred_<optab><mode>_extended_scalar"
@@ -4701,7 +4693,6 @@
   "TARGET_VECTOR && !TARGET_64BIT"
   "v<insn>.vx\t%0,%3,%z4%p1"
   [(set_attr "type" "<int_binop_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_insn "@pred_<sat_op><mode>"
@@ -4747,7 +4738,6 @@
   "TARGET_VECTOR"
   "v<sat_op>.vx\t%0,%3,%z4%p1"
   [(set_attr "type" "<sat_insn_type>")
-   (set_attr "mode_idx" "3")
    (set_attr "mode" "<MODE>")])
 
 (define_insn "@pred_<sat_op><mode>_scalar"
@@ -7352,7 +7342,7 @@
   [(set_attr "type" "vf<widen_binop_insn_type>")
    (set_attr "mode" "<V_DOUBLE_TRUNC>")
    (set (attr "frm_mode")
-	(symbol_ref "riscv_vector::get_frm_mode (operands[9])"))])
+   (symbol_ref "riscv_vector::get_frm_mode (operands[9])"))])
 
 (define_insn "@pred_single_widen_add<mode>"
   [(set (match_operand:VWEXTF 0 "register_operand"                  "=&vr,  &vr")
@@ -9239,6 +9229,82 @@
   {
     riscv_vector::prepare_ternary_operands (operands);
   })
+
+;; ------------------------------------
+;; ---- Vector absolute difference extension
+;; ----------------------------------------------------------------
+;; Includes:
+;; - vabs: Vector Single-Width Signed Integer Absolute
+;; - vabd/vabdu: Vector Single-Width Signed Integer Absolute Difference
+;; - vwabda/vwabdau: Vector Widening Signed Integer Absolute
+;;   Difference and Accumulate
+;; ------------------------------------
+
+(define_insn "@pred_abs<mode>"
+  [(set (match_operand:V_VLSI 0 "register_operand"	 "=vd, vd, vr, vr")
+	(if_then_else:V_VLSI
+	  (unspec:<VM>
+	    [(match_operand:<VM> 1 "vector_mask_operand" " vm, vm, Wc1, Wc1")
+	     (match_operand 4 "vector_length_operand"	 " rK, rK, rK, rK")
+	     (match_operand 5 "const_int_operand"	 " i, i, i, i")
+	     (match_operand 6 "const_int_operand"	 " i, i, i, i")
+	     (match_operand 7 "const_int_operand"	 " i, i, i, i")
+	     (reg:SI VL_REGNUM)
+	     (reg:SI VTYPE_REGNUM)] UNSPEC_VPREDICATE)
+	  (abs:V_VLSI
+	    (match_operand:V_VLSI 3 "register_operand" "vr,vr,vr,vr"))
+	  (match_operand:V_VLSI 2 "vector_merge_operand" "vu,0,vu,0")))]
+  "TARGET_ZVABD"
+  "vabs.v\t%0,%3%p1"
+  [(set_attr "type" "vialu")
+   (set_attr "mode" "<MODE>")
+   (set_attr "vl_op_idx" "4")
+   (set (attr "ta") (symbol_ref "riscv_vector::get_ta (operands[5])"))
+   (set (attr "ma") (symbol_ref "riscv_vector::get_ma (operands[6])"))
+   (set (attr "avl_type_idx") (const_int 7))])
+
+(define_insn "@pred_vabd<su><mode>"
+  [(set (match_operand:V_VLSI 0 "register_operand"	    "=vd, vd, vr, vr")
+	(if_then_else:V_VLSI
+	  (unspec:<VM>
+	    [(match_operand:<VM> 1 "vector_mask_operand" " vm, vm, Wc1, Wc1")
+	     (match_operand 5 "vector_length_operand"	 " rK, rK, rK, rK")
+	     (match_operand 6 "const_int_operand"	 " i, i, i, i")
+	     (match_operand 7 "const_int_operand"	 " i, i, i, i")
+	     (match_operand 8 "const_int_operand"	 " i, i, i, i")
+	     (reg:SI VL_REGNUM)
+	     (reg:SI VTYPE_REGNUM)] UNSPEC_VPREDICATE)
+	  (unspec:V_VLSI
+	    [(match_operand:V_VLSI 3 "register_operand" "vr,vr,vr,vr")
+	     (match_operand:V_VLSI 4 "register_operand" "vr,vr,vr,vr")]
+	    UNSPEC_VABD)
+	  (match_operand:V_VLSI 2 "vector_merge_operand" "vu,0,vu,0")))]
+  "TARGET_ZVABD"
+  "vabd<u>.vv\t%0,%3,%4%p1"
+  [(set_attr "type" "vialu")
+   (set_attr "mode" "<MODE>")])
+
+(define_insn "@pred_widen_abd_plus<su><mode>"
+  [(set (match_operand:VWEXTI 0 "register_operand"      "+&vd,&vd,&vr,&vr")
+	(if_then_else:VWEXTI
+	  (unspec:<VM>
+	    [(match_operand:<VM> 1 "vector_mask_operand" "vm,vm,Wc1,Wc1")
+	     (match_operand 5 "vector_length_operand"    "rK,rK,rK,rK")
+	     (match_operand 6 "const_int_operand"      "i,i,i,i")
+	     (match_operand 7 "const_int_operand"      "i,i,i,i")
+	     (match_operand 8 "const_int_operand"      "i,i,i,i")
+	     (reg:SI VL_REGNUM)
+	     (reg:SI VTYPE_REGNUM)] UNSPEC_VPREDICATE)
+	  (unspec:VWEXTI
+	    [(match_operand:<V_DOUBLE_TRUNC> 3 "register_operand" "vr,vr,vr,vr")
+	     (match_operand:<V_DOUBLE_TRUNC> 4 "register_operand" "vr,vr,vr,vr")
+	     (match_dup 0)]
+	    UNSPEC_VABDA)
+	  (match_operand:VWEXTI 2 "vector_merge_operand" "vu,0,vu,0")))]
+  "TARGET_ZVABD"
+  "vwabda<u>.vv\t%0,%3,%4%p1"
+  [(set_attr "type" "viwalu")
+   (set_attr "mode" "<V_DOUBLE_TRUNC>")])
 
 (include "autovec.md")
 (include "autovec-opt.md")

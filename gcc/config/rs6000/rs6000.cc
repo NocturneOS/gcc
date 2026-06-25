@@ -5113,6 +5113,7 @@ rs6000_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
 	return 2;
 
       case vec_construct:
+      case vec_deconstruct:
 	/* This is a rough approximation assuming non-constant elements
 	   constructed into a vector via element insertion.  FIXME:
 	   vec_construct is not granular enough for uniformly good
@@ -10156,7 +10157,7 @@ rs6000_offsettable_memref_p (rtx op, machine_mode reg_mode, bool strict)
 */
 
 static int
-rs6000_reassociation_width (unsigned int opc ATTRIBUTE_UNUSED,
+rs6000_reassociation_width (tree_code opc ATTRIBUTE_UNUSED,
                             machine_mode mode)
 {
   switch (rs6000_tune)

@@ -777,6 +777,7 @@ default_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
         return 3;
 
       case vec_construct:
+      case vec_deconstruct:
 	return estimated_poly_value (TYPE_VECTOR_SUBPARTS (vectype)) - 1;
 
       default:
@@ -941,8 +942,9 @@ default_stack_protect_guard (void)
     {
       rtx x;
 
-      if (targetm.stack_protect_guard_symbol_p ())
-	t = lang_hooks.types.type_for_mode (ptr_mode, 1);
+      if (UINTPTR_TYPE && targetm.stack_protect_guard_symbol_p ())
+	/* Get unsigned integer type for uintptr_t.  */
+	t = unsigned_integer_tree_node_for_type (UINTPTR_TYPE);
       else
 	t = ptr_type_node;
       t = build_decl (UNKNOWN_LOCATION,
@@ -2946,6 +2948,13 @@ default_memtag_untagged_pointer (rtx tagged_pointer, rtx target)
 					   OPTAB_DIRECT);
   gcc_assert (untagged_base);
   return untagged_base;
+}
+
+/* The default implementation of TARGET_SCHED_REASSOCIATION_WIDTH.  */
+int
+default_reassociation_width (tree_code, machine_mode)
+{
+  return 1;
 }
 
 #include "gt-targhooks.h"

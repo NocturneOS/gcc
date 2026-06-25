@@ -640,6 +640,23 @@ gcc_jit_type_is_integral (gcc_jit_type *type)
 /* Public entrypoint.  See description in libgccjit.h.
 
    After error-checking, the real work is done by the
+   gcc::jit::recording::type::is_float method, in
+   jit-recording.cc.  */
+
+int
+gcc_jit_type_is_floating_point (gcc_jit_type *type)
+{
+  RETURN_VAL_IF_FAIL (type, FALSE, NULL, NULL, "NULL type");
+
+  if (type->is_vector ())
+    return false;
+
+  return type->is_float ();
+}
+
+/* Public entrypoint.  See description in libgccjit.h.
+
+   After error-checking, the real work is done by the
    gcc::jit::recording::type::is_vector method, in
    jit-recording.cc.  */
 
@@ -2306,7 +2323,8 @@ gcc_jit_context_new_comparison (gcc_jit_context *ctxt,
   RETURN_NULL_IF_FAIL (a, ctxt, loc, "NULL a");
   RETURN_NULL_IF_FAIL (b, ctxt, loc, "NULL b");
   RETURN_NULL_IF_FAIL_PRINTF4 (
-    a->get_type ()->unqualified () == b->get_type ()->unqualified (),
+    compatible_types (a->get_type ()->unqualified (),
+		      b->get_type ()->unqualified ()),
     ctxt, loc,
     "mismatching types for comparison:"
     " a: %s (type: %s) b: %s (type: %s)",

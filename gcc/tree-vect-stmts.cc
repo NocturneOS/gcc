@@ -1750,7 +1750,7 @@ vect_use_grouped_gather (dr_vec_info *dr_info, tree vectype,
   tree tmp;
   unsigned int pieces;
   if (!can_div_trunc_p (TYPE_VECTOR_SUBPARTS (vectype), nelts, &pieces)
-      || !pieces)
+      || pieces <= 1)
     return false;
 
   *pun_vectype = vector_vector_composition_type (vectype, pieces, &tmp, true);
@@ -8536,10 +8536,13 @@ vectorizable_store (vec_info *vinfo,
 	}
 
       if (costing_p)
-	/* Record the decomposition type for target access during costing.  */
-	ls.ls_type = lvectype;
+	{
+	  /* Record the decomposition type for target access during costing.  */
+	  ls.ls_type = lvectype;
+	  ls.ls_eltype = ltype;
+	}
       else
-	gcc_assert (ls.ls_type == lvectype);
+	gcc_assert (ls.ls_type == lvectype && ls.ls_eltype == ltype);
 
       unsigned align;
       if (alignment_support_scheme == dr_aligned)
@@ -8651,12 +8654,12 @@ vectorizable_store (vec_info *vinfo,
 		inside_cost
 		  += record_stmt_cost (cost_vec, n_adjacent_stores,
 				       scalar_store, slp_node, 0, vect_body);
-	      /* Only need vector extracting when there are more
-		 than one stores.  */
+	      /* Only need vector deconstruction when there is more
+		 than one store.  */
 	      if (nstores > 1)
 		inside_cost
-		  += record_stmt_cost (cost_vec, n_adjacent_stores,
-				       vec_to_scalar, slp_node, 0, vect_body);
+		  += record_stmt_cost (cost_vec, ncopies,
+				       vec_deconstruct, slp_node, 0, vect_body);
 	    }
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_NOTE, vect_location,
@@ -8981,7 +8984,9 @@ vectorizable_store (vec_info *vinfo,
 	    {
 	      if (costing_p)
 		{
-		  if (ls.supported_offset_vectype)
+		  if (ls.supported_offset_vectype
+		      && !tree_nop_conversion_p (ls.supported_offset_vectype,
+						 vec_offset))
 		    inside_cost
 		      += record_stmt_cost (cost_vec, 1, vector_stmt,
 					   slp_node, 0, vect_body);
@@ -9217,11 +9222,11 @@ vectorizable_store (vec_info *vinfo,
 		     (we assume the scalar scaling and ptr + offset add is
 		     consumed by the load).  */
 		  inside_cost
-		    += record_stmt_cost (cost_vec, cnunits, vec_to_scalar,
+		    += record_stmt_cost (cost_vec, 1, vec_deconstruct,
 					 slp_node, 0, vect_body);
 		  /* N scalar stores plus extracting the elements.  */
 		  inside_cost
-		    += record_stmt_cost (cost_vec, cnunits, vec_to_scalar,
+		    += record_stmt_cost (cost_vec, 1, vec_deconstruct,
 					 slp_node, 0, vect_body);
 		  inside_cost
 		    += record_stmt_cost (cost_vec, cnunits, scalar_store,
@@ -10333,10 +10338,13 @@ vectorizable_load (vec_info *vinfo,
 	}
 
       if (costing_p)
-	/* Record the composition type for target access during costing.  */
-	ls.ls_type = lvectype;
+	{
+	  /* Record the composition type for target access during costing.  */
+	  ls.ls_type = lvectype;
+	  ls.ls_eltype = ltype;
+	}
       else
-	gcc_assert (ls.ls_type == lvectype);
+	gcc_assert (ls.ls_type == lvectype && ls.ls_eltype == ltype);
 
       /* For SLP permutation support we need to load the whole group,
 	 not only the number of vector stmts the permutation result
@@ -10953,7 +10961,9 @@ vectorizable_load (vec_info *vinfo,
 	    {
 	      if (costing_p)
 		{
-		  if (ls.supported_offset_vectype)
+		  if (ls.supported_offset_vectype
+		      && !tree_nop_conversion_p (ls.supported_offset_vectype,
+						 vec_offset))
 		    inside_cost
 		      += record_stmt_cost (cost_vec, 1, vector_stmt,
 					   slp_node, 0, vect_body);
@@ -11191,8 +11201,7 @@ vectorizable_load (vec_info *vinfo,
 		{
 		  /* For emulated gathers N offset vector element
 		     offset add is consumed by the load).  */
-		  inside_cost = record_stmt_cost (cost_vec, const_nunits,
-						  vec_to_scalar,
+		  inside_cost = record_stmt_cost (cost_vec, 1, vec_deconstruct,
 						  slp_node, 0, vect_body);
 		  /* N scalar loads plus gathering them into a
 		     vector.  */

@@ -8749,6 +8749,7 @@ extern bool std_layout_type_p			(const_tree);
 extern bool trivial_type_p			(const_tree);
 extern bool implicit_lifetime_type_p		(tree);
 extern bool trivially_copyable_p		(const_tree);
+extern bool trivially_copy_constructible_p	(tree);
 extern bool has_trivial_abi_attribute		(tree);
 extern void validate_trivial_abi_attribute	(tree);
 extern bool type_has_unique_obj_representations (const_tree, bool = false);
@@ -9529,6 +9530,7 @@ extern void coro_set_ramp_function		(tree, tree);
 
 /* In reflect.cc */
 extern void init_reflection ();
+WARN_UNUSED_RESULT extern tree build_const_lref (tree);
 extern tree maybe_update_function_parm (tree);
 extern bool metafunction_p (tree) ATTRIBUTE_PURE;
 extern tree direct_base_derived (tree) ATTRIBUTE_PURE;

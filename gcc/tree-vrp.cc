@@ -48,7 +48,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple-array-bounds.h"
 #include "gimple-range.h"
 #include "gimple-range-path.h"
-#include "value-pointer-equiv.h"
 #include "gimple-fold.h"
 #include "tree-dfa.h"
 #include "tree-ssa-dce.h"
@@ -964,23 +963,39 @@ public:
       m_simplifier (r, r->non_executable_edge_flag)
   {
     m_ranger = r;
-    m_pta = new pointer_equiv_analyzer (m_ranger);
     m_last_bb_stmt = NULL;
-  }
-
-  ~rvrp_folder ()
-  {
-    delete m_pta;
   }
 
   tree value_of_expr (tree name, gimple *s = NULL) override
   {
     // Shortcircuit subst_and_fold callbacks for abnormal ssa_names.
     if (TREE_CODE (name) == SSA_NAME && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (name))
-      return NULL;
-    tree ret = m_ranger->value_of_expr (name, s);
-    if (!ret && supported_pointer_equiv_p (name))
-      ret = m_pta->get_equiv (name);
+      return NULL_TREE;
+    if (!value_range::supports_type_p (TREE_TYPE (name)))
+      return NULL_TREE;
+
+    value_range r (TREE_TYPE (name));
+    if (!m_ranger->range_of_expr (r, name, s))
+      return NULL_TREE;
+
+    // A constant used in an unreachable block often returns as UNDEFINED.
+    // If the result is undefined, check the global value for a constant.
+    if (r.undefined_p ())
+      range_of_expr (r, name);
+
+    tree ret;
+    if (r.singleton_p (&ret))
+      return ret;
+    else
+      ret = NULL_TREE;
+    if (is_a <prange> (r))
+      {
+	prange &p = as_a <prange> (r);
+	ret = p.pt_invariant ();
+	// A const points has to be gimple_min_invariant.
+	gcc_checking_assert (!ret || is_gimple_min_invariant (ret));
+      }
+
     return ret;
   }
 
@@ -989,9 +1004,31 @@ public:
     // Shortcircuit subst_and_fold callbacks for abnormal ssa_names.
     if (TREE_CODE (name) == SSA_NAME && SSA_NAME_OCCURS_IN_ABNORMAL_PHI (name))
       return NULL;
-    tree ret = m_ranger->value_on_edge (e, name);
-    if (!ret && supported_pointer_equiv_p (name))
-      ret = m_pta->get_equiv (name);
+    if (!value_range::supports_type_p (TREE_TYPE (name)))
+      return NULL_TREE;
+
+    value_range r (TREE_TYPE (name));
+    if (!m_ranger->range_on_edge (r, e, name))
+      return NULL_TREE;
+
+    // A constant used in an unreachable block often returns as UNDEFINED.
+    // If the result is undefined, check the global value for a constant.
+    if (r.undefined_p ())
+      range_of_expr (r, name);
+
+    tree ret;
+    if (r.singleton_p (&ret))
+      return ret;
+    else
+      ret = NULL_TREE;
+    if (is_a <prange> (r))
+      {
+	prange &p = as_a <prange> (r);
+	ret = p.pt_invariant ();
+	// A const points has to be gimple_min_invariant.
+	gcc_checking_assert (!ret || is_gimple_min_invariant (ret));
+      }
+
     return ret;
   }
 
@@ -1005,21 +1042,14 @@ public:
 
   void pre_fold_bb (basic_block bb) override
   {
-    m_pta->enter (bb);
     for (gphi_iterator gsi = gsi_start_phis (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
       m_ranger->register_inferred_ranges (gsi.phi ());
     m_last_bb_stmt = last_nondebug_stmt (bb);
   }
 
-  void post_fold_bb (basic_block bb) override
-  {
-    m_pta->leave (bb);
-  }
-
   void pre_fold_stmt (gimple *stmt) override
   {
-    m_pta->visit_stmt (stmt);
     // If this is the last stmt and there are inferred ranges, reparse the
     // block for transitive inferred ranges that occur earlier in the block.
     if (stmt == m_last_bb_stmt)
@@ -1045,7 +1075,6 @@ private:
   DISABLE_COPY_AND_ASSIGN (rvrp_folder);
   gimple_ranger *m_ranger;
   simplify_using_ranges m_simplifier;
-  pointer_equiv_analyzer *m_pta;
   gimple *m_last_bb_stmt;
 };
 

@@ -503,11 +503,14 @@ struct agent_info
      thread should have locked agent->module_rwlock for reading before
      acquiring it.  */
   pthread_mutex_t prog_mutex;
+  /* HSA executable - the finalized program that is used to locate kernels.  */
+  hsa_executable_t executable;
+  /* NUMA node; 0 = not initialized, < 0 N/A (error or virtualized machine);
+     if > 0: actual node is 'numa_node - 1' (range: 0...(num-nodes -1)).  */
+  int numa_node;
   /* Flag whether the HSA program that consists of all the modules has been
      finalized.  */
   bool prog_finalized;
-  /* HSA executable - the finalized program that is used to locate kernels.  */
-  hsa_executable_t executable;
 };
 
 /* Information required to identify, finalize and run any given kernel.  */
@@ -1261,6 +1264,7 @@ limit_worker_threads (int threads)
   /* FIXME Do something more intelligent here.
      GCN can always run 4 threads within a Compute Unit, but
      more than that depends on register usage.  */
+  /* Keep in sync with GOMP_OFFLOAD_supported_threads_dim.  */
   if (threads > 16)
     threads = 16;
   return threads;
@@ -3725,6 +3729,74 @@ GOMP_OFFLOAD_get_uid (int ord)
       return NULL;
     }
   return str;
+}
+
+/* Return the NUMA node of the GPU identified by ORD; returns -1 when
+   an error occurred; this value might also be returned if on
+   virtualized systems.
+   The implementation assumes that the Linux /sys is available.  */
+
+int
+GOMP_OFFLOAD_get_numa_node (int ord)
+{
+  hsa_status_t status, status2;
+  uint32_t domain, bdfid;
+  struct agent_info *agent = get_agent_info (ord);
+
+  /* Initialized to 0; to distinguish, save with offset.  */
+  if (agent->numa_node != 0)
+    return agent->numa_node > 0 ? agent->numa_node - 1 : agent->numa_node;
+
+  agent->numa_node = -1;
+
+  status = hsa_fns.hsa_agent_get_info_fn (agent->id, HSA_AMD_AGENT_INFO_DOMAIN,
+					  &domain);
+  status2 = hsa_fns.hsa_agent_get_info_fn (agent->id, HSA_AMD_AGENT_INFO_BDFID,
+					   &bdfid);
+  if (status != HSA_STATUS_SUCCESS || status2 != HSA_STATUS_SUCCESS)
+    return -1;
+
+  constexpr int len = sizeof ("/sys/bus/pci/devices/0000:00:00.00/numa_node");
+  char filename[len];
+  if (len < snprintf (filename, sizeof (filename),
+		      "/sys/bus/pci/devices/%04x:%02x:%02x.0/numa_node",
+		      domain, bdfid >> 8, bdfid & 0xFF))
+    return -1;
+
+  FILE *in = fopen (filename, "r");
+  if (!in)
+    return -1;
+  int numa_node = -1;
+  fscanf (in, "%d", &numa_node);
+  fclose (in);
+
+  agent->numa_node = numa_node >= 0 ? numa_node + 1 : numa_node;
+  return numa_node;
+}
+
+/* Number of teams supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_teams_dim (int ord, int dim)
+{
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+  struct agent_info *agent = get_agent_info (ord);
+  return limit_teams (__INT_MAX__, agent);
+}
+
+/* Number of threads supported (by dimension) as reported by OpenMP.
+   For dim < 0 (invalid) and for dim > supported dims, return 1. */
+
+int
+GOMP_OFFLOAD_supported_threads_dim (int ord, int dim)
+{
+  (void) ord;
+  if (dim > 0 /* max supported dims */ || dim < 0)
+    return 1;
+
+  return limit_worker_threads (__INT_MAX__);
 }
 
 /* Return the specific capabilities the HSA accelerator have.  */

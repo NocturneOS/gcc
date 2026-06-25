@@ -4058,6 +4058,26 @@ gfc_conv_power_op (gfc_se * se, gfc_expr * expr)
 
 	case BT_REAL:
 	  /* Use builtins for real ** int4.  */
+
+	  if (real_minus_onep (lse.expr))
+	    {
+	      /* (-1.0)**n is (real) (1 - ((n & 1) << 1)), see the integer case
+		 above.  */
+
+	      tree lhs_type, rhs_type;
+	      tree tmp;
+	      lhs_type = TREE_TYPE (lse.expr);
+	      rhs_type = TREE_TYPE (rse.expr);
+	      tmp = fold_build2_loc (input_location, BIT_AND_EXPR, rhs_type,
+				     rse.expr, build_int_cst (rhs_type, 1));
+	      tmp = fold_build2_loc (input_location, LSHIFT_EXPR, rhs_type,
+				     tmp, build_int_cst (rhs_type, 1));
+	      tmp = fold_build2_loc (input_location, MINUS_EXPR, rhs_type,
+				     build_int_cst (rhs_type, 1), tmp);
+	      se->expr = fold_convert (lhs_type, tmp);
+	      return;
+	    }
+
 	  if (ikind == 0)
 	    {
 	      switch (kind)
@@ -9835,8 +9855,15 @@ gfc_trans_alloc_subarray_assign (tree dest, gfc_component * cm,
     gfc_add_block_to_block (final_block, &se.finalblock);
 
   if (expr->expr_type != EXPR_VARIABLE)
-    gfc_conv_descriptor_data_set (&block, se.expr,
-				  null_pointer_node);
+    {
+      if (gfc_bt_struct (cm->ts.type) && cm->ts.u.derived->attr.alloc_comp)
+	{
+	  tmp = gfc_deallocate_alloc_comp_no_caf (cm->ts.u.derived,
+						  se.expr, cm->as->rank, true);
+	  gfc_add_expr_to_block (&block, tmp);
+	}
+      gfc_conv_descriptor_data_set (&block, se.expr, null_pointer_node);
+    }
 
   /* We need to know if the argument of a conversion function is a
      variable, so that the correct lower bound can be used.  */

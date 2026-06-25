@@ -1631,6 +1631,11 @@ static const char *machine_suffix = 0;
 
 static const char *just_machine_suffix = 0;
 
+/* Prefix to attach to *basename* of commands being searched.
+   This is just `MACHINE-'.  */
+
+static const char *just_machine_prefix = 0;
+
 /* Adjusted value of GCC_EXEC_PREFIX envvar.  */
 
 static const char *gcc_exec_prefix;
@@ -2830,7 +2835,7 @@ for_each_path (const struct path_prefix *paths,
   const char *multi_suffix;
   const char *just_multi_suffix;
   char *path = NULL;
-  decltype (callback (nullptr)) ret = nullptr;
+  decltype (callback (nullptr, false)) ret = nullptr;
   bool skip_multi_dir = false;
   bool skip_multi_os_dir = false;
 
@@ -2881,7 +2886,7 @@ for_each_path (const struct path_prefix *paths,
 	  if (!skip_multi_dir)
 	    {
 	      memcpy (path + len, multi_suffix, suffix_len + 1);
-	      ret = callback (path);
+	      ret = callback (path, true);
 	      if (ret)
 		break;
 	    }
@@ -2892,7 +2897,7 @@ for_each_path (const struct path_prefix *paths,
 	      && pl->require_machine_suffix == 2)
 	    {
 	      memcpy (path + len, just_multi_suffix, just_suffix_len + 1);
-	      ret = callback (path);
+	      ret = callback (path, true);
 	      if (ret)
 		break;
 	    }
@@ -2902,7 +2907,7 @@ for_each_path (const struct path_prefix *paths,
 	      && !pl->require_machine_suffix && multiarch_dir)
 	    {
 	      memcpy (path + len, multiarch_suffix, multiarch_len + 1);
-	      ret = callback (path);
+	      ret = callback (path, true);
 	      if (ret)
 		break;
 	    }
@@ -2930,7 +2935,7 @@ for_each_path (const struct path_prefix *paths,
 	      else
 		path[len] = '\0';
 
-	      ret = callback (path);
+	      ret = callback (path, false);
 	      if (ret)
 		break;
 	    }
@@ -3003,7 +3008,7 @@ build_search_list (const struct path_prefix *paths, const char *prefix,
   obstack_1grow (&collect_obstack, '=');
 
   /* Callback adds path to obstack being built.  */
-  for_each_path (paths, do_multi, 0, [&](char *path) -> void*
+  for_each_path (paths, do_multi, 0, [&](char *path, bool) -> void*
     {
       if (check_dir && !is_directory (path))
 	return NULL;
@@ -3077,7 +3082,7 @@ find_a_file (const struct path_prefix *pprefix, const char *name,
      to the file.  */
   return for_each_path (pprefix, do_multi,
 			name_len,
-			[=](char *path) -> char*
+			[=](char *path, bool) -> char*
     {
       memcpy (path + strlen (path), name, name_len + 1);
 
@@ -3128,34 +3133,52 @@ find_a_program (const char *name)
 
   const char *suffix = HOST_EXECUTABLE_SUFFIX;
   const int name_len = strlen (name);
+  const int prefix_len = strlen (just_machine_prefix);
   const int suffix_len = strlen (suffix);
 
   /* Callback appends the file name to the directory path.  If the
      resulting file exists in the right mode, return the full pathname
      to the file.  */
   return for_each_path (&exec_prefixes, false,
-			name_len + suffix_len,
-			[=](char *path) -> char*
+			prefix_len + name_len + suffix_len,
+			[=](char *path, bool machine_specific) -> char*
     {
-      size_t len = strlen (path);
+      size_t path_len = strlen (path);
 
-      memcpy (path + len, name, name_len);
-      len += name_len;
-
-      /* Some systems have a suffix for executable files.
-	 So try appending that first.  */
-      if (suffix_len)
+      auto search = [=](size_t len) -> char*
 	{
-	  memcpy (path + len, suffix, suffix_len + 1);
+	  memcpy (path + len, name, name_len + 1);
+	  len += name_len;
+
+	  /* Some systems have a suffix for executable files.
+	     So try appending that first.  */
+	  if (suffix_len)
+	    {
+	      memcpy (path + len, suffix, suffix_len + 1);
+	      if (access_check (path, X_OK) == 0)
+		return path;
+	    }
+
+	  path[len] = '\0';
 	  if (access_check (path, X_OK) == 0)
 	    return path;
+
+	  return NULL;
+	};
+
+      /* Additionally search for $target-prog in machine-agnostic dirs,
+	 as an additional way to disambiguate targets. Do not do this in
+	 machine-specific dirs because so further disambiguation is
+	 needed. */
+      if (!machine_specific)
+	{
+	  memcpy (path + path_len, just_machine_prefix, prefix_len);
+	  auto ret = search(path_len + prefix_len);
+	  if (ret)
+	    return ret;
 	}
 
-      path[len] = '\0';
-      if (access_check (path, X_OK) == 0)
-	return path;
-
-      return NULL;
+      return search(path_len);
     });
 }
 
@@ -5659,6 +5682,52 @@ process_command (unsigned int decoded_options_count,
   infiles[n_infiles].name = 0;
 }
 
+/* Set COLLECT_GCC_OPTIONS in the environment.  If the value would
+   exceed COLLECT2_OPTIONS_MAX_LENGTH, spill it to a temporary
+   response file and set the variable to @<path> instead.  */
+
+static void
+xsetenv_collect_gcc_options (char *string)
+{
+  if (strlen (string) <= COLLECT2_OPTIONS_MAX_LENGTH)
+    {
+      xputenv (string);
+      return;
+    }
+
+  static const char prefix[] = "COLLECT_GCC_OPTIONS=";
+  gcc_assert (startswith (string, prefix));
+
+  /* parse_options_from_collect_gcc_options expects argc to start
+     at 1, so push a placeholder argv[0].  */
+  struct obstack argv_obstack;
+  obstack_init (&argv_obstack);
+  obstack_ptr_grow (&argv_obstack, const_cast<char *> (progname));
+  int argc;
+  parse_options_from_collect_gcc_options (string + sizeof (prefix) - 1,
+					  &argv_obstack, &argc);
+  char **argv = XOBFINISH (&argv_obstack, char **);
+
+  char *temp_file = make_temp_file ("");
+  FILE *f = fopen (temp_file, "wb");
+  if (f == nullptr)
+    fatal_error (input_location,
+		 "cannot open response file %qs: %m", temp_file);
+  /* writeargv walks until NULL; skip our placeholder argv[0].  */
+  if (writeargv (argv + 1, f) != 0)
+    fatal_error (input_location,
+		 "cannot write response file %qs: %m", temp_file);
+  if (fclose (f) != 0)
+    fatal_error (input_location,
+		 "cannot close response file %qs: %m", temp_file);
+
+  char *env_val = concat (prefix, "@", temp_file, nullptr);
+  /* Delete on both success and failure unless -save-temps.  */
+  record_temp_file (temp_file, !save_temps_flag, !save_temps_flag);
+  obstack_free (&argv_obstack, nullptr);
+  xputenv (env_val);
+}
+
 /* Store switches not filtered out by %<S in spec in COLLECT_GCC_OPTIONS
    and place that in the environment.  */
 
@@ -5737,7 +5806,7 @@ set_collect_gcc_options (void)
     }
 
   obstack_grow (&collect_obstack, "\0", 1);
-  xputenv (XOBFINISH (&collect_obstack, char *));
+  xsetenv_collect_gcc_options (XOBFINISH (&collect_obstack, char *));
 }
 
 /* Process a spec string, accumulating and running commands.  */
@@ -6067,11 +6136,11 @@ struct spec_path {
   bool separate_options;
   bool realpaths;
 
-  void *operator() (char *path);
+  void *operator() (char *path, bool);
 };
 
 void *
-spec_path::operator() (char *path)
+spec_path::operator() (char *path, bool)
 {
   size_t len = 0;
   char save = 0;
@@ -8448,7 +8517,11 @@ driver::global_initializations ()
 
   /* Parsing and gimplification sometimes need quite large stack.
      Increase stack size limits if possible.  */
+#ifdef __SANITIZE_ADDRESS__
+  stack_limit_increase (128 * 1024 * 1024);
+#else
   stack_limit_increase (64 * 1024 * 1024);
+#endif
 
   /* Allocate the argument vector.  */
   alloc_args ();
@@ -8543,6 +8616,7 @@ driver::set_up_specs () const
   machine_suffix = concat (spec_host_machine, dir_separator_str, spec_version,
 			   accel_dir_suffix, dir_separator_str, NULL);
   just_machine_suffix = concat (spec_machine, dir_separator_str, NULL);
+  just_machine_prefix = concat (spec_machine, "-", NULL);
 
   specs_file = find_a_file (&startfile_prefixes, "specs", true);
   /* Read the specs file unless it is a default one.  */

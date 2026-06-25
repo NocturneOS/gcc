@@ -5425,6 +5425,58 @@ package body Sem_Util is
       return States;
    end Collect_Body_States;
 
+   --------------------------
+   -- Collect_Constructors --
+   --------------------------
+
+   procedure Collect_Constructors
+     (Typ            : Entity_Id;
+      Callable_Ctors : out Elist_Id;
+      Abstract_Ctors : out Elist_Id)
+   is
+      Typ_Scope : constant Entity_Id := Scope (Typ);
+      Boundary  : constant Entity_Id := First_Private_Entity (Typ_Scope);
+      Cursor    : Entity_Id;
+
+   begin
+      Callable_Ctors := New_Elmt_List;
+      Abstract_Ctors := New_Elmt_List;
+
+      --  Visible part: classify non-hidden constructors of Typ as
+      --  callable or abstract.
+
+      Cursor := First_Entity (Typ_Scope);
+      while Present (Cursor) and then Cursor /= Boundary loop
+         if Is_Constructor (Cursor)
+           and then Etype (First_Formal (Cursor)) = Typ
+           and then not Is_Hidden (Cursor)
+         then
+            if Is_Abstract_Subprogram (Cursor) then
+               Append_Elmt (Cursor, Abstract_Ctors);
+            else
+               Append_Elmt (Cursor, Callable_Ctors);
+            end if;
+         end if;
+
+         Next_Entity (Cursor);
+      end loop;
+
+      --  Private part: abstract constructors cannot appear here;
+      --  all non-hidden constructors here are callable.
+
+      Cursor := Boundary;
+      while Present (Cursor) loop
+         if Is_Constructor (Cursor)
+           and then Etype (First_Formal (Cursor)) = Typ
+           and then not Is_Hidden (Cursor)
+         then
+            Append_Elmt (Cursor, Callable_Ctors);
+         end if;
+
+         Next_Entity (Cursor);
+      end loop;
+   end Collect_Constructors;
+
    ------------------------
    -- Collect_Interfaces --
    ------------------------
@@ -5891,7 +5943,8 @@ package body Sem_Util is
             --  predefined "=" operator.
 
             if Is_Overloadable (Id)
-              and then ((Is_Type_In_Pkg and then not In_Package_Body (Id))
+              and then ((Is_Type_In_Pkg
+                           and then not Declared_In_Package_Body (Id))
                          or else Is_Primitive (Id)
                          or else not Comes_From_Source (Id))
 
@@ -8260,7 +8313,7 @@ package body Sem_Util is
          --  parent spec, and body entities are not visible.
 
          elsif Is_Child_Unit (Def_Id)
-           and then Is_Package_Body_Entity (E)
+           and then Declared_In_Package_Body (E)
            and then not In_Package_Body (Current_Scope)
          then
             null;
@@ -10596,6 +10649,44 @@ package body Sem_Util is
       end if;
    end Get_Enclosing_Object;
 
+   ------------------------------------
+   -- Get_Pool_Object_Or_Dereference --
+   ------------------------------------
+
+   function Get_Pool_Object_Or_Dereference (Pool : Entity_Id)
+     return Node_Or_Entity_Id
+   is
+      N : Node_Or_Entity_Id;
+
+   begin
+      if Present (Renamed_Object (Pool)) then
+         N := Renamed_Object (Pool);
+      else
+         N := Pool;
+      end if;
+
+      while Present (N) loop
+         case Nkind (N) is
+            when N_Defining_Identifier | N_Explicit_Dereference =>
+               return N;
+
+            when N_Identifier | N_Expanded_Name =>
+               return Entity (N);
+
+            when N_Indexed_Component | N_Selected_Component | N_Slice =>
+               N := Prefix (N);
+
+            when N_Type_Conversion | N_Unchecked_Type_Conversion =>
+               N := Expression (N);
+
+            when others =>
+               exit;
+         end case;
+      end loop;
+
+      return Empty;
+   end Get_Pool_Object_Or_Dereference;
+
    ---------------------------
    -- Get_Enum_Lit_From_Pos --
    ---------------------------
@@ -11872,7 +11963,7 @@ package body Sem_Util is
      (Typ : Entity_Id; Allow_Removed : Boolean := False) return Boolean
    is
       function Find_Copy_Constructor
-      is new Find_Matching_Constructor (Is_Copy_Constructor);
+        is new Find_Matching_Constructor (Is_Copy_Constructor);
    begin
       return Present (Find_Copy_Constructor (Typ, Allow_Removed));
    end Has_Copy_Constructor;
@@ -12827,16 +12918,20 @@ package body Sem_Util is
          declare
             Formal : Entity_Id :=
               Next_Formal (Next_Formal (First_Formal (Spec_Id)));
+
          begin
             while Present (Formal) loop
                if No (Default_Value (Formal)) then
                   return False;
                end if;
+
                Next_Formal (Formal);
             end loop;
          end;
+
          return True;
       end if;
+
       return False;
    end Is_Copy_Constructor;
 
@@ -12941,7 +13036,7 @@ package body Sem_Util is
      (Typ : Entity_Id; Allow_Removed : Boolean := False) return Boolean
    is
       function Find_Default_Constructor
-      is new Find_Matching_Constructor (Is_Parameterless_Constructor);
+        is new Find_Matching_Constructor (Is_Parameterless_Constructor);
    begin
       return Present (Find_Default_Constructor (Typ, Allow_Removed));
    end Has_Parameterless_Constructor;
@@ -13242,11 +13337,14 @@ package body Sem_Util is
                if No (Default_Value (Formal)) then
                   return False;
                end if;
+
                Next_Formal (Formal);
             end loop;
          end;
+
          return True;
       end if;
+
       return False;
    end Is_Parameterless_Constructor;
 
@@ -20129,6 +20227,10 @@ package body Sem_Util is
       Obj_Ref       : Node_Id;
       Check_Actuals : Boolean) return Boolean
    is
+      function Is_OK_Modifies_Context (Nod : Node_Id) return Boolean;
+      --  Determine whether an arbitrary node appears in the Modifies contract
+      --  as a modified object with no guard.
+
       function Is_Protected_Operation_Call (Nod : Node_Id) return Boolean;
       --  Determine whether an arbitrary node denotes a call to a protected
       --  entry, function, or procedure in prefixed form where the prefix is
@@ -20139,6 +20241,40 @@ package body Sem_Util is
 
       function Within_Volatile_Function (Id : Entity_Id) return Boolean;
       --  Determine whether an arbitrary entity appears in a volatile function
+
+      ----------------------------
+      -- Is_OK_Modifies_Context --
+      ----------------------------
+
+      function Is_OK_Modifies_Context (Nod : Node_Id) return Boolean is
+         Aggregate  : Node_Id;
+         Pragma_Arg : Node_Id;
+         Pragma_Nod : Node_Id;
+
+      begin
+         Aggregate := Parent (Nod);
+
+         if Nkind (Aggregate) = N_Aggregate
+           and then List_Containing (Nod) = Expressions (Aggregate)
+         then
+            Pragma_Arg := Parent (Aggregate);
+         else
+            return False;
+         end if;
+
+         if Nkind (Pragma_Arg) = N_Pragma_Argument_Association
+           and then Aggregate = Expression (Pragma_Arg)
+         then
+            Pragma_Nod := Parent (Pragma_Arg);
+         else
+            return False;
+         end if;
+
+         return Nkind (Pragma_Nod) = N_Pragma
+           and then List_Containing (Pragma_Arg) =
+             Pragma_Argument_Associations (Pragma_Nod)
+           and then Get_Pragma_Id (Pragma_Nod) = Pragma_Modifies;
+      end Is_OK_Modifies_Context;
 
       ---------------------------------
       -- Is_Protected_Operation_Call --
@@ -20395,6 +20531,9 @@ package body Sem_Util is
          else
             return True;
          end if;
+
+      elsif Is_OK_Modifies_Context (Obj_Ref) then
+         return True;
       else
          return False;
       end if;
@@ -21711,6 +21850,7 @@ package body Sem_Util is
         or else Nam = Name_Exceptional_Cases
         or else Nam = Name_Extensions_Visible
         or else Nam = Name_Global
+        or else Nam = Name_Modifies
         or else Nam = Name_Post
         or else Nam = Name_Post_Class
         or else Nam = Name_Postcondition

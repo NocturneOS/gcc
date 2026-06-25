@@ -311,6 +311,7 @@ class locale_tgt_t {
   struct file_list_t;
   struct cbl_label_t;
   typedef struct Elem_list_t<cbl_label_t*> Label_list_t;
+  typedef struct Elem_list_t<int> token_list_t;
 
   struct cbl_file_key_t;
   typedef struct Elem_list_t<cbl_file_key_t*> key_list_t;
@@ -329,7 +330,13 @@ class locale_tgt_t {
 #include "inspect.h"
 }
 
+%define api.location.type {cbl_loc_t}
+
 %{
+// yyssa never freed: 
+// https://lists.nongnu.org/archive/html/help-bison/2021-01/msg00021.html
+#pragma GCC diagnostic ignored "-Wfree-nonheap-object"
+
 #include "config.h"
 #include <fstream>  // Before cobol-system because it uses poisoned functions
 #include "cobol-system.h"
@@ -397,7 +404,7 @@ class locale_tgt_t {
 %token  <boolean>       PERFORM BACKWARD
 %token  <number>        POSITIVE
 %token  <field_attr>	POINTER
-%token  <string>        SECTION
+%token  <string>        PROCESS SECTION
 %token  <number>        STANDARD_ALPHABET "STANDARD ALPHABET"
 %token  <string>        SWITCH
 %token  <string>        UPSI 
@@ -590,7 +597,7 @@ class locale_tgt_t {
 			PAGE_COUNTER "PAGE-COUNTER"
 			PF PH PI PIC PICTURE
 			PLUS PRESENT_VALUE PRINT_SWITCH
-			PROCEDURE PROCEDURES PROCEED PROCESS PROCESSING
+			PROCEDURE PROCEDURES PROCEED PROCESSING
 			PROGRAM_ID "PROGRAM-ID"
 			PROGRAM_kw "Program" PROPERTY PROTOTYPE PSEUDOTEXT
 
@@ -916,6 +923,8 @@ class locale_tgt_t {
 
 %type   <nameloc>       repo_func_name                        
 %type   <namelocs>      repo_func_names
+%type   <tokens>        repo_intrinsics
+%type   <number>        repo_intrinsic
 %type   <codeset>       codeset_name
 %type   <locale_phrase> locale_phrase
 %type   <number>        convert_hex convert_nat convert_alpha // convert_fmt
@@ -934,7 +943,7 @@ class locale_tgt_t {
            declarative_list_t* dcl_list_t;
            isym_list_t* isym_list;
     struct { bool is_float; radix_t radix; char *string; } numstr;
-    struct { YYLTYPE loc; int token; literal_t name; } prog_end;
+    struct { cbl_loc_base_t loc; int token; literal_t name; } prog_end;
     struct { int token; special_name_t id; } special_type;
     struct { char locale_type; const char * name; } locale_phrase;
              coll_alphanat_t char_class_locales;
@@ -963,6 +972,7 @@ class locale_tgt_t {
     struct perform_t *perf;
     struct cbl_perform_tgt_t *tgt;
            Label_list_t *labels;
+           token_list_t *tokens;
            key_list_t *file_keys;
            cbl_file_mode_t io_mode;
     struct cbl_file_key_t *file_key;
@@ -1005,13 +1015,13 @@ class locale_tgt_t {
 
     struct cbl_ffi_arg_t *ffi_arg;
     struct ffi_args_t *ffi_args;
-    struct { YYLTYPE loc; cbl_refer_t *ffi_name, *ffi_returning;
+    struct { cbl_loc_base_t loc; cbl_refer_t *ffi_name, *ffi_returning;
              ffi_args_t *using_params; } ffi_impl;
 
     struct { bool common, initial, recursive; } comminit;
     struct { enum select_clause_t clause; cbl_file_t *file; } select_clause;
     struct { size_t clauses; cbl_file_t *file; } select_clauses;
-    struct { YYLTYPE loc; char *on, *off; } switches;
+    struct { cbl_loc_base_t loc; char *on, *off; } switches;
     struct { cbl_encoding_t encoding; cbl_domain_t *domain; } false_domain;
     struct { size_t also; unsigned char *low, *high; } colseq;
     struct { cbl_field_attr_t attr; int nbyte; } pic_part;
@@ -1278,7 +1288,7 @@ class locale_tgt_t {
 			PAGE_COUNTER
                         PF PH PI PIC PICTURE PIC_P
                         PLUS POINTER POSITIVE PRESENT_VALUE PRINT_SWITCH
-                        PROCEDURE PROCEDURES PROCEED PROCESS
+                        PROCEDURE PROCEDURES PROCEED 
                         PROGRAM_ID
 			PROGRAM_kw PROPERTY PROTOTYPE PSEUDOTEXT
 
@@ -1543,7 +1553,7 @@ class locale_tgt_t {
   cbl_field_t *
   new_literal( const cbl_loc_t loc, const literal_t& lit, enum cbl_field_attr_t attr );
 
-  static YYLTYPE first_line_of( YYLTYPE loc );
+  static cbl_loc_t first_line_of( cbl_loc_t loc );
 %}
 
 %locations
@@ -1625,6 +1635,9 @@ cobol_words1:	COBOL_WORDS EQUATE NAME[keyword] WITH NAME[name] {
 	|	COBOL_WORDS RESERVE NAME[name] {
 		  if( ! cdf_tokens.reserve(@name, $name) ) { YYERROR; }
 		}
+        |       PROCESS {
+                  cbl_message(@1, IbmCdf, "%qs", $1);
+                }
 		;
 
 program_id:     PROGRAM_ID dot namestr[name] program_as program_attrs[attr] dot
@@ -1679,7 +1692,14 @@ dot:            %empty
         |       '.'
                 ;
 program_as:     %empty     { static const literal_t empty {}; $$ = empty; }
-        |       AS LITERAL { $$ = $2; }
+        |       AS LITERAL
+                { // program-id not yet parsed, so top-level is 0
+                  if( 0 != current.program_level() ) {
+                    error_msg(@$, "AS %qs valid only for top-level programs",
+                              $LITERAL.data);
+                  }
+                  $$ = $2;
+                }
                 ;
 
 function_id:    FUNCTION dot  NAME program_as program_attrs[attr] '.'
@@ -2588,8 +2608,21 @@ repo_func:      FUNCTION repo_func_names[namelocs] INTRINSIC {
                 {
                   current.repository_add_all();
                 }
+        |       FUNCTION repo_intrinsics INTRINSIC
+                {
+                  for( int token : $repo_intrinsics->elems ) {
+                    if( token != 0 ) {
+                      current.repository_add(keyword_str(token));
+                    }
+                  }
+                }
+        |       FUNCTION repo_intrinsics error {
+                  const char *func = $repo_intrinsics->elems.empty() ?
+                    "" : keyword_str($repo_intrinsics->elems.front());
+                  error_msg(@repo_intrinsics,
+                          "intrinsic function %qs requires INTRINSIC", func);
+                }
         |       FUNCTION repo_func_names[namelocs] {
-		  // We allow multiple names because GnuCOBOL does.  ISO says 1.
                   for( const auto& nameloc : *$namelocs ) {
                     if( 0 != intrinsic_token_of(nameloc.name) ) {
                       error_msg(nameloc.loc,
@@ -2627,6 +2660,121 @@ repo_func_name: NAME repo_as {
                   }
                   $$ = new cbl_nameloc_t(@NAME, $NAME);
                 }
+                ;
+
+repo_intrinsics:
+                repo_intrinsic { $$ = new token_list_t($1); }
+        |       repo_intrinsics repo_intrinsic {
+                  $$ = $1;
+                  $$->elems.push_back($repo_intrinsic);
+                }
+                ;
+ 
+repo_intrinsic: ABS { $$ = ABS; }
+        |       ACOS { $$ = ACOS; }
+        |       ANNUITY { $$ = ANNUITY; }
+        |       ASIN { $$ = ASIN; }
+        |       ATAN { $$ = ATAN; }
+        |       BASECONVERT { $$ = BASECONVERT; }
+        |       BIT_OF { $$ = BIT_OF; }
+        |       BIT_TO_CHAR { $$ = BIT_TO_CHAR; }
+        |       BOOLEAN_OF_INTEGER { $$ = BOOLEAN_OF_INTEGER; }
+        |       BYTE_LENGTH { $$ = BYTE_LENGTH; }
+        |       CHAR { $$ = CHAR; }
+        |       CHAR_NATIONAL { $$ = CHAR_NATIONAL; }
+        |       COMBINED_DATETIME { $$ = COMBINED_DATETIME; }
+        |       CONCAT { $$ = CONCAT; }
+        |       CONVERT { $$ = CONVERT; }
+        |       COS { $$ = COS; }
+        |       CURRENT_DATE { $$ = CURRENT_DATE; }
+        |       DATE_OF_INTEGER { $$ = DATE_OF_INTEGER; }
+        |       DATE_TO_YYYYMMDD { $$ = DATE_TO_YYYYMMDD; }
+        |       DAY_OF_INTEGER { $$ = DAY_OF_INTEGER; }
+        |       DAY_TO_YYYYDDD { $$ = DAY_TO_YYYYDDD; }
+        |       DISPLAY_OF { $$ = DISPLAY_OF; }
+        |       E { $$ = E; }
+        |       EXCEPTION_FILE { $$ = EXCEPTION_FILE; }
+        |       EXCEPTION_FILE_N { $$ = EXCEPTION_FILE_N; }
+        |       EXCEPTION_LOCATION { $$ = EXCEPTION_LOCATION; }
+        |       EXCEPTION_LOCATION_N { $$ = EXCEPTION_LOCATION_N; }
+        |       EXCEPTION_STATEMENT { $$ = EXCEPTION_STATEMENT; }
+        |       EXCEPTION_STATUS { $$ = EXCEPTION_STATUS; }
+        |       EXP { $$ = EXP; }
+        |       EXP10 { $$ = EXP10; }
+        |       FACTORIAL { $$ = FACTORIAL; }
+        |       FIND_STRING { $$ = FIND_STRING; }
+        |       FORMATTED_CURRENT_DATE { $$ = FORMATTED_CURRENT_DATE; }
+        |       FORMATTED_DATE { $$ = FORMATTED_DATE; }
+        |       FORMATTED_DATETIME { $$ = FORMATTED_DATETIME; }
+        |       FORMATTED_TIME { $$ = FORMATTED_TIME; }
+        |       FRACTION_PART { $$ = FRACTION_PART; }
+        |       HEX_OF { $$ = HEX_OF; }
+        |       HEX_TO_CHAR { $$ = HEX_TO_CHAR; }
+        |       HIGHEST_ALGEBRAIC { $$ = HIGHEST_ALGEBRAIC; }
+        |       INTEGER { $$ = INTEGER; }
+        |       INTEGER_OF_BOOLEAN { $$ = INTEGER_OF_BOOLEAN; }
+        |       INTEGER_OF_DATE { $$ = INTEGER_OF_DATE; }
+        |       INTEGER_OF_DAY { $$ = INTEGER_OF_DAY; }
+        |       INTEGER_OF_FORMATTED_DATE { $$ = INTEGER_OF_FORMATTED_DATE; }
+        |       INTEGER_PART { $$ = INTEGER_PART; }
+        |       LENGTH { $$ = LENGTH; }
+        |       LOCALE_COMPARE { $$ = LOCALE_COMPARE; }
+        |       LOCALE_DATE { $$ = LOCALE_DATE; }
+        |       LOCALE_TIME { $$ = LOCALE_TIME; }
+        |       LOCALE_TIME_FROM_SECONDS { $$ = LOCALE_TIME_FROM_SECONDS; }
+        |       LOG { $$ = LOG; }
+        |       LOG10 { $$ = LOG10; }
+        |       LOWER_CASE { $$ = LOWER_CASE; }
+        |       LOWEST_ALGEBRAIC { $$ = LOWEST_ALGEBRAIC; }
+        |       MAXX { $$ = MAXX; }
+        |       MEAN { $$ = MEAN; }
+        |       MEDIAN { $$ = MEDIAN; }
+        |       MIDRANGE { $$ = MIDRANGE; }
+        |       MINN { $$ = MINN; }
+        |       MOD { $$ = MOD; }
+        |       MODULE_NAME { $$ = MODULE_NAME; }
+        |       NATIONAL_OF { $$ = NATIONAL_OF; }
+        |       NUMVAL { $$ = NUMVAL; }
+        |       NUMVAL_C { $$ = NUMVAL_C; }
+        |       NUMVAL_F { $$ = NUMVAL_F; }
+        |       ORD { $$ = ORD; }
+        |       ORD_MAX { $$ = ORD_MAX; }
+        |       ORD_MIN { $$ = ORD_MIN; }
+        |       PI { $$ = PI; }
+        |       PRESENT_VALUE { $$ = PRESENT_VALUE; }
+        |       RANDOM { $$ = RANDOM; }
+        |       RANGE { $$ = RANGE; }
+        |       REM { $$ = REM; }
+        |       REVERSE { $$ = REVERSE; }
+        |       SECONDS_FROM_FORMATTED_TIME { $$ = SECONDS_FROM_FORMATTED_TIME; }
+        |       SECONDS_PAST_MIDNIGHT { $$ = SECONDS_PAST_MIDNIGHT; }
+        |       SIGN { $$ = SIGN; }
+        |       SIN { $$ = SIN; }
+        |       SMALLEST_ALGEBRAIC { $$ = SMALLEST_ALGEBRAIC; }
+        |       SQRT { $$ = SQRT; }
+        |       STANDARD_COMPARE { $$ = STANDARD_COMPARE; }
+        |       STANDARD_DEVIATION { $$ = STANDARD_DEVIATION; }
+        |       SUBSTITUTE { $$ = SUBSTITUTE; }
+        |       SUM { $$ = SUM; }
+        |       TAN { $$ = TAN; }
+        |       TEST_DATE_YYYYMMDD { $$ = TEST_DATE_YYYYMMDD; }
+        |       TEST_DAY_YYYYDDD { $$ = TEST_DAY_YYYYDDD; }
+        |       TEST_FORMATTED_DATETIME { $$ = TEST_FORMATTED_DATETIME; }
+        |       TEST_NUMVAL { $$ = TEST_NUMVAL; }
+        |       TEST_NUMVAL_C { $$ = TEST_NUMVAL_C; }
+        |       TEST_NUMVAL_F { $$ = TEST_NUMVAL_F; }
+        |       TRIM { $$ = TRIM; }
+        |       ULENGTH { $$ = ULENGTH; }
+        |       UPOS { $$ = UPOS; }
+        |       UPPER_CASE { $$ = UPPER_CASE; }
+        |       USUBSTR { $$ = USUBSTR; }
+        |       USUPPLEMENTARY { $$ = USUPPLEMENTARY; }
+        |       UUID4 { $$ = UUID4; }
+        |       UVALID { $$ = UVALID; }
+        |       UWIDTH { $$ = UWIDTH; }
+        |       VARIANCE { $$ = VARIANCE; }
+        |       WHEN_COMPILED { $$ = WHEN_COMPILED; }
+        |       YEAR_TO_YYYY { $$ = YEAR_TO_YYYY; }
                 ;
 
 repo_program:   PROGRAM_kw NAME repo_as
@@ -3308,8 +3456,7 @@ file_descrs:    file_descr
         |       file_descrs file_descr
                 ;
 file_descr:     fd_name            '.' { field_done(); } fields
-        |       fd_name fd_clauses '.' { field_done(); }
-                fields
+        |       fd_name fd_clauses '.' { field_done(); } fields
                 ;
 
 fd_name:        FD NAME { $$ = file_section_fd_set(fd_e, $2, @2); }
@@ -3706,45 +3853,6 @@ field:          cdf
                     }
                   }
                   field_done();
-
-#if 0
-                  const auto& field(*$data_descr);
-
-                  // Format data.initial per picture
-                  if( 0 == pristine_values.count(field.data.initial) ) {
-                    if( field.data.digits > 0 && !field.is_zero() ) {
-                      char *initial;
-                      int rdigits = field.data.rdigits < 0?
-                                    1 : field.data.rdigits + 1;
-
-                      if( field.has_attr(scaled_e) ) {
-                        if( field.data.rdigits > 0 ) {
-                          rdigits = field.data.digits + field.data.rdigits;
-                        } else {
-                          rdigits = 0;
-                        }
-                      }
-                      initial = string_of(field.data.value_of());
-                      if( !initial ) {
-                        error_msg(@1, "could not convert value to string");
-                        YYERROR;
-                      }
-                      char decimal = symbol_decimal_point();
-                      std::replace(initial, initial + strlen(initial), '.', decimal);
-                      free(const_cast<char*>($data_descr->data.initial));
-                      $data_descr->data.initial = initial;
-                      if( yydebug ) {
-                        const char *value_str = string_of(field.data.value_of());
-                        dbgmsg("%s::data.initial is (%%%d.%d) %s ==> '%s'",
-			       field.name,
-			       field.data.digits,
-			       rdigits,
-			       value_str? value_str : "",
-			       field.data.initial);
-                      }
-                    }
-                  }
-#endif
                 }
                 ;
 
@@ -4383,8 +4491,7 @@ data_descr1:    level_name
                           $field->blank_initial($field->char_capacity());
                         }
                         $field->encode_numeric($field->data.original(), 
-                                               data_clause_locations[value_clause_e],
-                                               $field->data.original_numeric());
+                                               data_clause_locations[value_clause_e]);
                       }
                     }
                   } else { // no VALUE clause
@@ -5001,7 +5108,7 @@ usage_clause1:  usage BIT
 		  if( field->has_attr(separate_e) ) {
                     error_msg(@$, "SIGN clause conflicts with NO SIGN");
                   }
-		  field->clear_attr(separate_e);
+		  field->set_attr(separate_e);
 		  field->clear_attr(signable_e);
 		  $$ = field->type = FldPacked;
 		}
@@ -5526,7 +5633,9 @@ declaratives:   %empty
                   parser_label_label($label);
                   enabled_exceptions = current.enabled_exception_cache;
                   current.enabled_exception_cache.clear();
-		  ast_enter_section(implicit_section());
+                  cbl_loc_t loc(@4); // the dot
+                  loc.first_line++;
+		  ast_enter_section(loc, implicit_section());
                 }
                 ;
 
@@ -5542,7 +5651,7 @@ sentences:      sentence {
                   if( !label ) {
                     YYERROR;
                   }
-                  ast_enter_paragraph(label);
+                  ast_enter_paragraph(@para, label);
                   current.new_paragraph(label);
                   apply_declaratives();
                 }
@@ -5559,7 +5668,7 @@ sentences:      sentence {
                   if( !label ) {
                     YYERROR;
                   }
-                  ast_enter_paragraph(label);
+                  ast_enter_paragraph(@para, label);
                   current.new_paragraph(label);
                   apply_declaratives();
                 }
@@ -5576,6 +5685,10 @@ sentence:       statements  '.'
                   }
                   if( ! successful_parse() ) YYABORT;
                   YYACCEPT;
+                }
+        |       statements end_program1 {
+                  error_msg(@1, "missing %qs before END PROGRAM", ".");
+                  YYERROR;
                 }
         |       program END_SUBPROGRAM namestr[name] '.'
                 { // a contained program (no prior END PROGRAM) is a "sentence"
@@ -6620,7 +6733,7 @@ simple_cond:    kind_of_name
                   lhs.addr_of = true;
                   auto rhs = cbl_field_of(symbol_field(0,0, "NULLS"));
                   $$ = new_reference(new_temporary(FldConditional));
-                  parser_relop($$->field, lhs, eq_op, rhs);
+                  ast_relop(@$, $$->field, lhs, eq_op, rhs);
                 }
         |       expr /* IS */ NOT OMITTED
 	        { // IS captured by lexer
@@ -6628,7 +6741,7 @@ simple_cond:    kind_of_name
                   lhs.addr_of = true;
                   auto rhs = cbl_field_of(symbol_field(0,0, "NULLS"));
                   $$ = new_reference(new_temporary(FldConditional));
-                  parser_relop($$->field, lhs, ne_op, rhs);
+                  ast_relop(@$, $$->field, lhs, ne_op, rhs);
                 }
         |       expr posneg[op] {
                   $$ = new_reference(new_temporary(FldConditional));
@@ -6640,7 +6753,7 @@ simple_cond:    kind_of_name
                               cbl_field_type_name($1->field->type));
                     YYERROR;
                   }
-                  parser_relop($$->cond(), *$1, op, zero);
+                  ast_relop(@$, $$->cond(), *$1, op, zero);
                 }
         |       scalar88 {
                   // copy the subscripts and set the parent field
@@ -6742,7 +6855,7 @@ rel_expr:	rel_lhs rel_term[rhs]
                     YYERROR;
                   }
 		  auto cond = new_temporary(FldConditional);
-		  parser_relop( cond, *ante.operand, op, *$rhs.term );
+		  ast_relop( @$, cond, *ante.operand, op, *$rhs.term );
 		  $$ = cond;
                 }
 	|	rel_lhs[lhs] '(' rel_abbrs ')' {
@@ -6798,7 +6911,7 @@ rel_abbr:	rel_term {
                                             ante.operand, ante.relop, $rel_term.term) ){
                     YYERROR;
                   }
-		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
+		  ast_relop(@$, cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
 		}
 	|	relop rel_term {
@@ -6821,7 +6934,7 @@ rel_abbr:	rel_term {
                     YYERROR;
                   }
 		  auto cond = new_temporary(FldConditional);
-		  parser_relop(cond, *ante.operand, ante.relop, *$rel_term.term);
+		  ast_relop(@$, cond, *ante.operand, ante.relop, *$rel_term.term);
 		  $$ = cond;
 		}
 		;
@@ -7168,7 +7281,7 @@ eval_abbrs:	rel_term[a] {
                   cbl_refer_t lhs( ev.subject() );
                   // on pointer error, emit message and continue parsing 
                   valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
-		  auto result = ev.compare(relop, *$a.term);
+		  auto result = ev.compare(@$, relop, *$a.term);
 		  if( ! result ) YYERROR;
 		  if( $a.invert ) {
 		    parser_logop(result, nullptr, not_op, result);
@@ -7205,7 +7318,7 @@ eval_abbr:	rel_term[a] {
                   cbl_refer_t lhs(subj);
                   // on pointer error, emit message and continue parsing 
                   valid_pointer_relop(@1, @1, @1, &lhs, relop, $a.term);
-		  $$ = ev.compare(relop, *$a.term);
+		  $$ = ev.compare(@$, relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
 		  }
@@ -7218,7 +7331,7 @@ eval_abbr:	rel_term[a] {
                   cbl_refer_t lhs( ev.subject() );
                   // on pointer error, emit message and continue parsing 
                   valid_pointer_relop(@1, @1, @2, &lhs, relop_of($relop), $a.term);
-		  $$ = ev.compare(relop, *$a.term);
+		  $$ = ev.compare(@$, relop, *$a.term);
 		  if( $a.invert ) {
 		    parser_logop($$, nullptr, not_op, $$);
 		  }
@@ -7905,14 +8018,14 @@ section_name:	NAME section_kw '.'
                 {
                   statement_begin(@1, SECTION);
 		  $$ = label_add(@1, LblSection, $1);
-                  ast_enter_section($$);
+                  ast_enter_section(@1, $$);
                   apply_declaratives();
                 }
 	|	NAME section_kw // lexer swallows '.' before USE
                 <label>{
                   statement_begin(@1, SECTION);
 		  $$ = label_add(@1, LblSection, $1);
-                  ast_enter_section($$);
+                  ast_enter_section(@1, $$);
                   apply_declaratives();
                 } [label]
                 cdf_use dot
@@ -8345,7 +8458,7 @@ perform_when1:	WHEN perform_ec {
 				  []( const cbl_declarative_t *p ) {
 				    return *p;
 				  } );
-		  ast_enter_paragraph(when);
+		  ast_enter_paragraph(@WHEN, when);
 		}
 		statements {
 		  parser_exit_paragraph();
@@ -8433,12 +8546,12 @@ except_files:	except_name[ec] FILE_KW filenames {
 perform_ec_other:
 		%empty %prec WHEN {
                   const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.other);
+		  ast_enter_paragraph(@$, ec_labels.other);
 		  parser_exit_paragraph();
 		}
 	|	WHEN OTHER {
                   const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.other);
+		  ast_enter_paragraph(@$, ec_labels.other);
 		}
 		exception statements %prec WHEN {
 		  parser_exit_paragraph();
@@ -8447,12 +8560,12 @@ perform_ec_other:
 perform_ec_common:
 		%empty {
 		  const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.common);
+		  ast_enter_paragraph(@$, ec_labels.common);
 		  parser_exit_paragraph();
 		}
 	|	WHEN COMMON {
 		  const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.common);
+		  ast_enter_paragraph(@$, ec_labels.common);
 		}
 		exception statements {
 		  parser_exit_paragraph();
@@ -8461,13 +8574,13 @@ perform_ec_common:
 perform_ec_finally:
 		%empty {
 		  const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.finally);
+		  ast_enter_paragraph(@$, ec_labels.finally);
 		  parser_exit_paragraph();
 		  parser_label_goto(ec_labels.fini);
 		}
 	|	FINALLY {
 		  const auto& ec_labels( perform_current()->ec_labels );
-		  ast_enter_paragraph(ec_labels.finally);
+		  ast_enter_paragraph(@$, ec_labels.finally);
 		}
 		exception statements {
 		  parser_exit_paragraph();
@@ -10744,7 +10857,7 @@ label_1:        qname
                     isect = symbol_index(symbol_elem_of(sect));
                   }
 
-                  $$ = paragraph_reference(para, isect);
+                  $$ = paragraph_reference(@1, para, isect);
                   assert($$);
                   dbgmsg( "using procedure %s of line %d", $$->name, $$->line );
                 }
@@ -11037,7 +11150,7 @@ function_call:  function intrinsic { // "intrinsic" includes UDFs.
 
                 ;
 function:       %empty   %prec FUNCTION
-                { // typed_name in scan_ante.h allows FUNCTION keywod to be ommitted.
+                { // typed_name in scan_ante.h allows FUNCTION keyword to be ommitted.
                   statement_begin(@$, FUNCTION);
                 }
         |       FUNCTION
@@ -12546,8 +12659,8 @@ end_xml:        %empty     %prec XMLPARSE
                 ;
 %%
 
-static YYLTYPE
-first_line_of( YYLTYPE loc ) {
+static cbl_loc_t
+first_line_of( cbl_loc_t loc ) {
     if( loc.first_line < loc.last_line ) loc.last_line = loc.first_line;
     if( loc.last_column < loc.first_column ) loc.last_column = loc.first_column;
     return loc;
@@ -12712,7 +12825,8 @@ verify_args( const YYLTYPE& loc,
   }
 }
 
-void ast_call( const YYLTYPE& loc, cbl_refer_t name, const cbl_refer_t& returning,
+static void
+ast_call( const cbl_loc_t& loc, cbl_refer_t name, const cbl_refer_t& returning,
                size_t narg, cbl_ffi_arg_t args[],
                cbl_label_t *except,
                cbl_label_t *not_except,
@@ -12789,7 +12903,7 @@ statement_prolog( int token ) {
  * parsed.
  */
 static void
-statement_begin( const YYLTYPE& loc, int token ) {
+statement_begin( const cbl_loc_t& loc, int token ) {
   static int prior_token = 0;
 
   if( statement_cleanup )  {
@@ -13062,7 +13176,7 @@ typedef label_named<LblSection> section_named;
 typedef label_named<LblParagraph> paragraph_named;
 
 static struct cbl_label_t *
-label_add( const YYLTYPE& loc,
+label_add( const cbl_loc_t& loc,
 	   enum cbl_label_type_t type, const char name[] ) {
   size_t parent = 0;
 
@@ -13108,7 +13222,7 @@ label_add( const YYLTYPE& loc,
  */
 static struct cbl_label_t *
 label_add( enum cbl_label_type_t type, const char name[], int line ) {
-  YYLTYPE loc { line, 1, line, 1 };
+  cbl_loc_t loc { line, 1, line, 1 };
   return label_add(loc, type, name);
 }
 
@@ -13149,7 +13263,7 @@ perform_t::ec_labels_t::new_label( cbl_label_type_t type,
  * detects and corrects its misstep.
  */
 static struct cbl_label_t *
-paragraph_reference( const char name[], size_t section )
+paragraph_reference( const cbl_loc_t& loc, const char name[], size_t section )
 {
   // A reference has line == 0.  It is LblParagraph if the section is
   // explicitly named, else LblNone (because we don't know).
@@ -13160,8 +13274,13 @@ paragraph_reference( const char name[], size_t section )
 
   p = symbol_label_add(PROGRAM, &label);
   assert(p);
-
+  const char *para_name = p->name;
   const char *sect_name = section? cbl_label_of(symbol_at(section))->name : NULL;
+  
+  match_proc::statement_compose( loc.first_line,
+                                 current.program_section(),
+                                 para_name, sect_name );
+                   
   procedure_reference_add(sect_name, p->name, yylineno, current.program_section());
 
   return p;
@@ -13308,7 +13427,7 @@ function_descr_t::init( int isym, bool prototype ) {
   function_descr_t descr = { FUNCTION_UDF_0 };
   descr.ret_type = FldInvalid;
   const auto L = cbl_label_of(symbol_at(isym));
-  bool ok = namcpy(YYLTYPE(), descr.name, L->name);
+  bool ok = namcpy(cbl_loc_t(), descr.name, L->name);
   descr.prototype = prototype;
   gcc_assert(ok);
   return descr;
@@ -13389,7 +13508,7 @@ cbl_key_t::operator=( const sort_key_t& that ) {
 }
 
 static cbl_refer_t *
-ast_op( YYLTYPE loc, cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
+ast_op( const cbl_loc_t& loc, cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
   assert(lhs);
   assert(rhs);
   if( ! (is_numeric(lhs->field) && is_numeric(rhs->field)) ) {
@@ -13414,6 +13533,26 @@ ast_op( YYLTYPE loc, cbl_refer_t *lhs, char op, cbl_refer_t *rhs ) {
     parser_op( *tgt, *lhs, op, *rhs, current.compute_label() );
   }
   return tgt;
+}
+
+/*
+ * Verify that any field being compared can be moved.  If it cannot, and one
+ * operand is not numeric, ensure the other is not FldFloat.
+ */
+static void
+ast_relop( const cbl_loc_t& loc, cbl_field_t *tgt,
+           cbl_refer_t lhs, relop_t op, cbl_refer_t rhs ) {
+  if( ! (valid_move(lhs.field, rhs.field) && valid_move(rhs.field, lhs.field)) ) {
+    if( is_numeric(lhs.field) != is_numeric(rhs.field) ) {
+      if( (lhs.field->type == FldFloat) || (rhs.field->type == FldFloat) ) {
+        error_msg(loc, "cannot compare %s to %s",
+                  cbl_field_type_name(lhs.field->type),
+                  cbl_field_type_name(rhs.field->type));
+        return;
+      }
+    }
+  }
+  parser_relop(tgt, lhs, op, rhs);
 }
 
 static void
@@ -13580,7 +13719,7 @@ data_section_str( data_section_t section ) {
 }
 
 static bool
-current_data_section_set(const YYLTYPE& loc,  data_section_t data_section ) {
+current_data_section_set(const cbl_loc_t& loc,  data_section_t data_section ) {
   // order is mandatory
   if( data_section < current_data_section ) {
     error_msg(loc, "%s SECTION must precede %s SECTION",
@@ -13648,8 +13787,8 @@ lang_check_failed (const char* file, int line, const char* function) {}
 
 #pragma GCC diagnostic pop
 
-void
-ast_inspect( YYLTYPE loc, cbl_refer_t& input, bool backward,
+static void
+ast_inspect( cbl_loc_t loc, cbl_refer_t& input, bool backward,
              cbl_inspect_opers_t& inspects )
 {
   if( yydebug ) {
@@ -13959,9 +14098,7 @@ initialize_one( cbl_num_result_t target, bool with_filler,
 {
   cbl_refer_t& tgt( target.refer );
   if( ! valid_target(tgt) ) return false;
-#if 0
-  if( field_index(target.refer.field) == return_code_register() ) return true;
-#endif
+
   // Rule 1 c: is valid for VALUE, REPLACING, or DEFAULT
   // If no VALUE (category none), set to blank/zero.
   if( value_category == data_category_none && replacements.empty() ) {
@@ -14548,7 +14685,7 @@ cobol_dialect_set( cbl_dialect_t dialect ) {
     break;
   case dialect_gnu_e:
     if( 0 == (cbl_dialects & dialect) ) { // first time
-      cdf_tokens.equate(YYLTYPE(), "BINARY-DOUBLE", "BINARY-C-LONG");
+      cdf_tokens.equate(cbl_loc_t(), "BINARY-DOUBLE", "BINARY-C-LONG");
     }
     break;
   }    
@@ -14575,7 +14712,9 @@ cobol_gcobol_feature_set( cbl_gcobol_feature_t gcobol_feature, bool on ) {
 }
 
 static bool
-literal_refmod_valid( YYLTYPE loc, const cbl_refer_t& r ) {
+literal_refmod_valid( cbl_loc_t loc, const cbl_refer_t& r ) {
+  if( r.field->has_attr(any_length_e) ) return true;
+
   unsigned int nchar = r.field->char_capacity();
   const cbl_span_t& refmod(r.refmod);
 
@@ -14646,7 +14785,7 @@ const cbl_field_t *
 literal_subscript_oob( const cbl_refer_t& r, size_t& isub );
 
 static bool
-literal_subscripts_valid( YYLTYPE loc, const cbl_refer_t& name ) {
+literal_subscripts_valid( cbl_loc_t loc, const cbl_refer_t& name ) {
   size_t isub;
 
   // Report any out-of-bound subscript. 
@@ -14683,7 +14822,7 @@ literal_subscripts_valid( YYLTYPE loc, const cbl_refer_t& name ) {
 }
 
 static void
-subscript_dimension_error( YYLTYPE loc, size_t nsub, const cbl_refer_t *scalar ) {
+subscript_dimension_error( cbl_loc_t loc, size_t nsub, const cbl_refer_t *scalar ) {
   if( 0 == dimensions(scalar->field) ) {
     error_msg(loc, "%zu subscripts provided for %s, "
               "which has no dimensions",
@@ -14696,14 +14835,14 @@ subscript_dimension_error( YYLTYPE loc, size_t nsub, const cbl_refer_t *scalar )
 }
 
 static void
-reject_refmod( YYLTYPE loc, const cbl_refer_t& scalar ) {
+reject_refmod( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( scalar.is_refmod_reference() ) {
     error_msg(loc, "%s cannot be reference-modified here", scalar.name());
   }
 }
 
 static bool
-require_pointer( YYLTYPE loc, const cbl_refer_t& scalar ) {
+require_pointer( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( scalar.field->type != FldPointer ) {
     error_msg(loc, "%s must have USAGE POINTER", scalar.name());
     return false;
@@ -14712,7 +14851,7 @@ require_pointer( YYLTYPE loc, const cbl_refer_t& scalar ) {
 }
 
 static bool
-require_numeric( YYLTYPE loc, const cbl_refer_t& scalar ) {
+require_numeric( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( ! is_numeric(scalar.field) ) {
     error_msg(loc, "%s must have numeric USAGE", scalar.name());
     return false;
@@ -14721,7 +14860,7 @@ require_numeric( YYLTYPE loc, const cbl_refer_t& scalar ) {
 }
 
 static bool
-require_integer( YYLTYPE loc, const cbl_refer_t& scalar ) {
+require_integer( cbl_loc_t loc, const cbl_refer_t& scalar ) {
   if( is_literal(scalar.field) ) {
     if( ! is_integer_literal(scalar.field) ) {
       error_msg(loc, "numeric literal '%s' must be an integer",
@@ -14794,12 +14933,13 @@ eval_subject_t::compare( int token ) {
 }
 
 cbl_field_t *
-eval_subject_t::compare( relop_t op, const cbl_refer_t& object, bool deciding ) {
+eval_subject_t::compare( const cbl_loc_t& loc, 
+                         relop_t op, const cbl_refer_t& object, bool deciding ) {
   auto subject(*pcol);
   if( compatible(object.field) ) {
     if( ! is_conditional(subject.field) ) {
       auto result = deciding? this->result : new_temporary(FldConditional);
-      parser_relop(result, subject, op, object);
+      ast_relop(loc, result, subject, op, object);
       return result;
       }
     }
@@ -14865,7 +15005,7 @@ eval_subject_t::compare( const cbl_refer_t& object,
  * Do not set initial value; that is up to PICTURE and VALUE.
  */
 static cbl_field_type_t
-field_binary_usage( YYLTYPE loc, cbl_field_t *field,
+field_binary_usage( cbl_loc_t loc, cbl_field_t *field,
                     cbl_field_type_t type, uint32_t capacity,
                     bool signable )
 {

@@ -61,11 +61,10 @@ extern tree var_decl_nop;         // int __gg__nop
 extern tree var_decl_main_called; // int __gg__main_called
 extern tree var_decl_entry_index; // void* __gg__entry_index
 extern tree var_decl_dialects;    // void* __gg__dialects
+extern tree var_decl_dp2bin;      // unsigned char * ___gg__dp2bin
 
 int       get_scaled_rdigits(cbl_field_t *field);
 int       get_scaled_digits(cbl_field_t *field);
-tree      tree_type_from_digits(size_t digits, uint64_t signable);
-tree      tree_type_from_size(size_t bytes, uint64_t signable);
 
 void      get_binary_value( tree value,
                             tree rdigits,
@@ -91,11 +90,10 @@ void      scale_by_power_of_ten_N(tree value,
 tree      scale_by_power_of_ten(tree value,
                                 tree N,
                                 bool check_for_fractional = false);
-void      scale_and_round(tree value,
-                          int  value_rdigits,
-                          bool target_is_signable,
-                          int  target_rdigits,
-                          cbl_round_t rounded);
+tree      round_this_value( tree &value,
+                            tree power_of_ten,
+                            cbl_round_t rounded,
+                            tree size_error);
 void      hex_dump(tree data, size_t bytes);
 void      set_exception_code_func(ec_type_t ec,
                                   int line,
@@ -108,12 +106,6 @@ void      get_integer_value(tree value,  // This is always a LONG
                             tree         offset=NULL,  // size_t
                             bool check_for_fractional_digits=false);
 void      rt_error(const char *msg);
-void      copy_little_endian_into_place(cbl_field_t *dest,
-                                        tree         dest_offset,
-                                        tree value,
-                                        int rhs_rdigits,
-                                        bool check_for_error,
-                                  const tree &size_error);
 tree      build_array_of_size_t( size_t  N,
                                  const size_t *values);
 void      parser_display_internal_field(tree file_descriptor,
@@ -142,6 +134,7 @@ uint64_t  get_time_nanoseconds();
 bool      is_pure_integer(const cbl_field_t *field);
 
 tree      tree_type_from_field(const cbl_field_t *field);
+tree      tree_type_from_refer(const cbl_refer_t &refer);
 
 bool      get_binary_value(tree &value, 
                      const cbl_refer_t &refer,

@@ -22,6 +22,13 @@
 
 ; Please try to keep this file in ASCII collating order.
 
+; After modifying any *.opt file, including this one, also update the
+; documentation with: 
+;
+;    make regenerate-opt-urls
+;
+; and include the *.opt.urls changes in the patch.
+
 Language
 Cobol
 
@@ -221,6 +228,11 @@ Wnllanginfo-error
 Cobol Warning Var(nllanginfo_error, 1) Init(1)
 Warn if nlanglanginfo(3) fails.
 
+; IbmCdf
+Wibm-cdf
+Cobol Warning Var(cobol_ibmcdf, 1) Init(1)
+Warn if IBM-specific CDF directives are used.
+
 ; IbmLengthOf
 Wlength-of
 Cobol Warning Var(cobol_length_of, 1) Init(1)
@@ -383,23 +395,15 @@ preprocess
 Cobol Joined Separate Var(cobol_preprocess)
 Preprocess <source_filter> before compiling.
 
-iprefix
-Cobol Joined Separate
-; Documented in C
-
 include
 Cobol Joined Separate
 ; Documented in C
 
-isysroot
-Cobol Joined Separate
-; Documented in C
-
-isystem
-Cobol Joined Separate
-; Documented in C
-
 idirafter
+Cobol Joined Separate
+; Documented in c.opt
+
+imultilib
 Cobol Joined Separate
 ; Documented in c.opt
 

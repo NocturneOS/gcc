@@ -28,6 +28,8 @@
    <http://www.gnu.org/licenses/>.  */
 
 #define INCLUDE_MEMORY
+#define INCLUDE_STRING
+#define INCLUDE_VECTOR
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -40,8 +42,6 @@
 #include "intl.h"
 #include "common/common-target.h"
 #include "dwarf2asm.h"
-
-#include <string>
 
 #include "a68.h"
 
@@ -650,7 +650,7 @@ struct encoded_mode
 
     struct
     {
-      uint8_t sub_offset;
+      uint64_t sub_offset;
     } flex;
 
     struct
@@ -846,8 +846,7 @@ complete_encoded_mode (encoded_modes_map_t &encoded_modes, uint64_t offset)
       pack = NO_PACK;
       for (uint8_t i = 0; i < em->data.union_.nmodes; i++)
 	{
-	  /* Union alternatives are internally stored in reverse order in the
-	     pack.  */
+	  /* The order of union alternatives is irrelevant.  */
 	  uint16_t index = i;
 	  MOID_T *united_moid = complete_encoded_mode (encoded_modes,
 						       em->data.union_.modes[index]);
@@ -986,15 +985,36 @@ a68_replace_submode (MOID_T *t, MOID_T *m, MOID_T *r)
    The entry for M in MODES_LIST is set to NO_MOID.  */
 
 static void
-a68_replace_equivalent_mode (vec<MOID_T*,va_gc> *mode_list,
+a68_replace_equivalent_mode (MOIF_T *moif,
 			     MOID_T *m, MOID_T *r)
 {
+  /* Handle the mode to be replaced.  */
+  vec<MOID_T*,va_gc> *mode_list = MODES (moif);
   for (size_t i = 0; i < mode_list->length (); ++i)
     {
       if ((*mode_list)[i] == m)
 	(*mode_list)[i] = NO_MOID;
       else if ((*mode_list)[i] != NO_MOID)
 	a68_replace_submode ((*mode_list)[i], m, r);
+    }
+
+  /* Update extracts to reflect the replacement.  */
+  for (EXTRACT_T *e : INDICANTS (moif))
+    {
+      if (EXTRACT_MODE (e) == m)
+	EXTRACT_MODE (e) = r;
+    }
+
+  for (EXTRACT_T *e : IDENTIFIERS (moif))
+    {
+      if (EXTRACT_MODE (e) == m)
+	EXTRACT_MODE (e) = r;
+    }
+
+  for (EXTRACT_T *e : OPERATORS (moif))
+    {
+      if (EXTRACT_MODE (e) == m)
+	EXTRACT_MODE (e) = r;
     }
 }
 
@@ -1471,37 +1491,33 @@ a68_open_packet (const char *module, const char *basename)
     }
 
   /* If we got a moif, we need to make sure that it doesn't introduce new modes
-     that are equivalent to any mode in the compiler's mode list.  If it does,
-     we replace the mode everywhere in the moif.  */
+     that are equivalent to any mode in the compiler's mode list, nor modes
+     that are equivalent to other modes introduced in this same moif.  If it
+     does, we replace the mode everywhere in the moif. */
 
   if (moif != NO_MOIF)
     {
+      std::vector<MOID_T *> known_moids;
+
       for (MOID_T *m : MODES (moif))
 	{
 	  MOID_T *r = a68_search_equivalent_mode (m);
-	  if (r != NO_MOID)
+	  if (r == NO_MOID)
 	    {
-	      a68_replace_equivalent_mode (MODES (moif), m, r);
-
-	      /* Update extracts to reflect the replacement.  */
-	      for (EXTRACT_T *e : INDICANTS (moif))
+	      for (size_t i = 0; i < known_moids.size (); ++i)
 		{
-		  if (EXTRACT_MODE (e) == m)
-		    EXTRACT_MODE (e) = r;
-		}
-
-	      for (EXTRACT_T *e : IDENTIFIERS (moif))
-		{
-		  if (EXTRACT_MODE (e) == m)
-		    EXTRACT_MODE (e) = r;
-		}
-
-	      for (EXTRACT_T *e : OPERATORS (moif))
-		{
-		  if (EXTRACT_MODE (e) == m)
-		    EXTRACT_MODE (e) = r;
+		  if (a68_prove_moid_equivalence (m, known_moids[i]))
+		    {
+		      r = known_moids[i];
+		      break;
+		    }
 		}
 	    }
+
+	  if (r == NO_MOID)
+	    known_moids.push_back (m);
+	  else if (r != m)
+	    a68_replace_equivalent_mode (moif, m, r);
 	}
     }
 

@@ -156,6 +156,7 @@ extern rtx riscv_emit_binary (enum rtx_code code, rtx dest, rtx x, rtx y);
 #endif
 extern bool riscv_expand_conditional_move (rtx, rtx, rtx, rtx);
 extern rtx riscv_legitimize_call_address (rtx);
+extern bool riscv_call_needs_lpad_p (rtx);
 extern bool riscv_expand_zilsd_misaligned_move (rtx, rtx);
 extern bool riscv_zilsd_valid_mem_p (rtx, machine_mode);
 extern void riscv_set_return_address (rtx, rtx);
@@ -174,6 +175,8 @@ extern poly_uint64 riscv_regmode_natural_size (machine_mode);
 extern bool riscv_vla_mode_p (machine_mode);
 extern bool riscv_tuple_mode_p (machine_mode);
 extern bool riscv_vls_mode_p (machine_mode);
+extern bool riscv_widen_overlap_ok (unsigned int, machine_mode,
+				    unsigned int, machine_mode);
 extern int riscv_get_v_regno_alignment (machine_mode);
 extern bool riscv_shamt_matches_mask_p (int, HOST_WIDE_INT);
 extern void riscv_subword_address (rtx, rtx *, rtx *, rtx *, rtx *);

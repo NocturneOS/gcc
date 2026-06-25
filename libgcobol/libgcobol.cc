@@ -546,9 +546,21 @@ __gg__get_default_currency_string()
   }
 
 static void
+console_init() {
+  const char *ctype = setlocale(LC_CTYPE, "");
+  const char *lc_ctype =  nl_langinfo(CODESET);
+
+  // Establish the codeset used by the system console:
+  auto encoding = strstr(ctype, "UTF-8") ?
+    iconv_UTF_8_e : __gg__encoding_iconv_type(lc_ctype);
+  __gg__console_encoding = encoding;
+}
+
+static void
 initialize_program_state()
   {
   // This routine gets called exactly once for a COBOL executable
+  console_init();
   program_state initial_value = {};
   program_states.push_back(initial_value);
   __gg__currency_signs = program_states.back().rt_currency_signs;
@@ -883,7 +895,7 @@ get_binary_value_local(  int                 *rdigits,
         retval = __gg__numeric_display_to_binary(sign_byte_location,
                                                  digits,
                                                  ndigits,
-                                                 resolved_var->encoding);
+                                                 stride);
         }
       break;
       }
@@ -2051,6 +2063,11 @@ int128_to_field(cblc_field_t   *var,
 
             // We are now set up to do the conversion:
             __gg__binary_to_packed(location, digits, value);
+
+            if( value == 0 && sign_nybble == 0x0D )
+              {
+              sign_nybble = 0x0C;
+              }
 
             // We can put the sign nybble into place at this point.  Note that
             // for COMP-6 numbers the sign_nybble value is zero, so the next
@@ -6400,14 +6417,13 @@ __gg__move( cblc_field_t        *fdest,
                                                             fsource,
                                                             source_offset,
                                                             source_size);
-            __gg__int128_to_qualified_field(
-                                       fdest,
-                                       dest_offset,
-                                       dest_size,
-                                       value,
-                                       rdigits,
-                                       rounded,
-                                       &size_error );
+           __gg__int128_to_qualified_field( fdest,
+                                            dest_offset,
+                                            dest_size,
+                                            value,
+                                            rdigits,
+                                            rounded,
+                                            &size_error );
             break;
             }
 

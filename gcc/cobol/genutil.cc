@@ -59,7 +59,6 @@
 #include "exceptg.h"
 #include "dumpfile.h"
 
-
 bool exception_location_active = true;
 bool skip_exception_processing = true;
 
@@ -94,6 +93,10 @@ tree var_decl_call_parameter_lengths;   // size_t *__gg__call_parameter_count
 // wasn't successful figuring out how to create an actual NOP assembly language
 // instruction, I instead gg_assign(var_decl_nop, integer_zero_node)
 tree var_decl_nop;                // int         __gg__nop;
+
+// This table is used to access the table of packed-decimal->binary pairs
+// of digits.
+tree var_decl_dp2bin;  // unsigned char __gg__dp2bin[256]'
 
 // Indicates which routine main() called
 tree var_decl_main_called;        // int         __gg__main_called;
@@ -175,60 +178,6 @@ get_scaled_digits(cbl_field_t *field)
   return retval;
   }
 
-tree
-tree_type_from_digits(size_t digits, uint64_t signable)
-  {
-  tree retval = NULL_TREE;
-
-  if( signable )
-    {
-    if(digits <= 2 )
-      {
-      retval = CHAR;
-      }
-    else if (digits <= 4 )
-      {
-      retval = SHORT;
-      }
-    else if (digits <= 9 )
-      {
-      retval = INT;
-      }
-    else if (digits <= 18 )
-      {
-      retval = LONGLONG;
-      }
-    else
-      {
-      retval = INT128;
-      }
-    }
-  else
-    {
-    if(digits <= 2 )
-      {
-      retval = UCHAR;
-      }
-    else if (digits <= 4 )
-      {
-      retval = USHORT;
-      }
-    else if (digits <= 9 )
-      {
-      retval = UINT;
-      }
-    else if (digits <= 18 )
-      {
-      retval = ULONGLONG;
-      }
-    else
-      {
-      retval = UINT128;
-      }
-    }
-  return retval;
-  }
-
 void
 get_integer_value(tree value, // We know this is a LONG
                   cbl_field_t *field,
@@ -249,8 +198,8 @@ get_integer_value(tree value, // We know this is a LONG
   // If the field_i has rdigits, and if any of those rdigits are non-zero, we
   // return a 1 so that our caller can decide what to do.
 
-  static tree temp    = gg_define_variable(INT128, "..giv_temp",    vs_file_static);
-  static tree rdigits = gg_define_variable(INT,    "..giv_rdigits", vs_file_static);
+  tree temp    = gg_define_variable(INT128);
+  tree rdigits = gg_define_variable(INT);
 
   if( field->attr & intermediate_e )
     {
@@ -485,7 +434,7 @@ get_depending_on_value_from_odo(tree retval, cbl_field_t *odo)
 
   if( !enabled_exceptions.match(ec_bound_odo_e) )
     {
-    // With no exception testing, just pick up the value.  If there is a
+    // With no exception testing, just pick up the value.  If there is an error
     // the programmer will simply have to live with the consequences.
     get_integer_value(retval,
                       depending_on,
@@ -780,11 +729,19 @@ get_data_offset(const cbl_refer_t &refer, int *pflags = NULL)
         {
         if( parent->occurs.depending_on )
           {
-          static tree value64 = gg_define_variable( LONG,
-                                                    ".._gdos_value64",
-                                                    vs_file_static);
+          tree value64 = gg_define_variable(LONG);
           cbl_field_t *odo = symbol_find_odo(parent);
           get_depending_on_value_from_odo(value64, odo);
+
+          IF( subscript, gt_op, value64 )
+            {
+            set_exception_code(ec_bound_odo_e);
+            }
+          ELSE
+            {
+            }
+          ENDIF
+
           }
         }
 
@@ -804,8 +761,8 @@ get_data_offset(const cbl_refer_t &refer, int *pflags = NULL)
     {
     REFER("refmod refstart");
     // We have a refmod to deal with
-    static tree refstart = gg_define_variable(LONG, "..gdo_refstart", vs_file_static);
-    static tree reflen   = gg_define_variable(LONG, "..gdo_reflen", vs_file_static);
+    tree refstart = gg_define_variable(LONG);
+    tree reflen   = gg_define_variable(LONG);
     get_and_check_refstart_and_reflen(refstart, reflen, refer);
 
     gg_assign(retval, gg_add(retval, gg_cast(SIZE_T, refstart)));
@@ -819,6 +776,277 @@ get_data_offset(const cbl_refer_t &refer, int *pflags = NULL)
   return retval;
   }
 
+static tree
+digit(tree location, int offset, int stride)
+  {
+  return gg_bitwise_and(gg_indirect(location,
+                                    build_int_cst_type(SIZE_T,
+                                                       offset*stride)),
+                        build_int_cst_type(UCHAR, 0x0F));
+  }
+
+static const unsigned long pots[20] =
+  {
+  1ULL,                       // 00
+  10ULL,                      // 01
+  100ULL,                     // 02
+  1000ULL,                    // 03
+  10000ULL,                   // 04
+  100000ULL,                  // 05
+  1000000ULL,                 // 06
+  10000000ULL,                // 07
+  100000000ULL,               // 08
+  1000000000ULL,              // 09
+  10000000000ULL,             // 10
+  100000000000ULL,            // 11
+  1000000000000ULL,           // 12
+  10000000000000ULL,          // 13
+  100000000000000ULL,         // 14
+  1000000000000000ULL,        // 15
+  10000000000000000ULL,       // 16
+  100000000000000000ULL,      // 17
+  1000000000000000000ULL,     // 18
+  10000000000000000000ULL,    // 19
+  };
+
+
+static tree
+num_disp_dive(tree location,  // UCHAR_P to first digit
+              int  digits,    //
+              bool signable,
+              int stride)
+  {
+  tree retval;
+  tree type;
+  if( digits <= 9 )
+    {
+    type = signable ? INT : UINT;
+    }
+  else if( digits < 19 )
+    {
+    type = signable ? LONG : ULONG;
+    }
+  else
+    {
+    type = signable ? INT128 : UINT128;
+    }
+  retval = gg_define_variable(type);
+
+  switch(digits)
+    {
+    case 1:
+      {
+      gg_assign(retval, gg_cast(type, digit(location, 0, stride)));
+      break;
+      }
+    case 2:
+      {
+      tree term_a = gg_multiply(gg_cast(type, digit(location, 0, stride)),
+                                build_int_cst_type(type, 10));
+      tree term_b = gg_cast(type, digit(location, 1, stride));
+      gg_assign(retval,
+                gg_add(term_a,
+                       term_b));
+      break;
+      }
+    case 3:
+      {
+      tree term_a = gg_multiply(gg_cast(type, digit(location, 0, stride)),
+                                build_int_cst_type(type, 100));
+      tree term_b = gg_multiply(gg_cast(type, digit(location, 1, stride)),
+                                build_int_cst_type(type, 10));
+      tree term_c = gg_cast(type, digit(location, 2, stride));
+      gg_assign(retval,
+                gg_add(term_a,
+                       gg_add(term_b,
+                              term_c)));
+      break;
+      }
+    case 4:
+      {
+      tree term_a = gg_multiply(gg_cast(type, digit(location, 0, stride)),
+                                build_int_cst_type(type, 1000));
+      tree term_b = gg_multiply(gg_cast(type, digit(location, 1, stride)),
+                                build_int_cst_type(type, 100));
+      tree term_c = gg_multiply(gg_cast(type, digit(location, 2, stride)),
+                                build_int_cst_type(type, 10));
+      tree term_d = gg_cast(type, digit(location, 3, stride));
+      gg_assign(retval,
+                gg_add(term_a,
+                gg_add(term_b,
+                gg_add(term_c,
+                       term_d))));
+      break;
+      }
+    default:
+      {
+      // digits is between 5 and 38
+      int nright = digits/2;
+      int nleft  = digits - nright;
+
+      int64_t right_factor = pots[nright];
+      tree term_a = gg_multiply(num_disp_dive(location,
+                                              nleft,
+                                              signable,
+                                              stride),
+                                build_int_cst_type(type, right_factor));
+      tree term_b = num_disp_dive(gg_add(location,
+                                          build_int_cst_type(SIZE_T,
+                                                             nleft*stride)),
+                                  nright,
+                                  signable,
+                                  stride);
+      gg_assign(retval, gg_add(term_a, term_b));
+      break;
+      }
+    }
+
+  return retval;
+  }
+
+static tree
+pd_dive(tree location, int nbytes, bool signable)
+  {
+  tree type;
+  int digits = nbytes * 2;
+  if( digits < 10 )
+    {
+    type = signable ? INT : UINT;
+    }
+  else if(digits < 20 )
+    {
+    type = signable ? LONG : ULONG;
+    }
+  else
+    {
+    type = signable ? INT128 : UINT128;
+    }
+  tree retval = gg_define_variable(type);
+
+  tree ten2 = build_int_cst_type(type, 100);
+  tree ten4 = build_int_cst_type(type, 10000);
+  tree ten6 = build_int_cst_type(type, 1000000);
+
+  tree t1 = integer_one_node;
+  tree t2 = build_int_cst_type(INT, 2);
+  tree t3 = build_int_cst_type(INT, 3);
+
+  switch(nbytes)
+    {
+    case 0:
+      retval =   integer_zero_node;
+      break;
+    case 1:
+      gg_assign(retval,
+                gg_cast(type,
+                        gg_array_value(var_decl_dp2bin,
+                                       gg_indirect(location))));
+      break;
+    case 2:
+      {
+      tree A = gg_multiply(gg_cast(type,
+                                   gg_array_value(var_decl_dp2bin,
+                                                  gg_indirect(location))),
+                           ten2);
+      tree B = gg_cast(type,
+                       gg_array_value(var_decl_dp2bin,
+                                      gg_indirect(location, t1)));
+      gg_assign(retval, gg_add(A, B));
+      break;
+      }
+    case 3:
+      {
+      tree A = gg_multiply(gg_cast(type,
+                           gg_array_value(var_decl_dp2bin,
+                                          gg_indirect(location))),
+                           ten4);
+      tree B = gg_multiply(gg_cast(type,
+                        gg_array_value(var_decl_dp2bin,
+                                       gg_indirect(location, t1))),
+                           ten2);
+      tree C = gg_cast(type,
+                       gg_array_value(var_decl_dp2bin,
+                                      gg_indirect(location, t2)));
+      gg_assign(retval, gg_add(A, gg_add(B, C)));
+      break;
+      }
+    case 4:
+      {
+      tree A = gg_multiply(gg_cast(type,
+                           gg_array_value(var_decl_dp2bin,
+                                          gg_indirect(location))),
+                           ten6);
+      tree B = gg_multiply(gg_cast(type,
+                        gg_array_value(var_decl_dp2bin,
+                                       gg_indirect(location, t1))),
+                           ten4);
+      tree C = gg_multiply(gg_cast(type,
+                        gg_array_value(var_decl_dp2bin,
+                                       gg_indirect(location, t2))),
+                           ten2);
+      tree D = gg_cast(type,
+                       gg_array_value(var_decl_dp2bin,
+                                      gg_indirect(location, t3)));
+      gg_assign(retval, gg_add(A, gg_add(B, gg_add(C, D))));
+      break;
+      }
+    default:
+      {
+      int nright = nbytes/2;
+      int nleft  = nbytes - nright;
+      tree A = gg_multiply( gg_cast(type, pd_dive(location, nleft, signable)),
+                            build_int_cst_type(type, pots[nright*2]));
+      tree B = gg_cast(type, pd_dive(gg_add(location,
+                                            build_int_cst_type(SIZE_T, nleft)),
+                                     nright,
+                                     signable));
+      gg_assign(retval, gg_add(A, B));
+      break;
+      }
+    }
+
+  return retval;
+  }
+
+static tree
+get_pd_value(tree return_type, cbl_field_t *field, tree location)
+  {
+  tree retval = gg_define_variable(return_type);
+  bool has_sign_nybble =  !(field->attr & separate_e);
+  bool signable        = !!(field->attr & signable_e);
+  int nbytes = field->data.capacity();
+
+  gg_assign(retval,
+            gg_cast(return_type,
+                    pd_dive(location,
+                            has_sign_nybble ? nbytes - 1 : nbytes,
+                            signable)));
+  if( has_sign_nybble )
+    {
+    gg_assign(retval,
+              gg_add(gg_multiply(retval,
+                                 build_int_cst_type(return_type, 10)),
+                     gg_cast(return_type,
+                             gg_rshift(gg_indirect(location,
+                                       build_int_cst_type(SIZE_T, nbytes-1)),
+                                       build_int_cst_type(SIZE_T, 4)))));
+
+    IF( gg_bitwise_and(gg_indirect(location, build_int_cst_type(SIZE_T, nbytes-1)),
+                                   build_int_cst_type(UCHAR, 0x0F)),
+        eq_op,
+        build_int_cst_type(UCHAR, 0x0D) )
+      {
+      gg_assign(retval, gg_negate(retval));
+      }
+    ELSE
+      {
+      }
+    ENDIF
+    }
+
+  return retval;
+  }
+
 tree
 get_binary_value_tree(tree return_type,
                       tree rdigits,
@@ -827,7 +1055,7 @@ get_binary_value_tree(tree return_type,
                       tree         hilo
                       )
   {
-  tree retval;
+  tree retval = gg_define_variable(return_type);
 
   if( hilo )
     {
@@ -840,7 +1068,7 @@ get_binary_value_tree(tree return_type,
   // Very special case:
   if( strcmp(field->name, "ZEROS") == 0 )
     {
-    retval = gg_cast(return_type, integer_zero_node);
+    gg_assign(retval, gg_cast(return_type, integer_zero_node));
     if( rdigits )
       {
       gg_assign(rdigits, gg_cast(TREE_TYPE(rdigits), integer_zero_node));
@@ -848,7 +1076,6 @@ get_binary_value_tree(tree return_type,
     return retval;
     }
 
-  tree pointer = gg_define_variable(UCHAR_P);
   switch(field->type)
     {
     case FldLiteralN:
@@ -864,132 +1091,118 @@ get_binary_value_tree(tree return_type,
           gg_assign(rdigits, build_int_cst_type(TREE_TYPE(rdigits),
                                                 field->data.rdigits));
           }
-        retval = gg_cast(return_type, field->data_decl_node);
+        gg_assign(retval, gg_cast(return_type, field->data_decl_node));
         }
       break;
       }
 
     case FldNumericDisplay:
       {
-      const charmap_t *charmap = __gg__get_charmap(field->codeset.encoding);
+      charmap_t *charmap = __gg__get_charmap(field->codeset.encoding);
       int stride = charmap->stride();
-
       // Establish the source
-      tree source_address = get_data_address(field, field_offset);
-
-      // We need to check early on for HIGH-VALUE and LOW-VALUE
-      // Pick up the byte
-      tree digit = gg_get_indirect_reference(source_address, NULL_TREE);
-      IF( digit, eq_op, build_int_cst(UCHAR, DEGENERATE_HIGH_VALUE) )
+      tree source_location = gg_define_variable(UCHAR_P);
+      gg_assign(source_location, get_data_address(field, field_offset));
+      tree sign_location;
+      if(    (field->attr & signable_e)
+          && (field->attr & leading_e)
+          && (field->attr & separate_e) )
         {
-        // We are dealing with HIGH-VALUE
-        if( hilo )
-          {
-          gg_assign(hilo, integer_one_node);
-          }
-        if( rdigits )
-          {
-          gg_assign(rdigits,
-                    build_int_cst_type( TREE_TYPE(rdigits),
-                                        get_scaled_rdigits(field)));
-          }
-        retval = build_int_cst_type(return_type, 0x7FFFFFFFFFFFFFFFUL);
+        sign_location = gg_define_variable(UCHAR_P);
+        gg_assign(sign_location, source_location);
+        gg_assign(source_location,
+                  gg_add(source_location,
+                         build_int_cst_type(SIZE_T, stride)));
         }
-      ELSE
-        {
-        IF( digit, eq_op, build_int_cst(UCHAR, DEGENERATE_LOW_VALUE) )
-          {
-          // We are dealing with LOW-VALUE
-          if( hilo )
-            {
-            gg_assign(hilo, integer_minus_one_node);
-            }
-          }
-        ELSE
-          {
-          // We are dealing with an ordinary NumericDisplay value
-          gg_assign(pointer, source_address);
+      // source_location points to the first digit.
 
-          if( rdigits )
+      tree dive_value = num_disp_dive(source_location,
+                                      field->data.digits,
+                                      !!(field->attr & signable_e),
+                                      stride);
+      gg_assign(retval, gg_cast(return_type, dive_value));
+
+      // retval is the absolute value of the numeric-display string.
+
+      if( field->attr & signable_e )
+        {
+        // Because the source is signable, we have to check if it is flagged
+        // as negative:
+        if(   (field->attr & leading_e)
+           && (field->attr & separate_e) )
+          {
+          // We already know that sign_location is established
+          }
+        else if(   !(field->attr & leading_e)
+                &&  (field->attr & separate_e) )
+          {
+          sign_location = gg_define_variable(UCHAR_P);
+          gg_assign(sign_location,
+                    gg_add(source_location,
+                           build_int_cst_type(SIZE_T,
+                                              field->data.digits*stride)));
+          }
+        else if(    (field->attr & leading_e)
+                && !(field->attr & separate_e) )
+          {
+          sign_location = gg_define_variable(UCHAR_P);
+          gg_assign(sign_location, source_location);
+          }
+        else //if(   !(field->attr & leading_e)
+             //   && !(field->attr & separate_e) )
+          {
+          sign_location = gg_define_variable(UCHAR_P);
+          gg_assign(sign_location,
+                    gg_add(source_location,
+                           build_int_cst_type(SIZE_T,
+                                            (field->data.digits-1)*stride)));
+          }
+        if( field->attr & separate_e )
+          {
+          IF( gg_indirect(sign_location),
+              eq_op,
+              build_int_cst_type(UCHAR,
+                                 charmap->mapped_character(ascii_minus)) )
             {
-            gg_assign(rdigits,
-                      build_int_cst_type(TREE_TYPE(rdigits),
-                                         get_scaled_rdigits(field)));
+            gg_assign(retval, gg_negate(retval));
             }
-          // This will be the 128-bit value of the character sequence
-          static tree val128 = gg_define_variable(INT128,
-                                                  "..gbv_val128",
-                                                  vs_file_static);
-          // This is a pointer to the sign byte
-          static tree signp = gg_define_variable(UCHAR_P,
-                                                  "..gbv_signp",
-                                                  vs_file_static);
-          // We need to figure out where the sign information, if any is to be
-          // found:
-          if( field->attr & signable_e )
+          ELSE
             {
-            // The variable is signed
-            if( field->attr & separate_e )
+            }
+          ENDIF
+          }
+        else
+          {
+          if( charmap->is_like_ebcdic() )
+            {
+            IF( gg_indirect(sign_location),
+                lt_op,
+                build_int_cst_type(UCHAR, 0xF0) )
               {
-              // The sign byte is separate
-              if( field->attr & leading_e)
-                {
-                // The first byte is '+' or '-'
-                gg_assign(signp, source_address);
-                // Increment pointer to point to the first actual digit
-                gg_increment(pointer);
-                }
-              else
-                {
-                // The final byte is '+' or '-'
-                gg_assign(signp,
-                          gg_add(source_address,
-                                build_int_cst_type(SIZE_T,
-                                                  field->data.digits*stride)));
-                }
+              // The digit is less than the EBCDIC '0'
+              gg_assign(retval, gg_negate(retval));
               }
-            else
+            ELSE
               {
-              // The sign byte is internal
-              if( field->attr & leading_e)
-                {
-                // The first byte has the sign bit.
-                gg_assign(signp, source_address);
-                }
-              else
-                {
-                // The final byte has the sign bit.
-                gg_assign(signp,
-                          gg_add(source_address,
-                                build_int_cst_type( SIZE_T,
-                                              (field->data.digits-1)*stride)));
-                }
               }
+            ENDIF
             }
           else
             {
-            // This value is unsigned, so just use the first location:
-            gg_assign(signp, source_address);
+            IF( gg_indirect(sign_location),
+                gt_op,
+                build_int_cst_type(UCHAR, 0x39) )
+              {
+              // The digit is greater than the ASCII '9'
+              gg_assign(retval, gg_negate(retval));
+              }
+            ELSE
+              {
+              }
+            ENDIF
             }
-
-          gg_assign(val128,
-                    gg_call_expr( INT128,
-                                  "__gg__numeric_display_to_binary",
-                                  signp,
-                                  pointer,
-                                  build_int_cst_type(INT, field->data.digits),
-                              build_int_cst_type(INT, field->codeset.encoding),
-                              NULL_TREE));
-          // Assign the value we got from the string to our "return" value:
-
-          // Note that cppcheck can't understand the run-time IF()
-          // cppcheck-suppress redundantAssignment
-          retval = gg_cast(return_type, val128);
           }
-        ENDIF
         }
-      ENDIF
-
       break;
       }
 
@@ -1029,9 +1242,7 @@ get_binary_value_tree(tree return_type,
         {
         // Destination is too big.  We'll need to fill the high-order bytes with
         // either 0x00 for positive numbers, or 0xFF for negative
-        static tree extension = gg_define_variable( UCHAR,
-                                                    "..gbv_extension",
-                                                    vs_file_static);
+        tree extension = gg_define_variable(UCHAR);
         if( field->attr & signable_e )
           {
           IF( gg_array_value(gg_cast(build_pointer_type(SCHAR), source)),
@@ -1103,8 +1314,7 @@ get_binary_value_tree(tree return_type,
           }
         }
       tree source_address = get_data_address(field, field_offset);
-      tree source_type = tree_type_from_size( field->data.capacity(),
-                                              field->attr & signable_e);
+      tree source_type = tree_type_from_field(field);
       if( debugging && rdigits)
         {
         gg_printf("get_binary_value bin5 rdigits: %d\n", rdigits, NULL_TREE);
@@ -1124,16 +1334,10 @@ get_binary_value_tree(tree return_type,
                   build_int_cst_type( TREE_TYPE(rdigits),
                                       get_scaled_rdigits(field)));
         }
-      tree value = gg_define_variable(return_type);
-      gg_assign(value, gg_cast(return_type,
-                                    gg_call_expr(INT128,
-                                    "__gg__packed_to_binary",
-                                    get_data_address( field,
-                                                      field_offset),
-                                    build_int_cst_type(INT,
-                                                      field->data.capacity()),
-                                    NULL_TREE)));
-      retval = value;
+      gg_assign(retval,
+                get_pd_value(return_type,
+                             field,
+                             get_data_address( field, field_offset)));
       break;
       }
 
@@ -1233,10 +1437,7 @@ get_binary_value( tree value,
 tree
 tree_type_from_field(const cbl_field_t *field)
   {
-  /*  This routine is used to determine what action is taken with type of a
-      CALL ... USING <var> and the matching PROCEDURE DIVISION USING <var> of
-      a PROGRAM-ID or FUNCTION-ID
-      */
+  //  This routine comes up with a variable type compatible with the field.
   tree retval;
 
   switch(field->type)
@@ -1254,21 +1455,30 @@ tree_type_from_field(const cbl_field_t *field)
     case FldNumericDisplay:
     case FldPacked:
       {
+      int digits = field->data.digits;
+      if(    (field->attr & scaled_e)
+          && field->data.rdigits < 0 )
+        {
+        // This is something like PIC 9999PPP, which means that we need a
+        // variable type that can hold those additional digits:
+        digits += -field->data.rdigits;
+        }
+
       if( field->attr & signable_e )
         {
-        if( field->data.digits > 18 )
+        if( digits > 18 )
           {
           retval = INT128;
           }
-        else if( field->data.digits > 9)
+        else if( digits > 9)
           {
           retval = LONG;
           }
-        else if( field->data.digits > 4)
+        else if( digits > 4)
           {
           retval = INT;
           }
-        else if( field->data.digits > 2)
+        else if( digits > 2)
           {
           retval = SHORT;
           }
@@ -1279,19 +1489,19 @@ tree_type_from_field(const cbl_field_t *field)
         }
       else
         {
-        if( field->data.digits > 18 )
+        if( digits > 18 )
           {
           retval = UINT128;
           }
-        else if( field->data.digits > 9)
+        else if( digits > 9)
           {
           retval = ULONG;
           }
-        else if( field->data.digits > 4)
+        else if( digits > 4)
           {
           retval = UINT;
           }
-        else if( field->data.digits > 2)
+        else if( digits > 2)
           {
           retval = USHORT;
           }
@@ -1392,6 +1602,12 @@ tree_type_from_field(const cbl_field_t *field)
       }
     }
   return retval;
+  }
+
+tree
+tree_type_from_refer(const cbl_refer_t &refer)
+  {
+  return tree_type_from_field(refer.field);
   }
 
 tree
@@ -1513,7 +1729,7 @@ scale_by_power_of_ten(tree value,
                       bool check_for_fractional)
   {
   Analyze();
-  static tree retval = gg_define_variable(INT, "..sbpot2_retval", vs_file_static);
+  tree retval = gg_define_variable(INT);
 
   if( check_for_fractional )
     {
@@ -1545,71 +1761,6 @@ scale_by_power_of_ten(tree value,
   }
 
 void
-scale_and_round(tree value,
-                int  value_rdigits,
-                bool target_is_signable,
-                int  target_rdigits,
-                cbl_round_t rounded)
-  {
-  if( !target_is_signable )
-    {
-    // The target has to be positive, so take the absolute value of the input
-    gg_assign(value, gg_abs(value));
-    }
-
-  if( target_rdigits >= value_rdigits )
-    {
-    // The value doesn't have enough rdigits.  All we need to do is multiply it
-    // by a power of ten to get it right:
-    scale_by_power_of_ten_N(value,
-                          target_rdigits - value_rdigits);
-    }
-  else
-    {
-    // The value has too few rdigits.
-    switch(rounded)
-      {
-      case nearest_away_from_zero_e:
-        {
-        // This is rounding away from zero
-
-        // We want to adjust value so that the extra digit is in the units
-        // place:
-        scale_by_power_of_ten_N(value,
-                              target_rdigits - value_rdigits + 1);
-        // Add five to the result:
-        IF( value, lt_op, gg_cast(TREE_TYPE(value), integer_zero_node) )
-          {
-          gg_assign(value,
-                    gg_add( value,
-                            build_int_cst_type(TREE_TYPE(value), -5)));
-          }
-        ELSE
-          {
-          gg_assign(value,
-                    gg_add( value,
-                            build_int_cst_type(TREE_TYPE(value), +5)));
-          }
-        // And now get rid of the lowest decimal digit
-        scale_by_power_of_ten_N(value, -1);
-
-        break;
-        }
-
-      case truncation_e:
-        {
-        // Without rounding, just scale the result
-        scale_by_power_of_ten_N(value, target_rdigits - value_rdigits);
-        break;
-        }
-      default:
-        abort();
-        break;
-      }
-    }
-  }
-
-void
 hex_dump(tree data, size_t bytes)
   {
   gg_printf("0x", NULL_TREE);
@@ -1621,62 +1772,6 @@ hex_dump(tree data, size_t bytes)
                                       i)),
               NULL_TREE);
     }
-  }
-
-tree
-tree_type_from_size(size_t bytes, uint64_t signable)
-  {
-  tree retval = NULL_TREE;
-
-  if( signable )
-    {
-    switch( bytes )
-      {
-      case 1:
-        retval = SCHAR;
-        break;
-      case 2:
-        retval = SHORT;
-        break;
-      case 4:
-        retval = INT;
-        break;
-      case 8:
-        retval = LONG;
-        break;
-      case 16:
-        retval = INT128;
-        break;
-      default:
-        gcc_unreachable();
-        break;
-      }
-    }
-  else
-    {
-    switch( bytes )
-      {
-      case 1:
-        retval = UCHAR;
-        break;
-      case 2:
-        retval = USHORT;
-        break;
-      case 4:
-        retval = UINT;
-        break;
-      case 8:
-        retval = ULONG;
-        break;
-      case 16:
-        retval = UINT128;
-        break;
-      default:
-        gcc_unreachable();
-        break;
-      }
-    }
-  return retval;
   }
 
 static
@@ -1821,59 +1916,6 @@ rt_error(const char *msg)
   gg_abort();
   }
 
-void
-copy_little_endian_into_place(cbl_field_t *dest,
-                              tree         dest_offset,
-                              tree value,
-                              int rhs_rdigits,
-                              bool check_for_error,
-                        const tree &size_error)
-  {
-  if( check_for_error )
-    {
-    // We need to see if value can fit into destref
-
-    // We do this by comparing value to 10^(lhs.ldigits + rhs_rdigits)
-    // Example:  rhs is 123.45, whichis 12345 with rdigits 2
-    // lhs is 99.999.  So, lhs.digits is 5, and lhs.rdigits is 3.
-    // 10^(5 - 3 + 2) is 10^4, which is 10000.  Because 12345 is >= 10000, the
-    // source can't fit into the destination.
-
-    // Note:  I am not trying to avoid the use of stack variables, because I am
-    // not sure how to declare a file-static variable of unknown type.
-    tree abs_value = gg_define_variable(TREE_TYPE(value));
-    IF( value, lt_op, build_int_cst_type(TREE_TYPE(value), 0) )
-      {
-      gg_assign(abs_value, gg_negate(value));
-      }
-    ELSE
-      {
-      gg_assign(abs_value, value);
-      }
-    ENDIF
-
-    FIXED_WIDE_INT(128) power_of_ten = get_power_of_ten(  dest->data.digits
-                                                        - dest->data.rdigits
-                                                        + rhs_rdigits );
-    IF( gg_cast(INT128, abs_value),
-        ge_op,
-        wide_int_to_tree(INT128, power_of_ten) )
-      {
-      // Flag the size error
-      gg_assign(size_error, integer_one_node);
-      }
-    ELSE
-      ENDIF
-    }
-  scale_by_power_of_ten_N(value, dest->data.rdigits - rhs_rdigits);
-
-  tree dest_type = tree_type_from_size( dest->data.capacity(),
-                                        dest->attr & signable_e);
-  tree dest_pointer = gg_add(member(dest->var_decl_node, "data"),
-                             dest_offset);
-  gg_assign(gg_indirect(gg_cast(build_pointer_type(dest_type), dest_pointer)),
-            gg_cast(dest_type, value));
-  }
 
 tree
 build_array_of_referlets( size_t N,
@@ -1948,7 +1990,7 @@ build_array_of_size_t( size_t  N,
   // This only works because it is used in but one spot.  If this routine is
   // called twice, be careful about how the first one is used.  It's a static
   // variable, you see.
-  static tree values_p = gg_define_variable(SIZE_T_P, "..baost_values_p", vs_file_static);
+  tree values_p = gg_define_variable(SIZE_T_P);
   if( N )
     {
     gg_assign(  values_p,
@@ -2067,8 +2109,8 @@ refer_refmod_length(const cbl_refer_t &refer)
   {
   Analyze();
   REFER("refstart and reflen");
-  static tree refstart = gg_define_variable(LONG, "..rrl_refstart", vs_file_static);
-  static tree reflen   = gg_define_variable(LONG, "..rrl_reflen", vs_file_static);
+  tree refstart = gg_define_variable(LONG);
+  tree reflen   = gg_define_variable(LONG);
 
   get_and_check_refstart_and_reflen( refstart, reflen, refer);
 
@@ -2087,7 +2129,7 @@ refer_fill_depends(const cbl_refer_t &refer)
   Analyze();
   cbl_field_t *odo = symbol_find_odo(refer.field);
 
-  static tree value64 = gg_define_variable(LONG, "..rfd_value64", vs_file_static);
+  tree value64 = gg_define_variable(LONG);
 
   get_depending_on_value(value64, refer);
 
@@ -2145,7 +2187,7 @@ refer_size(const cbl_refer_t &refer, refer_type_t refer_type)
     }
   else
     {
-    static tree retval = gg_define_variable(SIZE_T, "..rs_retval", vs_file_static);
+    tree retval = gg_define_variable(SIZE_T);
 
     if( !refer.field )
       {
@@ -2232,7 +2274,8 @@ refer_size_source(const cbl_refer_t &refer)
 
   // This assignment has to be here. Simply returning refer_size() results
   // in regression testing errors.
-  static tree retval = gg_define_variable(SIZE_T, "..rss_retval", vs_file_static);
+  ////static tree retval = gg_define_variable(SIZE_T, "..rss_retval", vs_file_stactic);
+  tree retval = gg_define_variable(SIZE_T);
   gg_assign(retval, refer_size(refer, refer_source));
   return retval;
   }
@@ -2447,27 +2490,6 @@ binary_from_FldNumericBinary(tree &value, const cbl_refer_t &refer, tree type)
 
   return retval;
   }
-
-static const unsigned long pots[17] =
-  {
-  1ULL,                       // 00
-  10ULL,                      // 01
-  100ULL,                     // 02
-  1000ULL,                    // 03
-  10000ULL,                   // 04
-  100000ULL,                  // 05
-  1000000ULL,                 // 06
-  10000000ULL,                // 07
-  100000000ULL,               // 08
-  1000000000ULL,              // 09
-  10000000000ULL,             // 10
-  100000000000ULL,            // 11
-  1000000000000ULL,           // 12
-  10000000000000ULL,          // 13
-  100000000000000ULL,         // 14
-  1000000000000000ULL,        // 15
-  10000000000000000ULL,       // 16
-  };
 
 static void
 d_and_q_num_disp( tree  &retval,   // We define this return value
@@ -3186,34 +3208,21 @@ get_location(tree &retval, const cbl_refer_t &refer)
 
   if( refer_is_super_clean(refer) )
     {
-    // Working storage, not external, no refmods or subscripts:
-    // gg_assign(retval, member(refer.field->var_decl_node,"data"));
-
-#if 0
-    /* This should work.  It doesn't.  This needs investigating.  */
-    // To prevent aliasing problems, we use a memcpy
-    gg_memcpy(gg_get_address_of(retval),
-             gg_get_address(refer.field->data_decl_node),
-              build_int_cst_type(SIZE_T, gg_sizeof(UCHAR_P)));
+    // Working storage, not external, no refmods or subscripts.  That means
+    // we can work with the actual data item, and save a level of indirection.
 
     if( refer.field->offset )
       {
-      tree offset = build_int_cst_type(SIZE_T, refer.field->offset);
-      gg_assign(retval, gg_add(retval, offset));
-      }
-#else
-    tree base   = gg_cast(UCHAR_P,
-                          gg_get_address(refer.field->data_decl_node));
-    if( refer.field->offset )
-      {
-      tree offset = build_int_cst_type(SIZE_T, refer.field->offset);
-      gg_assign(retval, gg_cast(UCHAR_P, gg_add(base, offset)));
+      gg_assign(retval,
+                gg_add(gg_cast(UCHAR_P,
+                               gg_get_address(refer.field->data_decl_node)),
+                build_int_cst_type(SIZE_T, refer.field->offset)));
       }
     else
       {
-      gg_assign(retval, base);
+      gg_assign(retval, gg_cast(UCHAR_P,
+                            gg_get_address(refer.field->data_decl_node)));
       }
-#endif
     }
   else
     {
@@ -3419,3 +3428,341 @@ attribute_bit_set(struct cbl_field_t *var, cbl_field_attr_t bits)
                             build_int_cst_type(SIZE_T, bits)));
   }
 
+tree
+round_this_value( tree &value,
+                  tree pot,
+                  cbl_round_t rounded,
+                  tree size_error)
+  {
+  tree retval = gg_define_variable(INT);
+  // We are rounding value by dividing it by 'pot', which is a power of ten.
+  // We will decide how to round it by looking at the remainder.
+
+  // Return zero when the returned value is zero.  We use this to avoid
+  // negative zero flags in numeric-display and packed-decimal reprentatios
+  // when there have been truncations.
+  tree type = TREE_TYPE(value);
+  if( rounded == truncation_e )
+    {
+    // This is the simplest and most common case.
+    gg_assign(value, gg_divide(value, pot));
+    IF( value, eq_op, build_int_cst_type(type, 0) )
+      {
+      gg_assign(retval, integer_zero_node);
+      }
+    ELSE
+      {
+      gg_assign(retval, integer_one_node);
+      }
+    ENDIF
+    return retval;
+    }
+  // With truncation out of the way, we actually have to do some work.
+  bool signable = !TYPE_UNSIGNED(type);
+
+  // Let's calculate rem = abs(value) % pot.  So, if the POT is, say, 1000,
+  // the remainder will be between 000 and 999 inclusive.
+  tree rem = gg_define_variable(type);
+  gg_assign(rem, gg_mod(gg_abs(value), pot));
+  gg_assign(value, gg_divide(value, pot));
+
+  // We often need the halfway point, that is, 500 when POT is 1000
+  tree half = gg_define_variable(type);
+  gg_assign(half, gg_divide(pot, build_int_cst_type(type, 2)));
+
+  tree zero = build_int_cst_type(type, 0);
+
+  switch(rounded)
+    {
+    case away_from_zero_e:
+      {
+      /* "If the AWAY-FROM-ZERO phrase is specified and the arithmetic value
+         cannot be exactly represented in the resultant identifier, the
+         arithmetic value is rounded to the nearest value farther from zero
+         that can be represented in the resultant identifier." */
+      if( signable )
+        {
+        IF( value, ge_op, zero )
+          {
+          // The value is positive, so if there is a remainder, increment it
+          IF( rem, gt_op, zero )
+            {
+            gg_increment(value);
+            }
+          ELSE {} ENDIF
+          }
+        ELSE
+          {
+          // The value is negative, so if there is a remainder, decrement it
+          IF( rem, gt_op, zero )
+            {
+            gg_decrement(value);
+            }
+          ELSE {} ENDIF
+          }
+        ENDIF
+        }
+      else
+        {
+        // The value is positive, so if there is a remainder, increment it
+        IF( rem, gt_op, zero )
+          {
+          gg_increment(value);
+          }
+        ELSE {} ENDIF
+        }
+      break;
+      }
+
+    case nearest_away_from_zero_e:
+      {
+      /* "If the NEAREST-AWAY-FROM-ZERO phrase is specified or implied and the
+         arithmetic value cannot be exactly represented in the resultant
+         identifier, the arithmetic value is rounded to the nearest value that
+         can be represented in the resultant identifier. If two such values are
+         equally near, the value farther from zero is chosen."
+
+         This is rounding like you learned in grade school,
+         */
+      if( signable )
+        {
+        IF( value, ge_op, zero )
+          {
+          // The value is positive, so if remainder >= 5, increment it
+          IF( rem, ge_op, half )
+            {
+            gg_increment(value);
+            }
+          ELSE {} ENDIF
+          }
+        ELSE
+          {
+          // The value is negative, so if remainder < 5, decrement it
+          IF( rem, ge_op, half )
+            {
+            gg_decrement(value);
+            }
+          ELSE {} ENDIF
+          }
+        ENDIF
+        }
+      else
+        {
+        // The value is positive, so if remainder >= 5, increment it
+        IF( rem, ge_op, half )
+          {
+          gg_increment(value);
+          }
+        ELSE {} ENDIF
+        }
+      break;
+      }
+
+    case nearest_even_e:
+      {
+      /* "If the NEAREST-EVEN phrase is specified and the arithmetic value
+         cannot be exactly represented in the resultant identifier, the
+         arithmetic value is rounded to the nearest value that can be
+         represented in the resultant identifier. If two such values are
+         equally near, the value whose rightmost digit is even is chosen.
+         NOTE: This method is sometimes known as 'banker's rounding'." */
+      if( signable )
+        {
+        IF( rem, eq_op, half )
+          {
+          // This is the money shot, exactly half-way.
+          IF( value, ge_op, zero )
+            {
+            gg_increment(value);
+            gg_assign(value,
+                      gg_bitwise_and(value,
+                                     gg_bitwise_not(build_int_cst_type(type,
+                                                                       1))));
+            }
+          ELSE
+            {
+            gg_assign(value, gg_negate(value));
+            gg_increment(value);
+            gg_assign(value,
+                      gg_bitwise_and(value,
+                                     gg_bitwise_not(build_int_cst_type(type,
+                                                                       1))));
+            gg_assign(value, gg_negate(value));
+            }
+          ENDIF
+          }
+        ELSE
+          {
+          // The signable value has a remainder that is not exactly 5
+          IF( value, ge_op, zero )
+            {
+            // The value is positive, so if remainder >= 5, increment it
+            IF( rem, ge_op, half )
+              {
+              gg_increment(value);
+              }
+            ELSE {} ENDIF
+            }
+          ELSE
+            {
+            // The value is negative, so if remainder < 5, decrement it
+            IF( rem, ge_op, half )
+              {
+              gg_decrement(value);
+              }
+            ELSE {} ENDIF
+            }
+          ENDIF
+          }
+        ENDIF
+        }
+      else
+        {
+        // The value is not signable, hence it is positive:
+        IF( rem, eq_op, half )
+          {
+          // This is the money shot, exactly half-way.
+          // Make value a multiple of 2
+          gg_increment(value);
+          gg_assign(value,
+                    gg_bitwise_and(value,
+                                   gg_bitwise_not(build_int_cst_type(type,
+                                                                     1))));
+          }
+        ELSE
+          {
+          // The value is positive, so if remainder > 5, increment it
+          IF( rem, gt_op, half )
+            {
+            gg_increment(value);
+            }
+          ELSE {} ENDIF
+          }
+        ENDIF
+        }
+      break;
+      }
+
+    case nearest_toward_zero_e:
+      {
+      /* "If the NEAREST-TOWARD-ZERO phrase is specified and the arithmetic
+         value cannot be exactly represented in the resultant identifier, the
+         arithmetic value is rounded to the nearest value that can be
+         represented in the resultant identifier. If two such values are
+         equally near, the value nearest to zero is chosen." */
+      if( signable )
+        {
+        IF( value, ge_op, zero )
+          {
+          // The value is positive, so if remainder > 5, increment it
+          IF( rem, gt_op, half )
+            {
+            gg_increment(value);
+            }
+          ELSE {} ENDIF
+          }
+        ELSE
+          {
+          // The value is negative, so if remainder < 5, decrement it
+          IF( rem, gt_op, half )
+            {
+            gg_decrement(value);
+            }
+          ELSE {} ENDIF
+          }
+        ENDIF
+        }
+      else
+        {
+        // The value is positive, so if remainder > 5, increment it
+        IF( rem, gt_op, half )
+          {
+          gg_increment(value);
+          }
+        ELSE {} ENDIF
+        }
+      break;
+      }
+    case prohibited_e:
+      {
+      /* "If the PROHIBITED phrase is specified, and the arithmetic value
+         cannot be represented exactly in the resultant identifier, the
+         EC-SIZE-TRUNCATION exception condition is set to exist, the size error
+         condition exists, and the content of the resultant identifier is
+         unchanged." */
+      const cbl_enabled_exceptions_t&
+                                enabled_exceptions( cdf_enabled_exceptions() );
+      IF( rem, ne_op, zero )
+        {
+        if( size_error )
+          {
+          gg_assign(size_error, integer_one_node);
+          }
+        else if( enabled_exceptions.match(ec_size_truncation_e) )
+          {
+          set_exception_code(ec_size_truncation_e);
+          }
+        }
+      ELSE
+        {
+        }
+      ENDIF
+      break;
+      }
+
+    case toward_greater_e:
+      {
+      /* "If the TOWARD-GREATER phrase is specified, and the arithmetic value
+         cannot be represented exactly in the resultant identifier, the
+         arithmetic value is rounded to the nearest larger value that can be
+         represented in the resultant identifier." */
+      IF( value, ge_op, zero )
+        {
+        // The value is positive, so if remainder != 0, increment it
+        IF( rem, ne_op, zero )
+          {
+          gg_increment(value);
+          }
+        ELSE {} ENDIF
+        }
+      ELSE {} ENDIF
+      break;
+      }
+   
+    case toward_lesser_e:
+      {
+      /* "If the TOWARD-LESS phrase is specified, and the arithmetic value
+          cannot be represented exactly in the resultant identifier, the
+          arithmetic value is rounded to the nearest smaller value that
+          can be represented in the resultant identifier." */
+      IF( value, lt_op, zero )
+        {
+        // The value is negative, so if remainder != 0 , decrement it
+        IF( rem, ne_op, zero )
+          {
+          gg_decrement(value);
+          }
+        ELSE {} ENDIF
+        }
+      ELSE {} ENDIF
+      break;
+      }
+
+    case truncation_e:
+      {
+      /* We do nothing.*/
+      gg_assign(value, gg_divide(value, pot));
+      break;
+      }
+    }
+  IF( value, eq_op, build_int_cst_type(type, 0) )
+    {
+    gg_assign(retval, integer_zero_node);
+    }
+  ELSE
+    {
+    gg_assign(retval, integer_one_node);
+    }
+  ENDIF
+  return retval;
+  }

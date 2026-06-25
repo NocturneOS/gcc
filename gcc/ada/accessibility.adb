@@ -111,7 +111,6 @@ package body Accessibility is
            Make_Raise_Program_Error (Loc,
              Reason => PE_Accessibility_Check_Failed));
          Set_Etype (N, Typ);
-         return;
 
       else
          Error_Msg_F ("non-local pointer cannot point to local object", P);
@@ -594,6 +593,13 @@ package body Accessibility is
             then
                return Make_Level_Literal (Scope_Depth (Standard_Standard));
 
+            --  For 'Old return the level of the associated entity, if any
+
+            elsif Attribute_Name (E) = Name_Old
+              and then Is_Entity_Name (Expr)
+            then
+               return Accessibility_Level (Entity (Expr));
+
             --  'Access can be taken further against other special attributes,
             --  so handle these cases explicitly.
 
@@ -669,23 +675,12 @@ package body Accessibility is
             then
                return Make_Level_Literal (Scope_Depth (Standard_Standard));
 
-            --  Return the library level for formal parameters of an anonymous
-            --  access type without extra accessiblity formal. This may happen
-            --  for subprograms with foreign convention or when expansion is
-            --  disabled, see Sem_Ch6.Create_Extra_Formals.
-
-            elsif Is_Formal (E)
-              and then Ekind (Etype (E)) = E_Anonymous_Access_Type
-              and then No (Get_Dynamic_Accessibility (E))
-            then
-               return Make_Level_Literal (Scope_Depth (Standard_Standard));
-
             --  Formal parameters with an extra accessibility formal, as well
             --  as stand-alone objects of an anonymous access type (SAOOAAAT).
 
             elsif (Is_Formal (E) or else Ekind (E) in E_Constant | E_Variable)
               and then Present (Get_Dynamic_Accessibility (E))
-              and then (Level in Dynamic_Level | Zero_On_Dynamic_Level)
+              and then Level in Dynamic_Level | Zero_On_Dynamic_Level
             then
                if Level = Zero_On_Dynamic_Level then
                   return Make_Level_Literal (Scope_Depth (Standard_Standard));
@@ -718,6 +713,19 @@ package body Accessibility is
                --  Return the dynamic level in the normal case
 
                return New_Occurrence_Of (Get_Dynamic_Accessibility (E), Loc);
+
+            --  Return the library level for formal parameters or stand-alone
+            --  objects of an anonymous access type without extra accessibility
+            --  object. This may happen for subprograms with foreign convention
+            --  or when expansion is disabled, see Sem_Ch6.Create_Extra_Formals
+            --  and Exp_Ch3.Expand_N_Object_Declaration.
+
+            elsif (Is_Formal (E) or else Ekind (E) in E_Constant | E_Variable)
+              and then Is_Anonymous_Access_Type (Etype (E))
+              and then not Is_Local_Anonymous_Access (Etype (E))
+              and then Level in Dynamic_Level | Zero_On_Dynamic_Level
+            then
+               return Make_Level_Literal (Scope_Depth (Standard_Standard));
 
             --  Initialization procedures have a special extra accessibility
             --  parameter associated with the level at which the object
@@ -989,11 +997,11 @@ package body Accessibility is
       end case;
    end Accessibility_Level;
 
-   ---------------------------------------------
-   -- Apply_Accessibility_Check_For_Allocator --
-   ---------------------------------------------
+   --------------------------------------------------------
+   -- Apply_Accessibility_Check_For_Class_Wide_Allocator --
+   --------------------------------------------------------
 
-   procedure Apply_Accessibility_Check_For_Allocator
+   procedure Apply_Accessibility_Check_For_Class_Wide_Allocator
      (N              : Node_Id;
       Exp            : Node_Id;
       Ref            : Node_Id;
@@ -1024,14 +1032,13 @@ package body Accessibility is
          --  If the allocator was built in place, Ref is already a reference
          --  to the access object initialized to the result of the allocator
          --  (see Exp_Ch6.Make_Build_In_Place_Call_In_Allocator). We call
-         --  Remove_Side_Effects for cases where the build-in-place call may
+         --  Duplicate_Subexpr for cases where the build-in-place call may
          --  still be the prefix of the reference (to avoid generating
          --  duplicate calls). Otherwise, it is the entity associated with
          --  the object containing the address of the allocated object.
 
          if Built_In_Place then
-            Remove_Side_Effects (Ref);
-            Obj_Ref := New_Copy_Tree (Ref);
+            Obj_Ref := Duplicate_Subexpr (Ref);
          else
             Obj_Ref := New_Occurrence_Of (Ref, Loc);
          end if;
@@ -1177,7 +1184,7 @@ package body Accessibility is
              Then_Statements => Stmts),
            Suppress => All_Checks);
       end if;
-   end Apply_Accessibility_Check_For_Allocator;
+   end Apply_Accessibility_Check_For_Class_Wide_Allocator;
 
    ----------------------------------------------------
    -- Apply_Accessibility_Check_For_Anonymous_Return --
@@ -1239,32 +1246,17 @@ package body Accessibility is
       if Present (Extra_Accessibility_Of_Result (Func))
         and then not Has_Level_Tied_To_Explicitly_Aliased_Parameter (Exp)
       then
-         declare
-            Discrim_Level : constant Node_Id :=
-              Accessibility_Level (Expr              => Exp,
-                                   Level             => Dynamic_Level,
-                                   In_Return_Context => True);
-
-         begin
-            if Nkind (Discrim_Level) = N_Integer_Literal
-              and then Intval (Discrim_Level) > Scope_Depth (Func)
-            then
-               Error_Msg_N
-                 ("level of type of access value of return expression "
-                  & "is statically too deep",
-                  Enclosing_Declaration_Or_Statement (Exp));
-            end if;
-
-            Insert_Action (Insert_Node,
-              Make_Raise_Program_Error (Loc,
-                Condition =>
-                  Make_Op_Gt (Loc,
-                    Left_Opnd  => Discrim_Level,
-                    Right_Opnd => New_Occurrence_Of
-                      (Extra_Accessibility_Of_Result (Func), Loc)),
-                Reason    => PE_Accessibility_Check_Failed),
-              Suppress => Access_Check);
-         end;
+         Insert_Action (Insert_Node,
+           Make_Raise_Program_Error (Loc,
+             Condition =>
+               Make_Op_Gt (Loc,
+                 Left_Opnd  =>
+                   Accessibility_Level
+                     (Exp, Dynamic_Level, In_Return_Context => True),
+                 Right_Opnd => New_Occurrence_Of
+                   (Extra_Accessibility_Of_Result (Func), Loc)),
+             Reason    => PE_Accessibility_Check_Failed),
+           Suppress => Access_Check);
       end if;
    end Apply_Accessibility_Check_For_Anonymous_Return;
 
@@ -1381,6 +1373,102 @@ package body Accessibility is
       end if;
    end Apply_Accessibility_Check_For_Class_Wide_Return;
 
+   -----------------------------------------------------------
+   -- Apply_Accessibility_Check_For_Discriminated_Allocator --
+   -----------------------------------------------------------
+
+   procedure Apply_Accessibility_Check_For_Discriminated_Allocator
+     (N : Node_Id)
+   is
+      Loc     : constant Source_Ptr := Sloc (N);
+      Typ     : constant Entity_Id  := Etype (Expression (N));
+      Exp     : constant Node_Id    := Unqualify (Expression (N));
+      Exp_Typ : constant Entity_Id  := Etype (Exp);
+
+      Discr      : Entity_Id;
+      Discr_Elmt : Elmt_Id;
+      Discr_Exp  : Node_Id;
+
+   --  Start of Apply_Accessibility_Check_For_Discriminated_Allocator
+
+   begin
+      --  Return immediately if accessibility checks are suppressed for N
+
+      if Scope_Suppress.Suppress (Accessibility_Check)
+        or else No_Dynamic_Accessibility_Checks_Enabled (N)
+      then
+         return;
+
+      --  Check that the allocator's access discriminants do not designate
+      --  entities that the allocator could outlive (RM 4.8(10.1)).
+
+      elsif not Has_Anonymous_Access_Discriminant (Typ) then
+         return;
+
+      --  We ignore coextensions as they cannot be implemented under the
+      --  "small integer" model.
+
+      elsif Is_Static_Coextension (N) or else Is_Dynamic_Coextension (N) then
+         return;
+
+      --  If we are allocating a function result, then that function will
+      --  perform the check.
+
+      elsif Nkind (Exp) = N_Function_Call then
+         return;
+
+      --  When the value of the access discriminant is determined by
+      --  an object with an unconstrained nominal subtype, its level
+      --  is the accessibility level of the object (RM 3.10.2(12.4)).
+
+      elsif not Is_Constrained (Exp_Typ) then
+         Insert_Action (N,
+           Make_Raise_Program_Error (Loc,
+             Condition =>
+               Make_Op_Gt (Loc,
+                 Left_Opnd  => Accessibility_Level (Exp, Dynamic_Level),
+                 Right_Opnd => Accessibility_Level (N, Dynamic_Level)),
+             Reason    => PE_Accessibility_Check_Failed),
+           Suppress => Access_Check);
+
+         return;
+      end if;
+
+      Discr := First_Discriminant (Typ);
+      Discr_Elmt := First_Elmt (Discriminant_Constraint (Exp_Typ));
+
+      while Present (Discr) loop
+         if Is_Anonymous_Access_Type (Etype (Discr)) then
+            Discr_Exp := Node (Discr_Elmt);
+
+            --  The accessibility level of a function call whose result type is
+            --  an anonymous access type used to define the discriminant of an
+            --  object is the level of the object (RM 3.10.2(10.3, 14.1)).
+
+            if Nkind (Original_Node (Discr_Exp)) = N_Function_Call
+              and then
+                Is_Anonymous_Access_Type (Etype (Original_Node (Discr_Exp)))
+            then
+               null;
+
+            else
+               Insert_Action (N,
+                 Make_Raise_Program_Error (Loc,
+                   Condition =>
+                     Make_Op_Gt (Loc,
+                       Left_Opnd  =>
+                         Accessibility_Level (Discr_Exp, Dynamic_Level),
+                       Right_Opnd => Accessibility_Level (N, Dynamic_Level)),
+                   Reason    => PE_Accessibility_Check_Failed),
+                 Suppress => Access_Check);
+            end if;
+         end if;
+
+         Next_Discriminant (Discr);
+         Next_Elmt (Discr_Elmt);
+      end loop;
+   end Apply_Accessibility_Check_For_Discriminated_Allocator;
+
    --------------------------------------------------------
    -- Apply_Accessibility_Check_For_Discriminated_Return --
    --------------------------------------------------------
@@ -1403,17 +1491,10 @@ package body Accessibility is
    procedure Apply_Accessibility_Check_For_Discriminated_Return
      (Exp : Node_Id; Func : Entity_Id)
    is
-      Loc : constant Source_Ptr := Sloc (Exp);
-
       function Constraint_Bearing_Subtype_If_Any
         (Exp : Node_Id) return Node_Id;
       --  If we can locate a constrained subtype whose constraint applies
       --  to Exp, then return that. Otherwise, return Etype (Exp).
-
-      function Discr_Expression
-        (Typ : Entity_Id; Discr_Index : Positive) return Node_Id;
-      --  Typ is a constrained discriminated subtype.
-      --  Return the constraint expression for the indexed discriminant.
 
       ---------------------------------------
       -- Constraint_Bearing_Subtype_If_Any --
@@ -1462,31 +1543,11 @@ package body Accessibility is
          return Etype (Exp);
       end Constraint_Bearing_Subtype_If_Any;
 
-      ----------------------
-      -- Discr_Expression --
-      ----------------------
-
-      function Discr_Expression
-        (Typ : Entity_Id; Discr_Index : Positive) return Node_Id
-      is
-         Constraint_Elmt : Elmt_Id :=
-           First_Elmt (Discriminant_Constraint (Typ));
-      begin
-         for Skip in 1 .. Discr_Index - 1 loop
-            Next_Elmt (Constraint_Elmt);
-         end loop;
-
-         return Node (Constraint_Elmt);
-      end Discr_Expression;
-
       --  Local variables
 
-      Constrained_Subtype : constant Entity_Id :=
-                              Constraint_Bearing_Subtype_If_Any (Exp);
-
-      Discr       : Entity_Id := First_Discriminant (Etype (Func));
-      Discr_Index : Positive  := 1;
-      Discr_Exp   : Node_Id;
+      Discr      : Entity_Id;
+      Discr_Elmt : Elmt_Id;
+      Exp_Typ    : Entity_Id;
 
    --  Start of Apply_Accessibility_Check_For_Discriminated_Return
 
@@ -1500,14 +1561,12 @@ package body Accessibility is
 
       if Ada_Version <= Ada_95 then
          return;
-      end if;
 
-      --  If we are returning a function call then that function will
-      --  perform the needed check.
+      --  If we are returning a function result, then that function will
+      --  perform the check.
 
-      if Nkind (Unqualify (Exp)) = N_Function_Call then
+      elsif Nkind (Unqualify (Exp)) = N_Function_Call then
          return;
-      end if;
 
      --  ??? Cope with the consequences of the Disable_Tagged_Cases flag
      --  in accessibility.adb (which can cause the extra formal parameter
@@ -1516,33 +1575,33 @@ package body Accessibility is
      --  prevent generation of a required check (or even a required
      --  legality check - see "statically too deep" check below).
 
-      if No (Extra_Accessibility_Of_Result (Func)) then
+      elsif No (Extra_Accessibility_Of_Result (Func)) then
          return;
       end if;
 
-      Remove_Side_Effects (Exp);
+      Exp_Typ := Constraint_Bearing_Subtype_If_Any (Exp);
+
+      --  When the value of the access discriminant is determined by
+      --  an object with an unconstrained nominal subtype, its level
+      --  is the accessibility level of the object (RM 3.10.2(12.4)).
+
+      if not Is_Constrained (Exp_Typ) then
+         Apply_Accessibility_Check_For_Anonymous_Return (Exp, Func, Exp);
+
+         return;
+      end if;
+
+      Discr := First_Discriminant (Etype (Func));
+      Discr_Elmt := First_Elmt (Discriminant_Constraint (Exp_Typ));
 
       while Present (Discr) loop
          if Is_Anonymous_Access_Type (Etype (Discr)) then
-            if Is_Constrained (Constrained_Subtype) then
-               Discr_Exp :=
-                 New_Copy_Tree
-                   (Discr_Expression (Constrained_Subtype, Discr_Index));
-            else
-               Discr_Exp :=
-                 Make_Selected_Component (Loc,
-                   Prefix => New_Copy_Tree (Exp),
-                   Selector_Name => New_Occurrence_Of (Discr, Loc));
-            end if;
-
-            Analyze (Discr_Exp);
-
             Apply_Accessibility_Check_For_Anonymous_Return
-              (Discr_Exp, Func, Exp);
+              (Node (Discr_Elmt), Func, Exp);
          end if;
 
          Next_Discriminant (Discr);
-         Discr_Index := Discr_Index + 1;
+         Next_Elmt (Discr_Elmt);
       end loop;
    end Apply_Accessibility_Check_For_Discriminated_Return;
 
@@ -1668,7 +1727,7 @@ package body Accessibility is
       Typ : constant Entity_Id := Etype (Func);
 
    begin
-      --  Return immediately if accessiblity checks are suppressed for Func
+      --  Return immediately if accessibility checks are suppressed for Func
 
       if Accessibility_Checks_Suppressed (Func) then
          return;
@@ -1689,13 +1748,13 @@ package body Accessibility is
          Apply_Accessibility_Check_For_Class_Wide_Return (Exp, Func);
 
       --  Check that the access result does not designate an entity that
-      --  the function result could outlive.
+      --  the result could outlive.
 
       elsif Ekind (Typ) = E_Anonymous_Access_Type then
          Apply_Accessibility_Check_For_Anonymous_Return (Exp, Func, Exp);
 
-      --  Check that result's access discriminants (if any) do not designate
-      --  entities that the function result could outlive.
+      --  Check that the result's access discriminants do not designate
+      --  entities that the result could outlive (RM 6.5(21)).
 
       elsif Has_Anonymous_Access_Discriminant (Typ) then
          Apply_Accessibility_Check_For_Discriminated_Return (Exp, Func);
@@ -1710,13 +1769,48 @@ package body Accessibility is
      (Return_Stmt : Node_Id;
       Stm_Entity  : Entity_Id)
    is
-      Scope_Id : constant Entity_Id  := Return_Applies_To (Stm_Entity);
+      Scope_Id : constant Entity_Id := Return_Applies_To (Stm_Entity);
+      R_Type   : constant Entity_Id := Etype (Scope_Id);
 
-      R_Type : constant Entity_Id := Etype (Scope_Id);
-      --  Function result subtype
+      procedure Accessibility_Error;
+      --  Give an error about the accessibility level of the return
 
       function First_Selector (Assoc : Node_Id) return Node_Id;
       --  Obtain the first selector or choice from a given association
+
+      -------------------------
+      -- Accessibility_Error --
+      -------------------------
+
+      procedure Accessibility_Error is
+         Suffix : constant String :=
+           (if Is_Expression_Function_Or_Completion (Scope_Id)
+            then "in expression function"
+            else "in return");
+         Message : constant String :=
+           "level of type of access discriminant is too deep " & Suffix;
+
+      begin
+         --  In an instance, this is a runtime check, but one we know will fail
+         --  so generate an appropriate warning. As usual, this kind of warning
+         --  is an error in SPARK mode or if No_Dynamic_Accessibility_Checks.
+
+         if In_Instance_Body then
+            Error_Msg_Warn := SPARK_Mode /= On
+                                and then not
+                                  No_Dynamic_Accessibility_Checks_Enabled
+                                                                 (Return_Stmt);
+            Error_Msg_N (Message & "<<", Return_Stmt);
+            Error_Msg_F ("\Program_Error [<<", Return_Stmt);
+            Rewrite (Return_Stmt,
+              Make_Raise_Program_Error (Sloc (Return_Stmt),
+                Reason => PE_Accessibility_Check_Failed));
+            Set_Etype (Return_Stmt, Standard_Void_Type);
+
+         else
+            Error_Msg_N (Message, Return_Stmt);
+         end if;
+      end Accessibility_Error;
 
       --------------------
       -- First_Selector --
@@ -1737,12 +1831,7 @@ package body Accessibility is
 
       --  Local declarations
 
-      Assoc : Node_Id := Empty;
-      --  Assoc should perhaps be renamed and declared as a
-      --  Node_Or_Entity_Id since it encompasses not only component and
-      --  discriminant associations, but also discriminant components within
-      --  a type declaration or subtype indication ???
-
+      Assoc         : Node_Or_Entity_Id;
       Assoc_Expr    : Node_Id;
       Assoc_Present : Boolean := False;
 
@@ -1758,37 +1847,37 @@ package body Accessibility is
    --  Start of processing for Check_Return_Construct_Accessibility
 
    begin
+      pragma Assert (Nkind (Return_Stmt) in N_Extended_Return_Statement
+                                          | N_Simple_Return_Statement);
+
       --  Only perform checks on record types with access discriminants and
-      --  non-internally generated functions.
+      --  functions present in the source.
 
       if not Is_Record_Type (R_Type)
         or else not Has_Anonymous_Access_Discriminant (R_Type)
-        or else not Comes_From_Source (Return_Stmt)
+        or else not Comes_From_Source (Scope_Id)
       then
          return;
       end if;
 
-      --  We are only interested in return statements
-
-      if Nkind (Return_Stmt) not in
-           N_Extended_Return_Statement | N_Simple_Return_Statement
-      then
-         return;
-      end if;
-
-      --  Fetch the object from the return statement, in the case of a
+      --  Fetch the object from the original return statement, in the case of a
       --  simple return statement the expression is part of the node.
 
-      if Nkind (Return_Stmt) = N_Extended_Return_Statement then
+      if Nkind (Original_Node (Return_Stmt)) = N_Extended_Return_Statement then
          --  Obtain the object definition from the expanded extended return
 
-         Return_Con := First (Return_Object_Declarations (Return_Stmt));
+         Return_Con :=
+           First (Return_Object_Declarations (Original_Node (Return_Stmt)));
          while Present (Return_Con) loop
             --  Inspect the original node to avoid object declarations
             --  expanded into renamings.
 
             if Nkind (Original_Node (Return_Con)) = N_Object_Declaration
-              and then Comes_From_Source (Original_Node (Return_Con))
+              and then
+                (Comes_From_Source (Original_Node (Return_Con))
+                  or else
+                    Is_Return_Object
+                      (Defining_Identifier (Original_Node (Return_Con))))
             then
                exit;
             end if;
@@ -1798,16 +1887,14 @@ package body Accessibility is
 
          pragma Assert (Present (Return_Con));
 
-         --  Could be dealing with a renaming
-
          Return_Con := Original_Node (Return_Con);
+
       else
-         Return_Con := Expression (Return_Stmt);
+         Return_Con := Expression (Original_Node (Return_Stmt));
       end if;
 
       --  Obtain the accessibility levels of the expressions associated
-      --  with all anonymous access discriminants, then generate a
-      --  dynamic check or static error when relevant.
+      --  with anonymous access discriminants and apply a static check.
 
       --  Note the repeated use of Original_Node to avoid checking
       --  expanded code.
@@ -1817,10 +1904,10 @@ package body Accessibility is
       --  Get the corresponding declaration based on the return object's
       --  identifier.
 
-      if Nkind (Unqual) = N_Identifier
-        and then Nkind (Parent (Entity (Unqual)))
-                   in N_Object_Declaration
-                    | N_Object_Renaming_Declaration
+      if Is_Entity_Name (Unqual)
+        and then
+          Nkind (Parent (Entity (Unqual))) in N_Object_Declaration
+                                            | N_Object_Renaming_Declaration
       then
          Obj_Decl := Original_Node (Parent (Entity (Unqual)));
 
@@ -1835,17 +1922,13 @@ package body Accessibility is
 
       else
          Obj_Decl := Empty;
-
       end if;
 
       --  Hop up object renamings when present
 
-      if Present (Obj_Decl)
-        and then Nkind (Obj_Decl) = N_Object_Renaming_Declaration
-      then
+      if Present (Obj_Decl) then
          while Nkind (Obj_Decl) = N_Object_Renaming_Declaration loop
-
-            if Nkind (Name (Obj_Decl)) not in N_Entity then
+            if not Is_Entity_Name (Name (Obj_Decl)) then
                --  We may be looking at the expansion of iterators or
                --  some other internally generated construct, so it is safe
                --  to ignore checks ???
@@ -1862,7 +1945,7 @@ package body Accessibility is
 
             else
                Obj_Decl := Original_Node
-                             (Declaration_Node (Name (Obj_Decl)));
+                             (Declaration_Node (Entity (Name (Obj_Decl))));
             end if;
          end loop;
       end if;
@@ -1877,6 +1960,18 @@ package body Accessibility is
          else
             Assoc := First (Component_Associations (Unqual));
          end if;
+
+      --  Apply the RM 3.10.2(12.4) rule to formal parameters
+
+      elsif Is_Entity_Name (Unqual) and then Is_Formal (Entity (Unqual)) then
+         if Static_Accessibility_Level
+              (Unqual, Zero_On_Dynamic_Level, In_Return_Context => True)
+                > Subprogram_Access_Level (Scope_Id)
+         then
+            Accessibility_Error;
+         end if;
+
+         return;
 
       --  There is an object declaration for the return object
 
@@ -2124,9 +2219,7 @@ package body Accessibility is
                (Assoc_Expr, Zero_On_Dynamic_Level, In_Return_Context => True)
                  > Subprogram_Access_Level (Scope_Id)
          then
-            Error_Msg_N
-              ("level of type of access discriminant value of return object"
-               & " is statically too deep", Return_Stmt);
+            Accessibility_Error;
          end if;
 
          --  Iterate over the discriminants, except when we have encountered

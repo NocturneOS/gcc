@@ -1030,6 +1030,10 @@ static const attribute_spec riscv_gnu_attributes[] =
     standard vector calling convention variant.  Syntax:
     __attribute__((norelax)). */
   {"norelax", 0, 0, true, false, false, false, NULL, NULL},
+  /* Marks functions that may return indirectly.  With Zicfilp, the compiler
+     inserts a landing-pad after calls to such functions.  Syntax:
+     __attribute__ ((indirect_return)).  */
+  {"indirect_return", 0, 0, false, true, true, true, NULL, NULL},
 };
 
 static const scoped_attribute_specs riscv_gnu_attribute_table  =
@@ -8076,6 +8080,29 @@ riscv_legitimize_call_address (rtx addr)
   return addr;
 }
 
+/* Return true if a Zicfilp landing-pad must follow a call to ADDR.
+   Indirect calls to returns_twice or indirect_return functions are not
+   covered.  */
+
+bool
+riscv_call_needs_lpad_p (rtx addr)
+{
+  if (!is_zicfilp_p () || GET_CODE (addr) != SYMBOL_REF)
+    return false;
+
+  tree decl = SYMBOL_REF_DECL (addr);
+  if (!decl || TREE_CODE (decl) != FUNCTION_DECL)
+    return false;
+
+  /* Use setjmp_call_p to cover both ECF_RETURNS_TWICE builtins (e.g.  the
+     C-library setjmp) and explicit __attribute__ ((returns_twice)).  */
+  if (setjmp_call_p (decl))
+    return true;
+
+  tree fntype = TREE_TYPE (decl);
+  return lookup_attribute ("indirect_return", TYPE_ATTRIBUTES (fntype)) != NULL;
+}
+
 /* Print symbolic operand OP, which is part of a HIGH or LO_SUM
    in context CONTEXT.  HI_RELOC indicates a high-part reloc.  */
 
@@ -11190,6 +11217,43 @@ riscv_hard_regno_nregs (unsigned int regno, machine_mode mode)
   return (GET_MODE_SIZE (mode).to_constant () + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
 }
 
+/* Return true if REGNO in MODE can be used as source in a widening
+   instruction with destination WIDE_REGNO in WIDE_MODE.
+   This is true if either there is no overlap at all, or the overlap
+   is in the highest-numbered part of the destination group.  */
+
+bool
+riscv_widen_overlap_ok (unsigned int regno, machine_mode mode,
+			unsigned int wide_regno, machine_mode wide_mode)
+{
+  /* If the referenced regno is no hard reg, allow everything.  */
+  if (wide_regno == INVALID_REGNUM)
+    return true;
+
+  if (!V_REG_P (regno) || !V_REG_P (wide_regno))
+    return false;
+
+  gcc_checking_assert (riscv_vector_mode_p (mode)
+		       && riscv_vector_mode_p (wide_mode));
+
+  unsigned int wide_nregs = riscv_hard_regno_nregs (wide_regno, wide_mode);
+  unsigned int nregs = riscv_hard_regno_nregs (regno, mode);
+
+  /* Overlap is only allowed in the highest-numbered part of the wider
+     destination.  */
+  if (regno == wide_regno)
+    return false;
+
+  if (regno >= wide_regno + (wide_nregs - nregs))
+    return true;
+
+  /* No overlap is OK.  */
+  if (regno < wide_regno)
+    return true;
+
+  return false;
+}
+
 /* Implement TARGET_HARD_REGNO_MODE_OK.  */
 
 static bool
@@ -11807,7 +11871,10 @@ riscv_output_mi_thunk (FILE *file, tree thunk_fndecl ATTRIBUTE_UNUSED,
   emit_note (NOTE_INSN_PROLOGUE_END);
 
   if (is_zicfilp_p ())
-    emit_insn (gen_lpad (const0_rtx));
+    {
+      emit_insn (gen_lpad_align ());
+      emit_insn (gen_lpad (const0_rtx));
+    }
 
   /* Determine if we can use a sibcall to call FUNCTION directly.  */
   fnaddr = gen_rtx_MEM (FUNCTION_MODE, XEXP (DECL_RTL (function), 0));
@@ -14035,6 +14102,7 @@ riscv_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
       return fp ? common_costs->fp_stmt_cost : common_costs->int_stmt_cost;
 
     case vec_construct:
+    case vec_deconstruct:
 	{
 	  /* TODO: This is too pessimistic in case we can splat.  */
 	  int regmove_cost = fp ? get_fr2vr_cost () : get_gr2vr_cost ();
@@ -16352,6 +16420,9 @@ riscv_memtag_tag_bitsize ()
 #define TARGET_FUNCTION_ARG_BOUNDARY riscv_function_arg_boundary
 #undef TARGET_FNTYPE_ABI
 #define TARGET_FNTYPE_ABI riscv_fntype_abi
+
+# undef  TARGET_SETJMP_PRESERVES_NONVOLATILE_REGS_P
+# define TARGET_SETJMP_PRESERVES_NONVOLATILE_REGS_P hook_bool_void_true
 
 #undef TARGET_SHRINK_WRAP_GET_SEPARATE_COMPONENTS
 #define TARGET_SHRINK_WRAP_GET_SEPARATE_COMPONENTS \

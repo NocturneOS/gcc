@@ -13997,7 +13997,16 @@ modified_type_die (tree type, int cv_quals, tree type_attrs, bool reverse,
       tree dtype = TREE_TYPE (name);
 
       /* Skip the typedef for base types with DW_AT_endianity, no big deal.  */
-      if (qualified_type == dtype && !reverse_type)
+      if (!reverse_type
+	  && (qualified_type == dtype
+	      /* Pointer identity check above might fail when qualified_type
+		 is a different variant node of the same typedef yet requires
+		 the same handling as if they matched (see PR/125421).
+		 Skip this when btf_type_tag attributes are present, as those
+		 need to be handled in the else branch below.  */
+	      || (TYPE_NAME (qualified_type) == name
+		  && TYPE_QUALS (qualified_type) == TYPE_QUALS (dtype)
+		  && !lookup_attribute ("btf_type_tag", type_attrs))))
 	{
 	  tree origin = decl_ultimate_origin (name);
 
@@ -14009,8 +14018,8 @@ modified_type_die (tree type, int cv_quals, tree type_attrs, bool reverse,
 				      reverse, context_die);
 
 	  /* For a named type, use the typedef.  */
-	  gen_type_die (qualified_type, context_die);
-	  return lookup_type_die (qualified_type);
+	  gen_type_die (dtype, context_die);
+	  return lookup_type_die (dtype);
 	}
       else
 	{
@@ -25640,6 +25649,8 @@ static char *producer_string;
 static const char *
 highest_c_language (const char *lang1, const char *lang2)
 {
+  if (strcmp ("GNU C++29", lang1) == 0 || strcmp ("GNU C++29", lang2) == 0)
+    return "GNU C++29";
   if (strcmp ("GNU C++26", lang1) == 0 || strcmp ("GNU C++26", lang2) == 0)
     return "GNU C++26";
   if (strcmp ("GNU C++23", lang1) == 0 || strcmp ("GNU C++23", lang2) == 0)
@@ -25794,7 +25805,13 @@ gen_compile_unit_die (const char *filename)
 	    {
 	      language = DW_LANG_C_plus_plus_14;
 	      lname = DW_LNAME_C_plus_plus;
-	      lversion = 202400;
+	      lversion = 202603;
+	    }
+	  else if (strcmp (language_string, "GNU C++29") == 0)
+	    {
+	      language = DW_LANG_C_plus_plus_14;
+	      lname = DW_LNAME_C_plus_plus;
+	      lversion = 202700;
 	    }
 	}
     }

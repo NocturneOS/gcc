@@ -1528,7 +1528,7 @@ aarch64_min_divisions_for_recip_mul (machine_mode mode)
 
 /* Return the reassociation width of treeop OPC with mode MODE.  */
 static int
-aarch64_reassociation_width (unsigned opc, machine_mode mode)
+aarch64_reassociation_width (tree_code opc, machine_mode mode)
 {
   if (VECTOR_MODE_P (mode))
     return aarch64_tune_params.vec_reassoc_width;
@@ -17766,6 +17766,7 @@ aarch64_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
 		  : simd_costs->int_stmt_cost;
 
       case vec_construct:
+      case vec_deconstruct:
 	elements = estimated_poly_value (TYPE_VECTOR_SUBPARTS (vectype));
 	return elements / 2 + 1;
 
@@ -18383,6 +18384,7 @@ aarch64_vector_costs::count_ops (unsigned int count, vect_cost_for_stmt kind,
     case vec_perm:
     case vec_promote_demote:
     case vec_construct:
+    case vec_deconstruct:
     case vec_to_scalar:
     case scalar_to_vec:
     case vector_stmt:
@@ -24732,6 +24734,12 @@ aarch64_simd_valid_imm (rtx op, simd_immediate_info *info,
 	info->width = output_width;
       return true;
     }
+
+  /* A constant with zero high 64 bits (output_width == 64) must be formed
+     by a 64-bit Advanced SIMD MOVI/FMOV; it must not fall through to the
+     SVE forms below, which replicate it across the whole vector.  */
+  if (output_width != 0)
+    return false;
 
   if (TARGET_SVE)
     return aarch64_sve_valid_immediate (ival, imode, info, which);

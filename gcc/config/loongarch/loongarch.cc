@@ -4547,6 +4547,7 @@ loongarch_builtin_vectorization_cost (enum vect_cost_for_stmt type_of_cost,
 	return 2;
 
       case vec_construct:
+      case vec_deconstruct:
 	elements = TYPE_VECTOR_SUBPARTS (vectype);
 	if (LASX_SUPPORTED_MODE_P (mode) && !LSX_SUPPORTED_MODE_P (mode))
 	  return elements / 2 + 3;
@@ -9998,11 +9999,8 @@ loongarch_vectorize_vec_perm_const (machine_mode vmode, machine_mode op_mode,
 
 static int
 loongarch_cpu_sched_reassociation_width (struct loongarch_target *target,
-					 unsigned int opc, machine_mode mode)
+					 tree_code opc, machine_mode mode)
 {
-  /* unreferenced argument */
-  (void) opc;
-
   switch (target->cpu_tune)
     {
     case TUNE_GENERIC:

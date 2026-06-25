@@ -1,3 +1,36 @@
+2026-06-20  Robert Dubner  <rdubner@symas.com>
+
+	* charmaps.cc: Eliminate rt_encoding_t.
+	* libgcobol.cc (console_init): Change how __gg__console_encoding is
+	established.
+	(initialize_program_state): Likewise.
+	(get_binary_value_local): Use new conversion algorithms.
+	(__gg__move): Likewise.
+	* stringbin.cc (__gg__numeric_display_to_binary):  Likewise.
+	(digit_rt): Likewise.
+	(num_disp_dive_rt): Likewise.
+	(pd_dive_rt): Likewise.
+	(__gg__packed_to_binary): Likewise.
+	* stringbin.h (STRINGBIN_H_): Declaration for __gg__dp2bin.
+	(__gg__numeric_display_to_binary): Use new algorithms.
+	(__gg__packed_to_binary): Likewise.
+
+2026-06-16  Robert Dubner  <rdubner@symas.com>
+
+	* gmath.cc (multiply_int256_by_int64): Comment.
+	(int256_as_decimal): Handle negative values.
+	(__gg__dividef45): Repair remainder logic when numeric-display
+	parameters are negative.
+
+2026-06-16  James K. Lowden  <jklowden@cobolworx.com>
+
+	* posix/shim/open.cc (defined): Honor _GNU_SOURCE and _POSIX_C_SOURCE.
+
+2026-06-14  Robert Dubner  <rdubner@symas.com>
+
+	* libgcobol.cc (int128_to_field): Set packed-decimal sign nybble to
+	"positive" when value is zero.
+
 2026-06-11  Robert Dubner  <rdubner@symas.com>
 
 	* intrinsic.cc (__gg__char_national): New function.

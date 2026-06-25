@@ -1967,6 +1967,20 @@ static bool first_len;
 static tree first_len_val;
 static bool typespec_chararray_ctor;
 
+/* Return true if DER has any CLASS allocatable component.  Such components
+   are initialised by VIEW_CONVERT in structure constructors (a bitwise copy
+   of the class descriptor), so their _data pointer may refer to a non-heap
+   object and must not be passed to gfc_deallocate_alloc_comp_no_caf.  */
+
+static bool
+has_class_alloc_comp (gfc_symbol *der)
+{
+  for (gfc_component *c = der->components; c; c = c->next)
+    if (c->ts.type == BT_CLASS && !c->attr.pointer)
+      return true;
+  return false;
+}
+
 static void
 gfc_trans_array_ctor_element (stmtblock_t * pblock, tree desc,
 			      tree offset, gfc_se * se, gfc_expr * expr)
@@ -1978,12 +1992,15 @@ gfc_trans_array_ctor_element (stmtblock_t * pblock, tree desc,
   /* Store the value.  */
   tmp = build_fold_indirect_ref_loc (input_location,
 				 gfc_conv_descriptor_data_get (desc));
-  /* The offset may change, so get its value now and use that to free memory.
-   */
+
+  /* The offset may change, so get its value now and use that to free memory.  */
   offset_eval = gfc_evaluate_now (offset, &se->pre);
   tmp = gfc_build_array_ref (tmp, offset_eval, NULL);
 
-  if (expr->expr_type == EXPR_FUNCTION && expr->ts.type == BT_DERIVED
+  if (expr->ts.type == BT_DERIVED
+      && (expr->expr_type == EXPR_FUNCTION
+	  || (expr->expr_type == EXPR_STRUCTURE
+	      && !has_class_alloc_comp (expr->ts.u.derived)))
       && expr->ts.u.derived->attr.alloc_comp)
     gfc_add_expr_to_block (&se->finalblock,
 			   gfc_deallocate_alloc_comp_no_caf (expr->ts.u.derived,
@@ -2143,17 +2160,58 @@ gfc_trans_array_constructor_subarray (stmtblock_t * pblock,
 }
 
 
+/* Return true if every leaf element of an array constructor is a function
+   reference returning derived type DER, which has allocatable components.
+   Such results are moved (shallow-copied) into the constructor temporary, so
+   the temporary owns their allocatable components and they can all be freed
+   in a single sweep over the whole temporary.  Returns false as soon as an
+   element is anything else - notably a variable, whose allocatable components
+   are aliased rather than owned by the temporary and must not be freed.  */
+
+static bool
+gfc_constructor_is_owned_alloc_comp (gfc_constructor_base base,
+				     gfc_symbol *der)
+{
+  gfc_constructor *c;
+
+  if (base == NULL)
+    return false;
+
+  for (c = gfc_constructor_first (base); c; c = gfc_constructor_next (c))
+    {
+      gfc_expr *e = c->expr;
+      if (e->expr_type == EXPR_ARRAY)
+	{
+	  if (!gfc_constructor_is_owned_alloc_comp (e->value.constructor, der))
+	    return false;
+	}
+      else if (!(e->ts.type == BT_DERIVED
+		 && (e->expr_type == EXPR_FUNCTION
+		     || (e->expr_type == EXPR_STRUCTURE
+			 && !has_class_alloc_comp (e->ts.u.derived)))
+		 && e->ts.u.derived == der))
+	return false;
+    }
+  return true;
+}
+
+
 /* Assign the values to the elements of an array constructor.  DYNAMIC
    is true if descriptor DESC only contains enough data for the static
    size calculated by gfc_get_array_constructor_size.  When true, memory
-   for the dynamic parts must be allocated using realloc.  */
+   for the dynamic parts must be allocated using realloc.  OWNED_SWEEP is
+   true when the caller will free the allocatable components of every
+   constructor element in one sweep over the whole temporary; in that case
+   the per-element finalization built here is suppressed to avoid a double
+   free.  */
 
 static void
 gfc_trans_array_constructor_value (stmtblock_t * pblock,
 				   stmtblock_t * finalblock,
 				   tree type, tree desc,
 				   gfc_constructor_base base, tree * poffset,
-				   tree * offsetvar, bool dynamic)
+				   tree * offsetvar, bool dynamic,
+				   bool owned_sweep)
 {
   tree tmp;
   tree start = NULL_TREE;
@@ -2221,7 +2279,8 @@ gfc_trans_array_constructor_value (stmtblock_t * pblock,
 	  /* Array constructors can be nested.  */
 	  gfc_trans_array_constructor_value (&body, finalblock, type,
 					     desc, c->expr->value.constructor,
-					     poffset, offsetvar, dynamic);
+					     poffset, offsetvar, dynamic,
+					     owned_sweep);
 	}
       else if (c->expr->rank > 0)
 	{
@@ -2257,7 +2316,11 @@ gfc_trans_array_constructor_value (stmtblock_t * pblock,
 	      *poffset = fold_build2_loc (input_location, PLUS_EXPR,
 					  gfc_array_index_type,
 					  *poffset, gfc_index_one_node);
-	      if (finalblock)
+	      /* Unless the whole temporary is being swept by the caller, add
+		 the per-element finalization.  The sweep is used when every
+		 element is an owned function result, which is the only way to
+		 correctly free elements produced inside an implied-do loop.  */
+	      if (finalblock && !owned_sweep)
 		gfc_add_block_to_block (finalblock, &se.finalblock);
 	    }
 	  else
@@ -2910,6 +2973,7 @@ trans_array_constructor (gfc_ss * ss, locus * where)
   char *msg;
   stmtblock_t finalblock;
   bool finalize_required;
+  bool owned_sweep = false;
 
   /* Save the old values for nested checking.  */
   old_first_len = first_len;
@@ -3095,10 +3159,25 @@ trans_array_constructor (gfc_ss * ss, locus * where)
   if (IS_PDT (expr))
    finalize_required = true;
 
+  /* If every element of the constructor is a function result with allocatable
+     components, those components are owned by the temporary and are freed in a
+     single sweep over the whole array below.  This is the only way to free the
+     elements produced inside an implied-do loop, where a single compile-time
+     element stands for many runtime elements.  */
+  owned_sweep = finalize_required
+    && expr->ts.type == BT_DERIVED
+    && expr->ts.u.derived->attr.alloc_comp
+    && gfc_constructor_is_owned_alloc_comp (c, expr->ts.u.derived);
+
   gfc_trans_array_constructor_value (&outer_loop->pre,
 				     finalize_required ? &finalblock : NULL,
 				     type, desc, c, &offset, &offsetvar,
-				     dynamic);
+				     dynamic, owned_sweep);
+
+  if (owned_sweep)
+    gfc_add_expr_to_block (&finalblock,
+			   gfc_deallocate_alloc_comp_no_caf (expr->ts.u.derived,
+							     desc, 1, true));
 
   /* If the array grows dynamically, the upper bound of the loop variable
      is determined by the array's final upper bound.  */
@@ -4414,7 +4493,18 @@ build_array_ref (tree desc, tree offset, tree decl, tree vptr)
       type = TREE_TYPE (TREE_OPERAND (cdesc, 0));
       if (TYPE_CANONICAL (type)
 	  && GFC_CLASS_TYPE_P (TYPE_CANONICAL (type)))
-	vptr = gfc_class_vptr_get (TREE_OPERAND (cdesc, 0));
+	{
+	  vptr = gfc_class_vptr_get (TREE_OPERAND (cdesc, 0));
+	  /* Pass the class container as decl so that gfc_build_array_ref can
+	     correct the element size for an unlimited polymorphic character
+	     payload (the _len field), which the vptr size alone omits.  Only do
+	     this for a genuine array element reference; a scalar coarray has
+	     nothing to span-correct and gfc_build_array_ref asserts decl is null
+	     for it.  */
+	  if (decl == NULL_TREE
+	      && GFC_TYPE_ARRAY_RANK (TREE_TYPE (cdesc)) > 0)
+	    decl = TREE_OPERAND (cdesc, 0);
+	}
     }
 
   tmp = gfc_conv_array_data (desc);

@@ -1475,8 +1475,8 @@ copy_tree_body_r (tree *tp, int *walk_subtrees, void *data)
 	      for (int i = 0; i <= 4; i++)
 		walk_tree (&TREE_VEC_ELT (TREE_PURPOSE (t), i),
 			   copy_tree_body_r, id, NULL);
-	      if (TREE_VEC_ELT (TREE_PURPOSE (t), 5))
-		remap_block (&TREE_VEC_ELT (TREE_PURPOSE (t), 5), id);
+	      if (OMP_ITERATOR_BLOCK (TREE_PURPOSE (t)))
+		remap_block (&OMP_ITERATOR_BLOCK (TREE_PURPOSE (t)), id);
 	      walk_tree (&TREE_VALUE (t), copy_tree_body_r, id, NULL);
 	    }
 	}
@@ -3760,9 +3760,11 @@ initialize_inlined_parameters (copy_body_data *id, gimple *stmt,
   gcc_assert (fn != current_function_decl);
   if (p)
     {
-      /* No static chain?  Seems like a bug in tree-nested.cc.  */
-      gcc_assert (static_chain);
-
+      /* Calling a function that requires a static chain directly
+	 without setting up the static chain has undefined behavior
+	 at run-time.  */
+      if (!static_chain)
+	static_chain = null_pointer_node;
       setup_one_parameter (id, p, static_chain, fn, bb, &vars);
     }
 

@@ -1,3 +1,741 @@
+2026-06-24  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* gcc.dg/autopar/runtime-auto.c: Adjust.
+
+2026-06-24  Oleg Tolmatcev  <oleg.tolmatcev@gmail.com>
+
+	* gcc.target/i386/prfchw-Wcast-qual-1.c: New test.
+
+2026-06-24  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/125910
+	* gcc.dg/pr125910.c: New.
+
+2026-06-24  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125761
+	* gfortran.dg/select_type_53.f90: New test.
+
+2026-06-24  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125939
+	* g++.dg/reflect/type_trait15.C: New test.
+
+2026-06-24  Vineet Gupta  <vineet.gupta@linux.dev>
+
+	PR debug/125421
+	* gcc.dg/debug/dwarf2/pr125421.c: New Test.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* c-c++-common/gomp/atomic-builtins-1.c: New test.
+	* c-c++-common/gomp/reduction-builtins-1.c: New test.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* g++.dg/gomp/barrier-1.C: Update scan dump.
+	* g++.dg/gomp/tpl-barrier-1.C: Likewise.
+	* gcc.dg/gomp/barrier-1.c: Likewise.
+	* c-c++-common/gomp/implicit-barrier-1.c: New test.
+	* gfortran.dg/gomp/lastprivate-allocatable-barrier-1.f90: New test.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* c-c++-common/gomp/for-8.c: New test.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* c-c++-common/gomp/masked-1.c: Add scan directives verifying that
+	GOMP_has_masked_thread_num is emitted and omp_get_thread_num is not.
+	* g++.dg/gomp/master-3.C: Update scan-tree-dump-times to look for
+	GOMP_has_masked_thread_num instead of omp_get_thread_num.
+	* gcc.dg/gomp/master-3.c: Likewise.
+	* gfortran.dg/gomp/masked-1.f90: Add scan directive for
+	GOMP_has_masked_thread_num.
+
+2026-06-24  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/110743
+	* gcc.dg/uninit-pr110743-2.c: New testcase.
+
+2026-06-24  Jeevitha Palanisamy  <jeevitha@linux.ibm.com>
+
+	* gcc.target/powerpc/vsx_arith_builtin-1.c: New test.
+	* gcc.target/powerpc/vsx_arith_builtin-2.c: Likewise.
+	* gcc.target/powerpc/vsx_arith_builtin-3.c: Likewise.
+	* gcc.target/powerpc/vsx_arith_builtin-4.c: Likewise.
+	* gcc.target/powerpc/vsx_arith_vect_1.c: Likewise.
+	* gcc.target/powerpc/vsx_arith_vect_2.c: Likewise.
+
+2026-06-24  Christopher Bazley  <chris.bazley@arm.com>
+
+	* gcc.target/aarch64/sve/slp_stack.c: New test.
+
+2026-06-24  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/125958
+	* gcc.target/i386/pr125958.c: New test.
+
+2026-06-24  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* gcc.dg/vect/pr125567.c: Require vect_hw_misalign.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125334
+	* g++.dg/modules/adl-12_b.C: Check for lazy loading.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125768
+	* g++.dg/modules/alias-3_a.C: New test.
+	* g++.dg/modules/alias-3_b.C: New test.
+	* g++.dg/modules/alias-3_c.C: New test.
+
+2026-06-23  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/121972
+	* gfortran.dg/class_array_15.f03: Adjust expected free count.
+	* gfortran.dg/derived_constructor_comps_6.f90: Adjust expected free count.
+	* gfortran.dg/asan/structure_constructor_alloc_comp_leak_1.f90: New test.
+
+2026-06-23  Harald Anlauf  <anlauf@gmx.de>
+
+	PR fortran/125902
+	* gfortran.dg/c-prototypes_1.F90: New test.
+
+2026-06-23  Robin Dapp  <robin.dapp@oss.qualcomm.com>
+
+	* gcc.target/riscv/rvv/base/pr112431-4.c: Un-xfail.
+	* gcc.target/riscv/rvv/base/pr112431-5.c: Ditto.
+	* gcc.target/riscv/rvv/base/pr112431-6.c: Ditto.
+
+2026-06-23  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125745
+	* g++.dg/ubsan/vptr-19.C: New test.
+
+2026-06-23  Zhongyao Chen  <chen.zhongyao@zte.com.cn>
+	    Yuke Tang  <tang.yuke@zte.com.cn>
+
+	* gcc.target/riscv/rvv/autovec/zvabd-1.c: New tests for Zvabd.
+
+2026-06-23  Alex Coplan  <alex.coplan@arm.com>
+
+	PR target/125818
+	* gcc.target/aarch64/torture/pr125818.c: New test.
+
+2026-06-23  Sarvesh Chandra  <Sarvesh.Chandra@amd.com>
+	    Ashwin Godbole  <Ashwin.Godbole@amd.com>
+
+	PR target/107057
+	* gcc.target/i386/avx512-movedup.c: New test.
+
+2026-06-23  Paul Thomas  <pault@gcc.gnu.org>
+
+	PR fortran/121972
+	* gfortran.dg/pdt_77.f03: Add 'finalalize_navier_stokes', which
+	tests that the 'navier_stokes' component 'p' is pointed to the
+	correct vtable in both tests. Check that VIEW_CONVERT_EXPR does
+	not appear in the tree dump.
+
+2026-06-23  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/125893
+	* gcc.target/i386/pr125893-1.c: New test.
+	* gcc.target/i386/pr125893-2.c: Likewise.
+	* gcc.target/i386/pr125893-3.c: Likewise.
+	* gcc.target/i386/pr125893-4.c: Likewise.
+	* gcc.target/i386/pr125893-5.c: Likewise.
+	* gcc.target/i386/pr125893-6.c: Likewise.
+	* gcc.target/i386/pr125893-7.c: Likewise.
+	* gcc.target/i386/pr125893-8.c: Likewise.
+	* gcc.target/i386/pr125893-9.c: Likewise.
+	* gcc.target/i386/pr125893-10.c: Likewise.
+	* gcc.target/i386/pr125893-11.c: Likewise.
+
+2026-06-23  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/110743
+	* gcc.dg/uninit-pr110743.c: New testcase.
+
+2026-06-23  Hu, Lin1  <lin1.hu@intel.com>
+
+	* gcc.target/i386/vect-cbranch-cond-any-128.c: New test.
+	* gcc.target/i386/vect-cbranch-cond-any-256.c: Ditto.
+	* gcc.target/i386/vect-cbranch-cond-any-run.c: Ditto.
+	* gcc.target/i386/vect-cbranch-cond-all-128.c: Ditto.
+	* gcc.target/i386/vect-cbranch-cond-all-256.c: Ditto.
+	* gcc.target/i386/vect-cbranch-cond-all-run.c: Ditto.
+
+2026-06-23  Xin Liu  <liulxx@hygon.cn>
+
+	* g++.target/i386/mv33.C: Add c86-4g-m8 target clone test.
+	* gcc.target/i386/funcspec-56.inc: Add c86-4g-m8 arch and tune
+	target attribute tests.
+
+2026-06-22  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125697
+	* g++.dg/warn/Wrange-loop-construct4.C: New test.
+
+2026-06-22  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125889
+	* g++.dg/reflect/members_of16.C: New test.
+
+2026-06-22  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/125923
+	* gcc.dg/torture/pr125923-1.c: New test.
+
+2026-06-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* c-c++-common/gomp/declare-mapper-2.c: New test.
+	* gfortran.dg/gomp/declare-mapper-8.f90: New test.
+
+2026-06-22  Zhongjie Guo  <guozhongjie@hygon.cn>
+	    Richard Biener  <rguenther@suse.de>
+
+	* gcc.target/i386/vect-compare-cost.c: New test.
+
+2026-06-22  Avinash Jayakar  <avinashd@ibm.com>
+
+	* gcc.dg/spaceship_mixed_variants.c: Split long long arg tests
+	in a different file.
+	* gcc.dg/spaceship_mixed_variants_ll.c: New test.
+
+2026-06-22  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/125895
+	* gcc.target/i386/pr125895.c: New test.
+
+2026-06-22  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	PR fortran/125914
+	* gfortran.dg/power_6.f90: Remove scans for powi.
+	* gfortran.dg/power_10.f90: New test.
+
+2026-06-22  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/118774
+	* gfortran.dg/fmt_t_10.f90: Adjust the test case results
+	check.
+
+2026-06-22  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/sat/sat_arith.h: Add test helper macros
+	* gcc.target/riscv/sat/sat_u_mul-14-u16-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u16-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u16-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u16-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u32-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u32-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u32-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u64-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u8-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u8-from-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u8-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u8-from-u64.rv32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-14-u8-from-u64.rv64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u16-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u16-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u16-from-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u32-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u32-from-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u64-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u8-from-u128.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u8-from-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u8-from-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-14-u8-from-u64.c: New test.
+
+2026-06-22  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR libfortran/114618
+	* gfortran.dg/pr114618.f90: Move to...
+	* gfortran.dg/fmt_t_10.f90: ...here.
+	* gfortran.dg/fmt_t_11.f90: New test.
+
+2026-06-21  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125408
+	* g++.dg/cpp2a/lambda-targ34.C: New test.
+
+2026-06-21  Jason Merrill  <jason@redhat.com>
+
+	PR c++/125408
+	* g++.dg/cpp2a/lambda-targ33.C: New test.
+
+2026-06-21  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* lib/target-supports.exp: Add a check for Mach-O object file
+	format.
+
+2026-06-21  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/125883
+	* gcc.target/i386/pr125883.c: New test.
+
+2026-06-21  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/82086
+	* gfortran.dg/namelist_103.f90: New test.
+
+2026-06-20  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* gcc.dg/debug/dwarf2/dwarf2-macro.c: Skip for Darwin23+.
+	* gcc.dg/debug/dwarf2/dwarf2-macro2.c: Likewise.
+
+2026-06-20  Iain Sandoe  <iain@sandoe.co.uk>
+
+	PR testsuite/112728
+	* lib/scanasm.exp (remove_lto_sections): New.
+
+2026-06-20  Tamar Christina  <tamar.christina@arm.com>
+
+	PR testsuite/125871
+	* gcc.dg/vect/vect-early-break_144-pr125804.c: New test.
+
+2026-06-19  Kees Cook  <kees@kernel.org>
+
+	PR c/125604
+	* gcc.dg/counted-by-unary.c: New test.
+
+2026-06-19  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/125857
+	* gcc.dg/pr125857-1.c: New test.
+
+2026-06-19  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/122193
+	* gcc.dg/tree-ssa/factor_op_phi-load-offsets-1.c: New test.
+	* gcc.dg/tree-ssa/factor_op_phi-load-offsets-2.c: New test.
+	* gcc.dg/tree-ssa/factor_op_phi-load-offsets-3.c: New test.
+
+2026-06-19  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	* gcc.dg/tree-ssa/factor_op_phi-load-stores-1.c: New test.
+
+2026-06-19  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+	    Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	PR tree-optimization/125557
+	* gcc.dg/tree-ssa/scc-diamond-1.c: New test.
+	* gcc.dg/tree-ssa/scc-diamond-3.c: New test.
+	* gcc.dg/tree-ssa/scc-diamond-4.c: New test.
+	* gcc.target/aarch64/scc-diamond-2.c: New test.
+
+2026-06-19  Eric Botcazou  <ebotcazou@adacore.com>
+
+	* gnat.dg/opt108.adb: New test.
+	* gnat.dg/opt108_pkg.ads, gnat.dg/opt108_pkg.adb: New helper.
+
+2026-06-19  Kael Andrew Franco  <kaelfandrew@gmail.com>
+
+	PR tree-optimization/125641
+	PR tree-optimization/125641
+	* gcc.dg/pr125641.c: New test.
+
+2026-06-18  Milan Tripkovic  <Milan.Tripkovic@rt-rk.com>
+
+	PR target/125405
+	* gcc.dg/pr125405-bitint.c: New test.
+	* gcc.dg/tree-ssa/pr125405.c: New test.
+	* gcc.target/riscv/pr125405.c: New test.
+
+2026-06-18  Jeff Law  <jeffrey.law@oss.qualcomm.com>
+
+	* gcc.target/riscv/test-equal.c: New test.
+
+2026-06-18  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125535
+	* gfortran.dg/asan/implied_do_alloc_comp_leak_1.f90: New test.
+
+2026-06-18  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	PR fortran/30438
+	* gfortran.dg/warn_unused_but_set_variable_2.f90: New test.
+
+2026-06-18  Richard Sandiford  <rdsandiford@googlemail.com>
+
+	PR tree-optimization/125872
+	* gcc.dg/torture/pr125872.c: New test.
+
+2026-06-18  Andrew MacLeod  <amacleod@redhat.com>
+
+	PR tree-optimization/125854
+	* g++.dg/pr125854.C: New.
+
+2026-06-18  Martin Jambor  <mjambor@suse.cz>
+
+	PR ipa/124128
+	* gcc.dg/ipa/pr124128.c: New test.
+
+2026-06-17  Robert Dubner  <rdubner@symas.com>
+
+	* cobol.dg/group2/258_Nested_PERFORM.cob: Removed.
+	* cobol.dg/group2/258_Nested_PERFORM.out: Removed.
+	* cobol.dg/group2/259_PERFORM_VARYING_BY_-0.2.cob: Removed.
+	* cobol.dg/group2/259_PERFORM_VARYING_BY_-0.2.out: Removed.
+	* cobol.dg/group2/338_Default_Arithmetic__1_.cob: Removed.
+	* cobol.dg/group2/338_Default_Arithmetic__1_.out: Removed.
+	* cobol.dg/group2/Complex_HEX__VALUE_and_MOVE.cob: Removed.
+	* cobol.dg/group2/Complex_HEX__VALUE_and_MOVE.out: Removed.
+	* cobol.dg/group2/Intrinsics_without_FUNCTION_keyword__2_.cob: Removed.
+	* cobol.dg/group2/MOVE_to_JUSTIFIED_item.cob: Removed.
+	* cobol.dg/group2/MOVE_to_JUSTIFIED_item.out: Removed.
+	* cobol.dg/group2/SORT__table_sort__2_.cob: Removed.
+	* cobol.dg/group2/SORT__table_sort__2_.out: Removed.
+	* cobol.dg/group2/_-static__compilation.cob: Removed.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125764
+	* g++.dg/reflect/can_substitute3.C: New test.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125759
+	* g++.dg/reflect/expr17.C: New test.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125492
+	* g++.dg/reflect/size_of2.C: New test.
+
+2026-06-17  Wang Jinghao  <zheng.xianyuwang@gmail.com>
+
+	* g++.dg/reflect/is_explicit_object_parameter2.C: New test.
+
+2026-06-17  Antoni Boucher  <bouanto@zoho.com>
+	    Robert Zakrzewski  <robert.zakrzewski1@stellantis.com>
+
+	* jit.dg/test-reflection.c: Add test for
+	gcc_jit_type_is_floating_point.
+
+2026-06-17  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125613
+	* g++.dg/cpp0x/explicit-inst2.C: New test.
+
+2026-06-17  Robert Zakrzewski  <robert.zakrzewski1@stellantis.com>
+	    Antoni Boucher  <bouanto@zoho.com>
+
+	* jit.dg/all-non-failing-tests.h: Mention new test.
+	* jit.dg/test-comparison.c: New test.
+
+2026-06-17  Robert Zakrzewski  <robert.zakrzewski1@stellantis.com>
+	    Antoni Boucher  <bouanto@zoho.com>
+
+	* jit.dg/test-types.c: Add vector type comparison in test.
+
+2026-06-17  Tamar Christina  <tamar.christina@arm.com>
+
+	PR tree-optimization/125804
+	* gcc.dg/vect/vect-early-break_144-pr125804.c: New test.
+
+2026-06-17  Tobias Burnus  <tburnus@baylibre.com>
+
+	* gfortran.dg/gomp/declare-reduction-2.f90: Update dg-error.
+	* gfortran.dg/gomp/udr1.f90: Likewise.
+	* gfortran.dg/gomp/udr2.f90: Likewise.
+	* gfortran.dg/gomp/udr3.f90: Likewise.
+	* gfortran.dg/gomp/udr4.f90: Likewise.
+	* gfortran.dg/gomp/declare-reduction-5.f90: New test.
+
+2026-06-17  Zhongjie Guo  <guozhongjie@hygon.cn>
+
+	* gcc.target/i386/c86-4g-m7-vect-load-cost-reduc.c: New test.
+
+2026-06-17  Robin Dapp  <rdapp.gcc@gmail.com>
+
+	PR target/125478
+	* gcc.target/riscv/rvv/autovec/pr125478.c: New test.
+
+2026-06-17  Jeff Law  <jeffrey.law@oss.qualcomm.com>
+
+	Revert:
+	2026-06-17  Jim Tsung-Chun Lin  <jim@andestech.com>
+
+	* gcc.target/riscv/multilib.exp: New test.
+
+2026-06-17  Jeff Law  <jeffrey.law@oss.qualcomm.com>
+
+	* gcc.target/riscv/pr120811.c: Add missing escapes and xfail.
+
+2026-06-17  Andrew MacLeod  <amacleod@redhat.com>
+
+	* gcc.c-torture/execute/builtins/memcpy-chk.c: Adjust.
+	* gcc.c-torture/execute/builtins/memmove-chk.c: Adjust.
+	* gcc.dg/builtin-object-size-4.c: XFAIL until pr123160 is fixed.
+	* gcc.dg/builtin-dynamic-object-size-4.c: Likewise.
+	* gcc.misc-tests/gcov-14.c: Add noipa.
+
+2026-06-17  Andrew MacLeod  <amacleod@redhat.com>
+
+	* gcc.dg/Wreturn-local-addr-9.c: Remove xfail.
+	* gcc.c-torture/execute/builtins/strncat-chk.c: Adjust for new
+	prange points_to capabilities.
+
+2026-06-16  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* gcc.target/i386/fabsneg-2.c: Allow for lC* in Mach-O.
+
+2026-06-16  Robert Dubner  <rdubner@symas.com>
+
+	* cobol.dg/group2/DIVIDE_binary-long_giving_remainder.cob: New test.
+	* cobol.dg/group2/DIVIDE_binary-long_giving_remainder.out: New test.
+	* cobol.dg/group2/DIVIDE_numeric-display_giving_remainder.cob: New test.
+	* cobol.dg/group2/DIVIDE_numeric-display_giving_remainder.out: New test.
+	* cobol.dg/group2/GCC_125616_RT3601_-_IBM_incorrect_DISPLAY_of_COMP-1_COMP-2_float.cob:
+	New test.
+	* cobol.dg/group2/PR39_RT3573_-_Parser_issue_w_concat._source_lines.cob: New test.
+
+2026-06-16  Jakub Jelinek  <jakub@redhat.com>
+
+	* g++.dg/cpp26/cplusplus.C: Expect __cplusplus == 202603L.
+	* g++.dg/cpp29/cplusplus.C: New test.
+	* g++.dg/cpp29/feat-cxx29.C: New test.
+	* lib/target-supports.exp (check_effective_target_c++26): Also
+	true for C++29.
+	(check_effective_target_c++26_down, check_effective_target_c++29_only,
+	check_effective_target_c++29): New procedures.
+	* lib/g++-dg.exp (g++-std-flags): Replace 26 with 29 in the list
+	and add 26 to the end.
+
+2026-06-16  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125770
+	* g++.dg/reflect/members_of15.C: New test.
+
+2026-06-16  Marek Polacek  <polacek@redhat.com>
+
+	PR c++/125539
+	* g++.dg/cpp1y/var-templ89.C: New test.
+
+2026-06-16  Robin Dapp  <rdapp.gcc@gmail.com>
+
+	PR tree-optimization/125516
+	* gcc.target/riscv/rvv/autovec/pr125516.c: New test.
+
+2026-06-16  Abhishek Kaushik  <abhishek.kaushik@arm.com>
+
+	* gcc.target/aarch64/sve2/niter-convert-range.c: New test.
+
+2026-06-16  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	* gcc.dg/vect/bb-slp-dep-oracle.c: New test.
+
+2026-06-16  Robin Dapp  <rdapp.gcc@gmail.com>
+
+	PR target/125670
+	* gcc.target/riscv/rvv/autovec/pr125670.c: New test.
+
+2026-06-16  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	PR testsuite/125584
+	* gfortran.dg/coarray/caf.exp: Default GFORTRAN_SHARED_MEMORY_SIZE
+	to 2 MB unless running expensive tests.
+
+2026-06-16  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/125730
+	* gcc.dg/torture/pr125730.c: New testcase.
+
+2026-06-16  Richard Biener  <rguenther@suse.de>
+
+	* gcc.dg/loop-versioning-13.c: XFAIL one transfor for ilp32.
+	* gcc.dg/pr109393.c: Remove XFAIL for ilp32.
+
+2026-06-16  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	PR target/125794
+	* gcc.target/aarch64/sve/pr125794.c: New test.
+
+2026-06-16  Avinash Jayakar  <avinashd@linux.ibm.com>
+
+	PR tree-optimization/59429
+	* lib/target-supports.exp (check_effective_target_spaceship): Add new
+	proc for spaceship optab. x86, aarch64 and s390 included.
+	* gcc.dg/spaceship_int_variants.c: New test.
+	* gcc.dg/spaceship_uint_variants.c: New test.
+	* gcc.dg/spaceship_mixed_variants.c: New test.
+
+2026-06-16  H.J. Lu  <hjl.tools@gmail.com>
+
+	PR target/125614
+	* gcc.target/i386/pr125614.c: New file.
+
+2026-06-16  Zhongyao Chen  <chen.zhongyao@zte.com.cn>
+
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-5-i16.c: Expect vadd.vx,
+	vmul.vx, vsadd.vx and vssub.vx.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-5-i8.c: Likewise.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-6-i16.c: Likewise.
+	* gcc.target/riscv/rvv/autovec/vx_vf/vx-6-i8.c: Likewise.
+
+2026-06-15  Roger Sayle  <roger@nextmovesoftware.com>
+
+	* gcc.target/i386/fabsneg-2.c: New test case.
+
+2026-06-15  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	PR target/125795
+	* gcc.target/aarch64/pr125795.c: New test.
+
+2026-06-15  Jose E. Marchesi  <jemarch@gnu.org>
+
+	* algol68/execute/modules/module26.a68: New file.
+	* algol68/execute/modules/program-26.a68: New test.
+
+2026-06-15  Kael Andrew Franco  <kaelfandrew@gmail.com>
+
+	PR tree-optimization/125737
+	PR tree-optimization/125737
+	* gcc.dg/pr125737.c: New test.
+
+2026-06-15  Kael Andrew Franco  <kaelfandrew@gmail.com>
+
+	PR tree-optimization/125756
+	* gcc.dg/pr125756.c: New test.
+
+2026-06-15  Konstantinos Eleftheriou  <konstantinos.eleftheriou@vrull.eu>
+
+	PR rtl-optimization/123754
+	* gcc.target/aarch64/pr123754.c: New test.
+	* gcc.target/aarch64/avoid-store-forwarding-be-2.c: New test.
+
+2026-06-15  Pan Li  <pan2.li@intel.com>
+
+	* gcc.target/riscv/sat/sat_arith.h: Add test helper macros.
+	* gcc.target/riscv/sat/sat_u_mul-13-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-13-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-13-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-13-u8.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-13-u16.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-13-u32.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-13-u64.c: New test.
+	* gcc.target/riscv/sat/sat_u_mul-run-13-u8.c: New test.
+
+2026-06-15  Jim Tsung-Chun Lin  <jim@andestech.com>
+
+	* gcc.target/riscv/multilib.exp: New test.
+
+2026-06-15  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	* gcc.dg/lto/toplevel-extended-asm-1_0.c: Skip on 64-bit
+	Solaris/SPARC.
+	* gcc.dg/lto/toplevel-simple-asm-1_0.c: Likewise.
+
+2026-06-15  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	PR tree-optimization/125750
+	* g++.dg/tree-ssa/mult-negate-zeroone-1.C: Fix escaping.
+
+2026-06-15  Richard Biener  <rguenther@suse.de>
+
+	PR tree-optimization/125786
+	* gcc.dg/torture/pr125786.c: New testcase.
+
+2026-06-15  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/125790
+	* gcc.dg/pr125707.c: Move the long over to pr125707-1.c.
+	* gcc.dg/pr125707-1.c: New test; xfailed.
+	* gcc.dg/pr125790-1.c: New test.
+
+2026-06-15  Monk Chiang  <62004175+monkchiang@users.noreply.github.com>
+
+	* g++.target/riscv/zicfilp-thunk.C: New test.
+	* gcc.target/riscv/zicfilp-func-entry.c: New test.
+	* gcc.target/riscv/zicfilp-gpr-save.c: New test.
+	* gcc.target/riscv/zicfilp-nonlocal-goto.c: New test.
+
+2026-06-15  Monk Chiang  <monk.chiang@sifive.com>
+
+	* gcc.target/riscv/zicfilp-indirect-return.c: New test.
+	* gcc.target/riscv/zicfilp-setjmp.c: New test.
+
+2026-06-14  Robert Dubner  <rdubner@symas.com>
+
+	* cobol.dg/group2/COMP-3_to_COMP-3_size_error.cob: New test.
+	* cobol.dg/group2/COMP-3_to_COMP-3_size_error.out: New test.
+	* cobol.dg/group2/COMP-3_to_numeric-display_size_error.cob: New test.
+	* cobol.dg/group2/COMP-3_to_numeric-display_size_error.out: New test.
+	* cobol.dg/group2/Clear_negative_zero_after_truncated_MOVE.cob: New test.
+	* cobol.dg/group2/Clear_negative_zero_after_truncated_MOVE.out: New test.
+	* cobol.dg/group2/numeric-display_to_COMP-3_size_error.cob: New test.
+	* cobol.dg/group2/numeric-display_to_COMP-3_size_error.out: New test.
+
+2026-06-14  Jerry DeLisle  <jvdelisle@gcc.gnu.org>
+
+	PR fortran/125782
+	* gfortran.dg/associate_82.f90: New test.
+
+2026-06-14  François-Xavier Coudert  <fxcoudert@gcc.gnu.org>
+
+	* gcc.dg/darwin-minversion-link.c: Account for macOS 27.
+
+2026-06-14  Thomas Koenig  <tkoenig@gcc.gnu.org>
+
+	PR fortran/30438
+	* gfortran.dg/warn_unused_but_set_variable_3.f90: New test.
+
+2026-06-14  Souradipto Das  <souradiptodas6@gmail.com>
+
+	* gcc.dg/int-bwise-opt-3.c: New test.
+	* gcc.dg/int-bwise-opt-4.c: New test.
+
+2026-06-14  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/125774
+	* gcc.dg/torture/pr125774-1.c: New test.
+
+2026-06-13  Jose E. Marchesi  <jemarch@gnu.org>
+
+	* algol68/execute/modules/program-1.a68: Fix test.
+
+2026-06-13  Jose E. Marchesi  <jemarch@gnu.org>
+
+	* algol68/execute/modules/module1.a68: Add an operator %.
+	* algol68/execute/modules/program-1.a68: Use operator %.
+
+2026-06-13  Andrew Pinski  <andrew.pinski@oss.qualcomm.com>
+
+	PR tree-optimization/125776
+	* gcc.dg/torture/pr125776-1.c: New test.
+	* gcc.dg/torture/pr125776-2.c: New test.
+
+2026-06-13  Jose E. Marchesi  <jemarch@gnu.org>
+
+	* algol68/execute/gen-in-constructor-1.a68: New test.
+	* algol68/execute/gen-in-constructor-2.a68: Likewise.
+
+2026-06-13  Kyrylo Tkachov  <ktkachov@nvidia.com>
+
+	PR tree-optimization/125750
+	* g++.dg/tree-ssa/mult-negate-zeroone-1.C: New test.
+	* g++.dg/tree-ssa/mult-negate-zeroone-2.C: New test.
+
+2026-06-13  Kael Andrew Alonzo Franco  <kaelfandrew@gmail.com>
+
+	PR tree-optimization/125707
+	PR tree-optimization/125707
+	* gcc.dg/pr125707.c: New test.
+
+2026-06-13  Sunil Dora  <sunilkumar.dora@windriver.com>
+
+	PR driver/111527
+	* gcc.misc-tests/pr111527.exp: New test.
+
+2026-06-13  Jose E. Marchesi  <jemarch@gnu.org>
+
+	* algol68/execute/formula-3.a68: New test.
+	* algol68/execute/formula-4.a68: Likewise.
+	* algol68/execute/formula-5.a68: Likewise.
+
 2026-06-12  Tobias Burnus  <tburnus@baylibre.com>
 
 	* gfortran.dg/gomp/declare-mapper-6.f90: New test.

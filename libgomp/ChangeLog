@@ -1,3 +1,168 @@
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* atomic.c (GOMP_reduction_start): New function.
+	(GOMP_reduction_end): New function.
+	* libgomp.map (GOMP_6.0.2): Export GOMP_reduction_start and
+	GOMP_reduction_end.
+	* libgomp_g.h (GOMP_reduction_start): New declaration.
+	(GOMP_reduction_end): New declaration.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* barrier.c (GOMP_barrier_ext): New function.
+	(GOMP_barrier_cancel_ext): Likewise.
+	* libgomp_g.h (GOMP_barrier_ext): Declare.
+	(GOMP_barrier_cancel_ext): Likewise.
+	* libgomp.map (GOMP_6.0.2): Add GOMP_barrier_ext and
+	GOMP_barrier_cancel_ext.
+	* testsuite/libgomp.c/barrier-1.c: Update GOMP_barrier_ext calls to pass
+	GOMP_BARRIER_EXPLICIT.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* config/gcn/teams.c (GOMP_distribute_static_worksharing): New
+	function.
+	* config/nvptx/teams.c (GOMP_distribute_static_worksharing): Likewise.
+	* libgomp.map (GOMP_6.0.2): Export GOMP_loop_static_worksharing and
+	GOMP_distribute_static_worksharing.
+	* libgomp_g.h (GOMP_loop_static_worksharing): New declaration.
+	(GOMP_distribute_static_worksharing): Likewise.
+	* parallel.c (GOMP_loop_static_worksharing): New function.
+	* teams.c (GOMP_distribute_static_worksharing): Likewise.
+
+2026-06-24  Paul-Antoine Arras  <parras@baylibre.com>
+
+	* libgomp.map (GOMP_6.0.2): New symbol version. Export
+	GOMP_has_masked_thread_num.
+	* libgomp_g.h (GOMP_has_masked_thread_num): New declaration.
+	* parallel.c (GOMP_has_masked_thread_num): New function.
+
+2026-06-24  Tobias Burnus  <tburnus@baylibre.com>
+
+	PR libgomp/125940
+	* Makefile.am (libgomp_la_SOURCES): Add numa.c.
+	* Makefile.in: Regenerate.
+	* affinity.c (gomp_get_current_numa_node,
+	gomp_get_numa_distance): Move to ...
+	* numa.c: ... this new file.
+	* config/linux/affinity.c (gomp_get_current_numa_node,
+	gomp_get_numa_distance): Move to ...
+	* config/linux/numa.c: ... this new file.
+
+2026-06-24  Tobias Burnus  <tburnus@baylibre.com>
+
+	PR libgomp/125951
+	* target.c (omp_get_device_distances): Handle omp_default_device
+	in the fallback code.
+
+2026-06-22  Tobias Burnus  <tburnus@baylibre.com>
+
+	* config/gcn/teams.c (omp_get_num_teams_dim,
+	omp_get_team_num_dim): New functions.
+	* config/nvptx/teams.c (omp_get_num_teams_dim,
+	omp_get_team_num_dim): Likewise.
+	* fortran.c (omp_get_supported_active_team_dims_,
+	omp_get_supported_active_league_dims_): Likewise.
+	* icv.c (omp_get_thread_limit_dim): Likewise.
+	* libgomp-plugin.h (GOMP_OFFLOAD_get_numa_node): Remove spurious
+	const of 'const int' function return type.
+	(GOMP_OFFLOAD_supported_teams_dim,
+	GOMP_OFFLOAD_supported_threads_dim): Declare.
+	* libgomp.h (struct gomp_device_descr): Add supported_teams_dim_func
+	and supported_threads_dim_func members.
+	* libgomp.map (OMP_6.1): Add new OpenMP routines.
+	* libgomp.texi (Multidimensional Support Routines): Add new section.
+	(omp_get_device_distances): Fix chapter of spec reference.
+	* omp.h.in (omp_get_num_threads_dim, omp_get_thread_num_dim,
+	omp_get_thread_limit_dim, omp_get_supported_active_team_dims,
+	omp_get_supported_active_league_dims, omp_get_supported_teams_dim,
+	omp_get_supported_threads_dim, omp_get_num_teams_dim,
+	omp_get_team_num_dim, omp_get_device_distances): Declare.
+	* omp_lib.f90.in: Likewise.
+	* omp_lib.h.in: Likewise.
+	* parallel.c (omp_get_num_threads_dim,
+	omp_get_thread_num_dim): New functions.
+	* plugin/plugin-gcn.c (limit_worker_threads): Add comment.
+	(GOMP_OFFLOAD_supported_teams_dim,
+	GOMP_OFFLOAD_supported_threads_dim): New functions.
+	* plugin/plugin-nvptx.c (GOMP_OFFLOAD_supported_teams_dim,
+	GOMP_OFFLOAD_supported_threads_dim): New functions.
+	(nvptx_adjust_launch_bounds): Add comment.
+	* target.c (omp_get_supported_active_team_dims,
+	omp_get_supported_active_league_dims,
+	omp_get_supported_teams_dim,
+	omp_get_supported_threads_dim): New functions.
+	(gomp_load_plugin_for_device): dlsym added functions.
+	* teams.c (omp_get_num_teams_dim,
+	omp_get_team_num_dim): New functions.
+	* testsuite/libgomp.c/multi-dim-routines.c: New test.
+	* testsuite/libgomp.fortran/multi-dim-routines-2.F90: New test.
+	* testsuite/libgomp.fortran/multi-dim-routines.F90: New test.
+
+2026-06-19  Tobias Burnus  <tburnus@baylibre.com>
+
+	PR libgomp/125877
+	* affinity.c (gomp_get_current_numa_node,
+	gomp_get_numa_distance): New functions.
+	* config/linux/affinity.c (gomp_get_current_numa_node,
+	gomp_get_numa_distance): Likewise.
+	* libgomp-plugin.h (GOMP_OFFLOAD_get_numa_node): Declare.
+	* libgomp.h (gomp_get_current_numa_node,
+	gomp_get_numa_distance): Declare.
+	(struct gomp_device_descr): Add get_numa_node_func.
+	* libgomp.map (OMP_6.1): Add.
+	* libgomp.texi (omp_get_device_distances): Add routine.
+	* omp.h.in (omp_get_device_distances): Declare.
+	* omp_lib.f90.in (omp_get_device_distances): Add interface.
+	* omp_lib.h.in (omp_get_device_distances): Likewise.
+	* plugin/cuda-lib.def (cuDeviceGetPCIBusId): Add.
+	* plugin/plugin-gcn.c (struct agent_info): Add numa_node.
+	(GOMP_OFFLOAD_get_numa_node): New.
+	* plugin/plugin-nvptx.c (struct ptx_device): Add numa_node.
+	(GOMP_OFFLOAD_get_numa_node): New.
+	* target.c (omp_get_device_distances): New function.
+	(gomp_load_plugin_for_device): Load get_numa_node symbol.
+	* testsuite/libgomp.c/omp-get-device-distances.c: New test.
+	* testsuite/libgomp.fortran/omp-get-device-distances.f90: New test.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* config/accel/target-indirect.h (GOMP_INDIRECT_ADDR_MAP)
+	(GOMP_INDIRECT_ADDR_HMAP): Prototype.
+	* config/gcn/team.c: Adjust.
+	* config/nvptx/team.c: Likewise.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* config/accel/target-indirect.h: New.
+	* config/accel/target-indirect.c: Adjust.
+	* config/gcn/team.c: Likewise.
+	* config/nvptx/team.c: Likewise.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* target-indirect.c: '#include "libgomp.h"'.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* libgomp_g.h (GOMP_target_map_indirect_ptr): Sort correctly.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* libgomp_g.h (GOMP_atomic_start, GOMP_atomic_end): Sort correctly.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* oacc-init.c (acc_init, acc_shutdown, acc_get_num_devices)
+	(acc_set_device_type, acc_get_device_type, acc_get_device_num)
+	(acc_set_device_num, acc_get_property, acc_get_property_string)
+	(acc_on_device): Drop 'ialias'es.
+
+2026-06-18  Thomas Schwinge  <tschwinge@baylibre.com>
+
+	* config/nvptx/oacc-parallel.c: Move...
+	* config/accel/oacc-parallel.c: ... here.
+
 2026-06-12  Thomas Schwinge  <tschwinge@baylibre.com>
 
 	* config/linux/allocator.c: De-duplicate '#define _GNU_SOURCE'.

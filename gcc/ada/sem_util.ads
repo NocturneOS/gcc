@@ -491,6 +491,13 @@ package Sem_Util is
    --  Gather the entities of all abstract states and objects declared in the
    --  body state space of package body Body_Id.
 
+   procedure Collect_Constructors
+     (Typ            : Entity_Id;
+      Callable_Ctors : out Elist_Id;
+      Abstract_Ctors : out Elist_Id);
+   --  Collect in a single pass all non-hidden constructors of Typ in two
+   --  lists: Callable_Ctors (non-abstract) and Abstract_Ctors.
+
    procedure Collect_Interfaces
      (T               : Entity_Id;
       Ifaces_List     : out Elist_Id;
@@ -1294,6 +1301,11 @@ package Sem_Util is
    --  parent needs a body for inlining, the instantiation node of the parent
    --  has not yet been rewritten as a package declaration, and the entity has
    --  to be retrieved from the Instance_Spec of the unit.
+
+   function Get_Pool_Object_Or_Dereference (Pool : Entity_Id)
+     return Node_Or_Entity_Id;
+   --  Return the entity or dereference of which Pool is a part, if it exists.
+   --  Otherwise return Empty.
 
    function Get_Pragma_Id (N : Node_Id) return Pragma_Id;
    pragma Inline (Get_Pragma_Id);
@@ -2557,6 +2569,7 @@ package Sem_Util is
    --    Exit_Cases
    --    Extensions_Visible
    --    Global
+   --    Modifies
    --    Post
    --    Post_Class
    --    Postcondition

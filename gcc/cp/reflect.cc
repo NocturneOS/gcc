@@ -135,6 +135,7 @@ tree
 get_reflection (location_t loc, tree t, reflect_kind kind/*=REFLECT_UNDEF*/)
 {
   STRIP_ANY_LOCATION_WRAPPER (t);
+  t = STRIP_REFERENCE_REF (t);
 
   /* Constant template parameters and pack-index-expressions cannot
      appear as operands of the reflection operator.  */
@@ -321,6 +322,15 @@ maybe_update_function_parm (tree parm)
       --n;
     }
   return ret;
+}
+
+/* Build up const T &.  */
+
+tree
+build_const_lref (tree t)
+{
+  return build_stub_type (t, cp_type_quals (t) | TYPE_QUAL_CONST,
+			  /*rval=*/false);
 }
 
 /* Return true if DECL comes from std::meta.  */
@@ -586,10 +596,7 @@ get_range_elts (location_t loc, const constexpr_ctx *ctx, tree call, int n,
 	      *non_constant_p = true;
 	      return NULL_TREE;
 	    }
-	  TREE_VEC_ELT (args, 0)
-	    = build_stub_type (valuete,
-			       cp_type_quals (valuete) | TYPE_QUAL_CONST,
-			       false);
+	  TREE_VEC_ELT (args, 0) = build_const_lref (valuete);
 	  if (!is_xible (INIT_EXPR, valuete, args))
 	    {
 	      if (!cxx_constexpr_quiet_p (ctx))
@@ -1828,11 +1835,13 @@ eval_is_data_member_spec (const_tree r, reflect_kind kind)
    object parameter.  Otherwise, false.  */
 
 static tree
-eval_is_explicit_object_parameter (const_tree r, reflect_kind kind)
+eval_is_explicit_object_parameter (tree r, reflect_kind kind)
 {
-  if (eval_is_function_parameter (r, kind) == boolean_true_node
-      && r == DECL_ARGUMENTS (DECL_CONTEXT (r))
-      && DECL_XOBJ_MEMBER_FUNCTION_P (DECL_CONTEXT (r)))
+  if (eval_is_function_parameter (r, kind) == boolean_false_node)
+    return boolean_false_node;
+  r = maybe_update_function_parm (r);
+  tree fn = DECL_CONTEXT (r);
+  if (r == DECL_ARGUMENTS (fn) && DECL_XOBJ_MEMBER_FUNCTION_P (fn))
     return boolean_true_node;
   else
     return boolean_false_node;
@@ -3322,11 +3331,15 @@ eval_size_of (location_t loc, const constexpr_ctx *ctx, tree r,
   else
     type = type_of (r, kind);
   tree ret;
-  if (!complete_type_or_maybe_complain (type, NULL_TREE, tf_none)
-      /* No special casing of references needed, c_sizeof_or_alignof_type
-	 returns the same size for POINTER_TYPE and REFERENCE_TYPE.  */
-      || ((ret = c_sizeof_or_alignof_type (loc, type, true, false, 0))
-	  == error_mark_node))
+  if (FUNC_OR_METHOD_TYPE_P (type))
+    return throw_exception (loc, ctx,
+			    "reflection of function type in size_of",
+			    fun, non_constant_p, jump_target);
+  else if (!complete_type_or_maybe_complain (type, NULL_TREE, tf_none)
+	   /* No special casing of references needed, c_sizeof_or_alignof_type
+	      returns the same size for POINTER_TYPE and REFERENCE_TYPE.  */
+	   || ((ret = c_sizeof_or_alignof_type (loc, type, true, false, 0))
+	       == error_mark_node))
     return throw_exception (loc, ctx,
 			    "reflection with incomplete type in size_of",
 			    fun, non_constant_p, jump_target);
@@ -4563,8 +4576,7 @@ static tree
 eval_is_copy_constructible_type (tree type)
 {
   tree arg = make_tree_vec (1);
-  TREE_VEC_ELT (arg, 0)
-    = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST, false);
+  TREE_VEC_ELT (arg, 0) = build_const_lref (type);
   if (is_xible (INIT_EXPR, type, arg))
     return boolean_true_node;
   else
@@ -4598,8 +4610,7 @@ static tree
 eval_is_copy_assignable_type (tree type)
 {
   tree type1 = cp_build_reference_type (type, /*rval=*/false);
-  tree type2 = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST,
-				false);
+  tree type2 = build_const_lref (type);
   if (is_xible (MODIFY_EXPR, type1, type2))
     return boolean_true_node;
   else
@@ -4654,10 +4665,7 @@ eval_is_trivially_default_constructible_type (tree type)
 static tree
 eval_is_trivially_copy_constructible_type (tree type)
 {
-  tree arg = make_tree_vec (1);
-  TREE_VEC_ELT (arg, 0)
-    = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST, false);
-  if (is_trivially_xible (INIT_EXPR, type, arg))
+  if (trivially_copy_constructible_p (type))
     return boolean_true_node;
   else
     return boolean_false_node;
@@ -4690,8 +4698,7 @@ static tree
 eval_is_trivially_copy_assignable_type (tree type)
 {
   tree type1 = cp_build_reference_type (type, /*rval=*/false);
-  tree type2 = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST,
-				false);
+  tree type2 = build_const_lref (type);
   if (is_trivially_xible (MODIFY_EXPR, type1, type2))
     return boolean_true_node;
   else
@@ -4747,8 +4754,7 @@ static tree
 eval_is_nothrow_copy_constructible_type (tree type)
 {
   tree arg = make_tree_vec (1);
-  TREE_VEC_ELT (arg, 0)
-    = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST, false);
+  TREE_VEC_ELT (arg, 0) = build_const_lref (type);
   if (is_nothrow_xible (INIT_EXPR, type, arg))
     return boolean_true_node;
   else
@@ -4782,8 +4788,7 @@ static tree
 eval_is_nothrow_copy_assignable_type (tree type)
 {
   tree type1 = cp_build_reference_type (type, /*rval=*/false);
-  tree type2 = build_stub_type (type, cp_type_quals (type) | TYPE_QUAL_CONST,
-				false);
+  tree type2 = build_const_lref (type);
   if (is_nothrow_xible (MODIFY_EXPR, type1, type2))
     return boolean_true_node;
   else
@@ -5517,7 +5522,8 @@ eval_can_substitute (location_t loc, const constexpr_ctx *ctx,
 	return throw_exception (loc, ctx,
 				"invalid argument to can_substitute",
 				fun, non_constant_p, jump_target);
-      a = convert_from_reference (a);
+      if (!TYPE_P (a))
+	a = convert_from_reference (a);
       TREE_VEC_ELT (rvec, i) = a;
     }
   if (DECL_TYPE_TEMPLATE_P (r) || DECL_TEMPLATE_TEMPLATE_PARM_P (r))
@@ -7064,6 +7070,13 @@ class_members_of (location_t loc, const constexpr_ctx *ctx, tree r,
 	  }
       for (tree m : implicitly_declared)
 	if (DECL_OVERLOADED_OPERATOR_IS (m, EQ_EXPR))
+	  {
+	    CONSTRUCTOR_APPEND_ELT (elts, NULL_TREE,
+				    get_reflection_raw (loc, m));
+	    break;
+	  }
+      for (tree m : implicitly_declared)
+	if (LAMBDA_FUNCTION_P (m))
 	  {
 	    CONSTRUCTOR_APPEND_ELT (elts, NULL_TREE,
 				    get_reflection_raw (loc, m));

@@ -4661,9 +4661,7 @@ package body Sem_Ch3 is
       --  set the link in both the anonymous base type and anonymous subtype
       --  that are built to represent the array type to point to the object.
 
-      if Nkind (Object_Definition (Declaration_Node (Id))) =
-                        N_Constrained_Array_Definition
-      then
+      if Nkind (Object_Definition (N)) = N_Constrained_Array_Definition then
          Set_Related_Array_Object (T, Id);
          Set_Related_Array_Object (Base_Type (T), Id);
       end if;
@@ -5480,10 +5478,9 @@ package body Sem_Ch3 is
 
       Check_Eliminated (Id);
 
-      --  Deal with setting In_Package_Body and In_Private_Part flags
+      --  Deal with setting In_Private_Part flag
 
       if Ekind (Scope (Id)) = E_Package then
-         Set_In_Package_Body (Id, In_Package_Body (Scope (Id)));
          Set_In_Private_Part (Id, In_Private_Part (Scope (Id)));
       end if;
 
@@ -5959,6 +5956,7 @@ package body Sem_Ch3 is
                Set_Is_Constrained       (Id, Is_Constrained     (T));
                Set_Is_IEEE_Extended_Precision
                  (Id, Is_IEEE_Extended_Precision (T));
+               Copy_RM_Size             (To => Id, From => T);
 
                --  If the floating point type has dimensions, these will be
                --  inherited subsequently when Analyze_Dimensions is called.
@@ -10482,8 +10480,7 @@ package body Sem_Ch3 is
          --  Propagate information about constructor dependence from parent
 
          Set_Needs_Construction
-           (Derived_Type,
-            Needs_Construction (Parent_Type));
+           (Derived_Type, Needs_Construction (Parent_Type));
       end if;
 
       --  If the parent has primitive routines and may have not-seen-yet aspect
@@ -19009,7 +19006,7 @@ package body Sem_Ch3 is
             --  Preserve aspect and iterator flags that may have been set on
             --  the partial view.
 
-            Set_Has_Delayed_Aspects (Prev, Has_Delayed_Aspects (Id));
+            Set_Has_Delayed_Aspects      (Prev, Has_Delayed_Aspects      (Id));
             Set_Has_Implicit_Dereference (Prev, Has_Implicit_Dereference (Id));
 
             --  If no error, propagate freeze_node from private to full view.
@@ -21052,10 +21049,10 @@ package body Sem_Ch3 is
       --  Ada 2005 (AI-287, AI-318): Relax the strictness of the front end in
       --  case of limited aggregates (including extension aggregates), and
       --  function calls. The function call may have been given in prefixed
-      --  notation, in which case the original node is an indexed component.
-      --  If the function is parameterless, the original node was an explicit
-      --  dereference. The function may also be parameterless, in which case
-      --  the source node is just an identifier.
+      --  notation, in which case the original node is an indexed component,
+      --  or a selected component if the function is parameterless, or even
+      --  an explicit dereference. Finally, for a direct unprefixed call to
+      --  a parameterless function, the original node is just an identifier.
 
       --  A branch of a conditional expression may have been removed if the
       --  condition is statically known. This happens during expansion, and
@@ -21080,7 +21077,7 @@ package body Sem_Ch3 is
             return Present (Entity (Original_Node (Exp)))
               and then Ekind (Entity (Original_Node (Exp))) = E_Function;
 
-         when N_Qualified_Expression =>
+         when N_Expression_With_Actions | N_Qualified_Expression =>
             return
               OK_For_Limited_Init_In_05
                 (Typ, Expression (Original_Node (Exp)));
@@ -22499,6 +22496,10 @@ package body Sem_Ch3 is
       then
          Set_Has_First_Controlling_Parameter_Aspect (Full_T);
       end if;
+
+      --  Propagate the constructor flag to the full view
+
+      Set_Needs_Construction (Full_T, Needs_Construction (Priv_T));
 
       --  Propagate predicates to full type, and predicate function if already
       --  defined. It is not clear that this can actually happen? the partial

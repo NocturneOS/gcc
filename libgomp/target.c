@@ -6032,6 +6032,54 @@ GOMP_interop (int device_num, int n_init, struct interop_obj_t ***init,
     }
 }
 
+/* Query device-related data.  */
+
+int
+omp_get_supported_active_team_dims (int device_num, int native_support)
+{
+  (void) device_num;
+  (void) native_support;
+  return 1;
+}
+
+int
+omp_get_supported_active_league_dims (int device_num, int native_support)
+{
+  (void) device_num;
+  (void) native_support;
+  return 1;
+}
+
+int
+omp_get_supported_teams_dim (int device_num, int dim)
+{
+  if (device_num == omp_default_device)
+    device_num = gomp_get_default_device ();
+  if (device_num == omp_initial_device
+      || device_num == gomp_get_num_devices ())
+    return dim == 0 ? INT_MAX : 1;
+
+  struct gomp_device_descr *devicep = resolve_device (device_num, false);
+  if (devicep == NULL || !devicep->supported_teams_dim_func)
+    return -1;
+  return devicep->supported_teams_dim_func (devicep->target_id, dim);
+}
+
+int
+omp_get_supported_threads_dim (int device_num, int dim)
+{
+  if (device_num == omp_default_device)
+    device_num = gomp_get_default_device ();
+  if (device_num == omp_initial_device
+      || device_num == gomp_get_num_devices ())
+    return dim == 0 ? INT_MAX : 1;
+
+  struct gomp_device_descr *devicep = resolve_device (device_num, false);
+  if (devicep == NULL || !devicep->supported_threads_dim_func)
+    return -1;
+  return devicep->supported_threads_dim_func (devicep->target_id, dim);
+}
+
 static const char *
 gomp_get_uid_for_device (struct gomp_device_descr *devicep, int device_num)
 {
@@ -6085,8 +6133,69 @@ omp_get_device_from_uid (const char *uid)
   return omp_invalid_device;
 }
 
+/* Return the numa distance between the numa node of the calling host
+   thread and each of the NDEV devices in DEVICES.
+   Special values:
+   - Invalid device number: undefined, GCC uses -1.
+   - Host device: OpenMP defines this to be 0
+   - Nonhost device:  >= 0. If not available use 10 (= lowest ACPI
+     distance).
+   Note: Not available can mean either not a supported system
+   (e.g non Linux) or the value is not known (virtualized system). */
+
+void
+omp_get_device_distances (int ndevs, const int *devs, int *distances)
+{
+  if (ndevs < 1)
+    return;
+  int num_devices = gomp_get_num_devices ();
+  int node = gomp_get_current_numa_node ();
+  if (node < 0) /* Not supported. */
+    {
+      for (int i = 0; i < ndevs; i++)
+	{
+	  int device_num = (devs[i] == omp_default_device
+			    ? gomp_get_default_device () : devs[i]);
+	  if (device_num < omp_initial_device || device_num > num_devices)
+	    distances[i] = -1;  /* invalid */
+	  else if (device_num == omp_initial_device
+		   || device_num == num_devices)
+	    distances[i] = 0;
+	  else
+	    distances[i] = 10;
+	}
+      return;
+    }
+  for (int i = 0; i < ndevs; i++)
+    {
+      int device_num = (devs[i] == omp_default_device
+			? gomp_get_default_device () : devs[i]);
+      if (device_num < omp_initial_device || device_num > num_devices)
+	distances[i] = -1;  /* invalid */
+      else if (device_num == omp_initial_device || device_num == num_devices)
+	distances[i] = 0;
+      else
+	{
+	  int dist = 10;
+	  struct gomp_device_descr *devicep = resolve_device (device_num,
+							      false);
+	  if (devicep && devicep->get_numa_node_func)
+	    {
+	      int node2 = devicep->get_numa_node_func (devicep->target_id);
+	      dist = gomp_get_numa_distance (node, node2);
+	    }
+	  distances[i] = dist >= 0 ? dist : 10;
+	}
+    }
+}
+
+ialias (omp_get_supported_active_team_dims)
+ialias (omp_get_supported_active_league_dims)
+ialias (omp_get_supported_threads_dim)
+ialias (omp_get_supported_teams_dim)
 ialias (omp_get_uid_from_device)
 ialias (omp_get_device_from_uid)
+ialias (omp_get_device_distances)
 
 #ifdef PLUGIN_SUPPORT
 
@@ -6131,6 +6240,9 @@ gomp_load_plugin_for_device (struct gomp_device_descr *device,
 
   DLSYM (get_name);
   DLSYM_OPT (get_uid, get_uid);
+  DLSYM_OPT (get_numa_node, get_numa_node);
+  DLSYM_OPT (supported_threads_dim, supported_threads_dim);
+  DLSYM_OPT (supported_teams_dim, supported_teams_dim);
   DLSYM (get_caps);
   DLSYM (get_type);
   DLSYM (get_num_devices);
