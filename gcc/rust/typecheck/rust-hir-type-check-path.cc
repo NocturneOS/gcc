@@ -23,13 +23,14 @@
 #include "rust-hir-type-check-type.h"
 #include "rust-hir-type-check-item.h"
 #include "rust-hir-trait-resolve.h"
+#include "rust-rib.h"
 #include "rust-substitution-mapper.h"
 #include "rust-hir-path-probe.h"
 #include "rust-type-util.h"
 #include "rust-hir-type-bounds.h"
 #include "rust-hir-item.h"
 #include "rust-session-manager.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 
 namespace Rust {
 namespace Resolver {
@@ -157,11 +158,11 @@ TypeCheckExpr::visit (HIR::QualifiedPathInExpression &expr)
   bool fully_resolved = expr.get_segments ().size () <= 1;
   if (fully_resolved)
     {
-      auto &nr_ctx = const_cast<Resolver2_0::NameResolutionContext &> (
-	Resolver2_0::ImmutableNameResolutionContext::get ().resolver ());
+      auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
       nr_ctx.map_usage (Resolver2_0::Usage (expr.get_mappings ().get_nodeid ()),
-			Resolver2_0::Definition (root_resolved_node_id));
+			Resolver2_0::Definition (root_resolved_node_id),
+			Resolver2_0::Namespace::Values);
       return;
     }
 
@@ -255,14 +256,14 @@ TypeCheckExpr::resolve_root_path (HIR::PathInExpression &expr, size_t *offset,
       bool is_root = *offset == 0;
       NodeId ast_node_id = seg.get_mappings ().get_nodeid ();
 
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+      auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
       // lookup the reference_node_id
       NodeId ref_node_id;
-      if (auto res = nr_ctx.lookup (ast_node_id))
+      if (auto res = nr_ctx.lookup (ast_node_id, Resolver2_0::Namespace::Types,
+				    Resolver2_0::Namespace::Values))
 	{
-	  ref_node_id = *res;
+	  ref_node_id = res->id;
 	}
       else
 	{
@@ -544,11 +545,11 @@ TypeCheckExpr::resolve_segments (NodeId root_resolved_node_id,
 
   rust_assert (resolved_node_id != UNKNOWN_NODEID);
 
-  auto &nr_ctx = const_cast<Resolver2_0::NameResolutionContext &> (
-    Resolver2_0::ImmutableNameResolutionContext::get ().resolver ());
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   nr_ctx.map_usage (Resolver2_0::Usage (expr_mappings.get_nodeid ()),
-		    Resolver2_0::Definition (resolved_node_id));
+		    Resolver2_0::Definition (resolved_node_id),
+		    Resolver2_0::Namespace::Values);
 
   infered = tyseg;
 }

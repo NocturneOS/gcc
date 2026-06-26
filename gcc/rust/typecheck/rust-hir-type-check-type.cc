@@ -24,12 +24,14 @@
 #include "rust-hir-type-check-expr.h"
 #include "rust-hir-path-probe.h"
 #include "rust-hir-type-bounds.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 #include "rust-mapping-common.h"
+#include "rust-rib.h"
 #include "rust-substitution-mapper.h"
 #include "rust-type-util.h"
 #include "rust-system.h"
 #include "rust-compile-base.h"
+#include "rust-resolve-builtins.h"
 
 namespace Rust {
 namespace Resolver {
@@ -343,13 +345,19 @@ TypeCheckType::resolve_root_path (HIR::TypePath &path, size_t *offset,
 	  seg->get_lang_item ());
       else
 	{
-	  auto &nr_ctx
-	    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+	  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
 	  // assign the ref_node_id if we've found something
-	  nr_ctx.lookup (ast_node_id).map ([&ref_node_id] (NodeId resolved) {
-	    ref_node_id = resolved;
-	  });
+	  nr_ctx.lookup (ast_node_id, Resolver2_0::Namespace::Types)
+	    .map ([&ref_node_id] (NodeId resolved) { ref_node_id = resolved; });
+
+	  // TODO: Should we add a special method to the name resolver to handle
+	  // that case? Resolving something in the Types NS when we want to
+	  // prioritize builtin types over modules or other conflicting things?
+	  if (auto builtin_type_id
+	      = Resolver2_0::Builtins::find_builtin_node_id (seg->to_string ()))
+	    if (mappings.is_module (ref_node_id))
+	      ref_node_id = builtin_type_id.value ();
 	}
 
       // ref_node_id is the NodeId that the segments refers to.
@@ -412,7 +420,8 @@ TypeCheckType::resolve_root_path (HIR::TypePath &path, size_t *offset,
 	  // A::B::C::this_is_a_module
 	  //          ^^^^^^^^^^^^^^^^
 	  // This is an error, we are not expecting a module.
-	  rust_error_at (seg->get_locus (), "expected value");
+	  rust_error_at (seg->get_locus (), "expected value, got module");
+
 	  return new TyTy::ErrorType (path.get_mappings ().get_hirid ());
 	}
 
@@ -1108,10 +1117,9 @@ ResolveWhereClauseItem::visit (HIR::TypeBoundWhereClauseItem &item)
   // then lookup the reference_node_id
   NodeId ref_node_id = UNKNOWN_NODEID;
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-  if (auto id = nr_ctx.lookup (ast_node_id))
+  if (auto id = nr_ctx.lookup (ast_node_id, Resolver2_0::Namespace::Types))
     {
       ref_node_id = *id;
     }

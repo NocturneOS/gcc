@@ -17,6 +17,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-compile-implitem.h"
+#include "rust-rib.h"
 
 namespace Rust {
 namespace Compile {
@@ -27,11 +28,11 @@ CompileTraitItem::visit (HIR::TraitItemConst &constant)
   rust_assert (concrete != nullptr);
   TyTy::BaseType *resolved_type = concrete;
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   Resolver::CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (constant.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (constant.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
 
   HIR::Expr &const_value_expr = constant.get_expr ();
   TyTy::BaseType *expr_type = nullptr;
@@ -89,11 +90,11 @@ CompileTraitItem::visit (HIR::TraitItemFunc &func)
       fntype->override_context ();
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   Resolver::CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (func.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (func.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
 
   // FIXME: How do we get the proper visibility here?
   auto vis = HIR::Visibility (HIR::Visibility::VisType::Public);

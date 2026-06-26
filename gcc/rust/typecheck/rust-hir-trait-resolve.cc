@@ -18,9 +18,10 @@
 
 #include "rust-hir-trait-resolve.h"
 #include "rust-hir-type-check-expr.h"
+#include "rust-rib.h"
 #include "rust-substitution-mapper.h"
 #include "rust-type-util.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 
 namespace Rust {
 namespace Resolver {
@@ -120,11 +121,11 @@ bool
 TraitResolver::resolve_path_to_trait (const HIR::TypePath &path,
 				      HIR::Trait **resolved) const
 {
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   NodeId ref;
-  if (auto ref_opt = nr_ctx.lookup (path.get_mappings ().get_nodeid ()))
+  if (auto ref_opt = nr_ctx.lookup (path.get_mappings ().get_nodeid (),
+				    Resolver2_0::Namespace::Types))
     {
       ref = *ref_opt;
     }

@@ -28,8 +28,9 @@
 #include "rust-hir-type-check-pattern.h"
 #include "rust-hir-trait-resolve.h"
 #include "rust-identifier.h"
+#include "rust-rib.h"
 #include "rust-session-manager.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 #include "rust-substitution-mapper.h"
 #include "rust-type-util.h"
 #include "rust-tyty-variance-analysis.h"
@@ -205,11 +206,11 @@ TypeCheckItem::visit (HIR::TupleStruct &struct_decl)
 
   // get the path
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   CanonicalPath path
-    = nr_ctx.to_canonical_path (struct_decl.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (struct_decl.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
   RustIdent ident{path, struct_decl.get_locus ()};
 
@@ -274,11 +275,11 @@ TypeCheckItem::visit (HIR::StructStruct &struct_decl)
       context->insert_type (field.get_mappings (), ty_field->get_field_type ());
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   CanonicalPath path
-    = nr_ctx.to_canonical_path (struct_decl.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (struct_decl.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
   RustIdent ident{path, struct_decl.get_locus ()};
 
@@ -352,12 +353,12 @@ TypeCheckItem::visit (HIR::Enum &enum_decl)
 	}
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   // get the path
   CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (enum_decl.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (enum_decl.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
   RustIdent ident{canonical_path, enum_decl.get_locus ()};
 
@@ -405,12 +406,12 @@ TypeCheckItem::visit (HIR::Union &union_decl)
 			    ty_variant->get_field_type ());
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   // get the path
   CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (union_decl.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (union_decl.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
   RustIdent ident{canonical_path, union_decl.get_locus ()};
 
@@ -570,11 +571,11 @@ TypeCheckItem::visit (HIR::Function &function)
 			   param_tyty);
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   CanonicalPath path
-    = nr_ctx.to_canonical_path (function.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (function.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
 
   RustIdent ident{path, function.get_locus ()};
 

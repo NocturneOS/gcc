@@ -27,6 +27,7 @@
 #include "rust-compile-implitem.h"
 #include "rust-constexpr.h"
 #include "rust-compile-type.h"
+#include "rust-finalized-name-resolution-context.h"
 #include "rust-gcc.h"
 #include "rust-compile-asm.h"
 #include "fold-const.h"
@@ -35,6 +36,7 @@
 #include "print-tree.h"
 #include "rust-hir-bound.h"
 #include "rust-hir-expr.h"
+#include "rust-rib.h"
 #include "rust-system.h"
 #include "rust-tree.h"
 #include "rust-tyty.h"
@@ -865,7 +867,7 @@ CompileExpr::visit (HIR::BreakExpr &expr)
   if (expr.has_break_expr () && expr.has_label ())
     {
       HIR::Lifetime &label = expr.get_label ();
-      auto tvar = lookup_temp_var (label.get_mappings ().get_nodeid ());
+      auto tvar = lookup_label_temp_var (label.get_mappings ().get_nodeid ());
       tree value = CompileExpr::Compile (expr.get_expr (), ctx);
       tree assign
 	= Backend::assignment_statement (tvar->get_tree (label.get_locus ()),
@@ -897,12 +899,12 @@ CompileExpr::visit (HIR::BreakExpr &expr)
 
   if (expr.has_label ())
     {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+      auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
       NodeId resolved_node_id;
       if (auto id
-	  = nr_ctx.lookup (expr.get_label ().get_mappings ().get_nodeid ()))
+	  = nr_ctx.lookup (expr.get_label ().get_mappings ().get_nodeid (),
+			   Resolver2_0::Namespace::Labels))
 	{
 	  resolved_node_id = *id;
 	}
@@ -953,12 +955,12 @@ CompileExpr::visit (HIR::ContinueExpr &expr)
   tree label = ctx->peek_loop_begin_label ();
   if (expr.has_label ())
     {
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+      auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
       NodeId resolved_node_id;
       if (auto id
-	  = nr_ctx.lookup (expr.get_label ().get_mappings ().get_nodeid ()))
+	  = nr_ctx.lookup (expr.get_label ().get_mappings ().get_nodeid (),
+			   Resolver2_0::Namespace::Labels))
 	{
 	  resolved_node_id = *id;
 	}
@@ -2605,10 +2607,10 @@ CompileExpr::generate_closure_function (HIR::ClosureExpr &expr,
   if (is_block_expr)
     {
       auto body_mappings = function_body.get_mappings ();
-      auto &nr_ctx
-	= Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+      auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
-      auto candidate = nr_ctx.values.to_rib (body_mappings.get_nodeid ());
+      auto candidate
+	= nr_ctx.get_underlying ().values.to_rib (body_mappings.get_nodeid ());
 
       rust_assert (candidate.has_value ());
     }
@@ -2801,7 +2803,7 @@ CompileExpr::construct_block_label (HIR::BlockExpr &expr)
 tree
 CompileExpr::lookup_label (NodeId to_be_resolved)
 {
-  HirId ref = resolve_NodeId (to_be_resolved);
+  HirId ref = resolve_nodeid (to_be_resolved, Resolver2_0::Namespace::Labels);
   tree label = NULL_TREE;
   rust_assert (ctx->lookup_label_decl (ref, &label)
 	       && "failed to lookup a label");
@@ -2809,9 +2811,11 @@ CompileExpr::lookup_label (NodeId to_be_resolved)
 }
 
 Bvariable *
-CompileExpr::lookup_temp_var (NodeId to_be_resolved)
+CompileExpr::lookup_label_temp_var (NodeId to_be_resolved)
 {
-  HirId ref = resolve_NodeId (to_be_resolved);
+  // TODO: Not sure that this temp var should have been inserted in the Labels
+  // namespace? Why not values?
+  HirId ref = resolve_nodeid (to_be_resolved, Resolver2_0::Namespace::Labels);
   Bvariable *ltemp = nullptr;
   rust_assert (ctx->lookup_var_decl (ref, &ltemp)
 	       && "failed to lookup a temp var");
@@ -2819,13 +2823,12 @@ CompileExpr::lookup_temp_var (NodeId to_be_resolved)
 }
 
 HirId
-CompileExpr::resolve_NodeId (NodeId to_be_resolved)
+CompileExpr::resolve_nodeid (NodeId to_be_resolved, Resolver2_0::Namespace ns)
 {
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   NodeId resolved_node_id;
-  resolved_node_id = nr_ctx.lookup (to_be_resolved).value ();
+  resolved_node_id = nr_ctx.lookup (to_be_resolved, ns).value ();
 
   HirId ref
     = ctx->get_mappings ().lookup_node_to_hir (resolved_node_id).value ();

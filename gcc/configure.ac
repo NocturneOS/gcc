@@ -4894,12 +4894,6 @@ foo:	nop
       [AC_DEFINE(HAVE_AS_IX86_FFREEP, 1,
         [Define if your assembler supports the ffreep mnemonic.])])
 
-    gcc_GAS_CHECK_FEATURE([.quad directive],
-      gcc_cv_as_ix86_quad,,
-      [.quad 0],,
-      [AC_DEFINE(HAVE_AS_IX86_QUAD, 1,
-        [Define if your assembler supports the .quad directive.])])
-
     gcc_GAS_CHECK_FEATURE([sahf mnemonic],
       gcc_cv_as_ix86_sahf,,
       [.code64
@@ -4927,18 +4921,6 @@ foo:	nop
       [movl.s %esp, %ebp],,
       [AC_DEFINE(HAVE_AS_IX86_SWAP, 1,
         [Define if your assembler supports the swap suffix.])])
-
-    gcc_GAS_CHECK_FEATURE([different section symbol subtraction],
-      gcc_cv_as_ix86_diff_sect_delta,,
-      [.section .rodata
-.L1:
-        .long .L2-.L1
-        .long .L3-.L1
-        .text
-.L3:    nop
-.L2:    nop],,
-      [AC_DEFINE(HAVE_AS_IX86_DIFF_SECT_DELTA, 1,
-        [Define if your assembler supports the subtraction of symbols in different sections.])])
 
     gcc_GAS_CHECK_FEATURE([rep and lock prefix],
         gcc_cv_as_ix86_rep_lock_prefix,,

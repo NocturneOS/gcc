@@ -17,6 +17,7 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "optional.h"
+#include "rust-forever-stack.h"
 #include "rust-name-resolution-context.h"
 
 /**
@@ -28,10 +29,30 @@ namespace Rust {
 namespace Resolver2_0 {
 
 template <Namespace N>
+bool
+NameResolutionContext::should_search_prelude (
+  const typename ForeverStack<N>::Node *current_node,
+  const typename ForeverStack<N>::SegIterator &iterator,
+  const std::vector<ResolutionPath::Segment> &segments)
+{
+  // Check whether the current_node is a root node
+  if (current_node->is_root ())
+    return true;
+
+  // Check whether we're at the start of a module (we can't travel elsewhere
+  // from the start of a module)
+  if (is_start (iterator, segments)
+      && current_node->rib.kind == Rib::Kind::Module)
+    return true;
+
+  return false;
+}
+
+template <Namespace N>
 tl::optional<Rib::Definition>
 NameResolutionContext::resolve_path (
   ForeverStack<N> &stack, const ResolutionPath &path, ResolutionMode mode,
-  std::function<void (Usage, Definition)> insert_segment_resolution,
+  std::function<void (Usage, Definition, Namespace)> insert_segment_resolution,
   std::vector<Error> &collect_errors)
 {
   std::reference_wrapper<typename ForeverStack<N>::Node> starting_point
@@ -46,7 +67,7 @@ template <Namespace N>
 tl::optional<Rib::Definition>
 NameResolutionContext::resolve_path (
   ForeverStack<N> &stack, const ResolutionPath &path, ResolutionMode mode,
-  std::function<void (Usage, Definition)> insert_segment_resolution,
+  std::function<void (Usage, Definition, Namespace)> insert_segment_resolution,
   std::vector<Error> &collect_errors, NodeId starting_point_id)
 
 {
@@ -66,7 +87,7 @@ template <Namespace N>
 tl::optional<Rib::Definition>
 NameResolutionContext::resolve_path (
   ForeverStack<N> &stack, const ResolutionPath &path, ResolutionMode mode,
-  std::function<void (Usage, Definition)> insert_segment_resolution,
+  std::function<void (Usage, Definition, Namespace)> insert_segment_resolution,
   std::vector<Error> &collect_errors,
   std::reference_wrapper<typename ForeverStack<N>::Node> starting_point)
 {
@@ -79,8 +100,8 @@ NameResolutionContext::resolve_path (
       NodeId seg_id
 	= Analysis::Mappings::get ().get_lang_item_node (lang_item->first);
 
-      insert_segment_resolution (Usage (lang_item->second),
-				 Definition (seg_id));
+      insert_segment_resolution (Usage (lang_item->second), Definition (seg_id),
+				 N);
 
       if (path.get_segments ().empty ())
 	return Rib::Definition::NonShadowable (seg_id);
@@ -129,14 +150,15 @@ NameResolutionContext::resolve_path (
 	  if (seg.is_crate_path_seg ())
 	    {
 	      insert_segment_resolution (Usage (seg.node_id),
-					 Definition (stack.root.id));
+					 Definition (stack.root.id), N);
 	      // TODO: does NonShadowable matter?
 	      return Rib::Definition::NonShadowable (stack.root.id);
 	    }
 	  else if (seg.is_lower_self_seg ())
 	    {
 	      NodeId id = stack.find_closest_module (starting_point.get ()).id;
-	      insert_segment_resolution (Usage (seg.node_id), Definition (id));
+	      insert_segment_resolution (Usage (seg.node_id), Definition (id),
+					 N);
 	      // TODO: does NonShadowable matter?
 	      return Rib::Definition::NonShadowable (id);
 	    }
@@ -153,36 +175,17 @@ NameResolutionContext::resolve_path (
 
 	      NodeId id
 		= stack.find_closest_module (closest_module.parent.value ()).id;
-	      insert_segment_resolution (Usage (seg.node_id), Definition (id));
+	      insert_segment_resolution (Usage (seg.node_id), Definition (id),
+					 N);
 	      // TODO: does NonShadowable matter?
 	      return Rib::Definition::NonShadowable (id);
 	    }
-	  else
-	    {
-	      // HACK: check for a module after we check the language prelude
-	      for (auto &kv :
-		   stack.find_closest_module (starting_point.get ()).children)
-		{
-		  auto &link = kv.first;
-
-		  if (link.path.map_or (
-			[&seg] (Identifier path) {
-			  auto &path_str = path.as_string ();
-			  return path_str == seg.name;
-			},
-			false))
-		    {
-		      insert_segment_resolution (Usage (seg.node_id),
-						 Definition (kv.second.id));
-		      return Rib::Definition::NonShadowable (kv.second.id);
-		    }
-		}
-	    }
 	}
 
+      // FIXME: Is the NS to insert_segment_resolution valid?
       if (res && !res->is_ambiguous ())
 	insert_segment_resolution (Usage (seg.node_id),
-				   Definition (res->get_node_id ()));
+				   Definition (res->get_node_id ()), N);
       return res;
     }
 
@@ -211,8 +214,8 @@ NameResolutionContext::resolve_path (
   // NodeId as a starting point rather than a Node?
 
   auto node
-    = types.resolve_segments (types_starting_point.value (), segments, iterator,
-			      insert_segment_resolution, collect_errors);
+    = resolve_segments (types, types_starting_point.value (), segments,
+			iterator, insert_segment_resolution, collect_errors);
 
   if (!node)
     return tl::nullopt;
@@ -231,38 +234,180 @@ NameResolutionContext::resolve_path (
   std::string seg_name = seg.name;
 
   tl::optional<Rib::Definition> res
-    = stack.resolve_final_segment (final_node, seg_name,
-				   seg.is_lower_self_seg ());
+    = resolve_final_segment (stack, final_node, seg_name,
+			     seg.is_lower_self_seg ());
   // Ok we didn't find it in the rib, Lets try the prelude...
   if (!res)
     res = stack.get_lang_prelude (seg_name);
 
-  if (N == Namespace::Types && !res)
-    {
-      // HACK: check for a module after we check the language prelude
-      for (auto &kv : final_node.children)
-	{
-	  auto &link = kv.first;
-
-	  if (link.path.map_or (
-		[&seg_name] (Identifier path) {
-		  auto &path_str = path.as_string ();
-		  return path_str == seg_name;
-		},
-		false))
-	    {
-	      insert_segment_resolution (Usage (seg.node_id),
-					 Definition (kv.second.id));
-	      return Rib::Definition::NonShadowable (kv.second.id);
-	    }
-	}
-    }
-
   if (res && !res->is_ambiguous ())
     insert_segment_resolution (Usage (seg.node_id),
-			       Definition (res->get_node_id ()));
+			       Definition (res->get_node_id ()), N);
 
   return res;
+}
+
+template <Namespace N>
+tl::optional<typename ForeverStack<N>::Node &>
+NameResolutionContext::resolve_segments (
+  ForeverStack<N> &stack, typename ForeverStack<N>::Node &starting_point,
+  const std::vector<ResolutionPath::Segment> &segments,
+  typename ForeverStack<N>::SegIterator iterator,
+  std::function<void (Usage, Definition, Namespace)> insert_segment_resolution,
+  std::vector<Error> &collect_errors)
+{
+  auto *current_node = &starting_point;
+  for (; !is_last (iterator, segments); iterator++)
+    {
+      auto &seg = *iterator;
+
+      std::string str = seg.name;
+
+      // check that we don't encounter *any* leading keywords afterwards
+      if (check_leading_kw_at_start (collect_errors, seg,
+				     seg.is_crate_path_seg ()
+				       || seg.is_super_path_seg ()
+				       || seg.is_lower_self_seg ()))
+	return tl::nullopt;
+
+      tl::optional<std::reference_wrapper<typename ForeverStack<N>::Node>> child
+	= tl::nullopt;
+
+      /*
+       * On every iteration this loop either
+       *
+       * 1. terminates
+       *
+       * 2. decreases the depth of the node pointed to by current_node until
+       *    current_node reaches the root
+       *
+       * 3. If the root node is reached, and we were not able to resolve the
+       *    segment, we search the prelude rib for the segment, by setting
+       *    current_node to point to the prelude, and toggling the
+       *    searched_prelude boolean to true. If current_node is the prelude
+       *    rib, and searched_prelude is true, we will exit.
+       *
+       * This ensures termination.
+       *
+       */
+      bool searched_prelude = false;
+      while (true)
+	{
+	  if (is_start (iterator, segments)
+	      && current_node->rib.kind == Rib::Kind::TraitOrImpl)
+	    {
+	      // we can't reference associated types/functions like this
+	      current_node = &current_node->parent.value ();
+	      continue;
+	    }
+
+	  // may set the value of child
+	  for (auto &kv : current_node->children)
+	    {
+	      auto &link = kv.first;
+
+	      if (link.path.map_or (
+		    [&str] (Identifier path) {
+		      auto &path_str = path.as_string ();
+		      return str == path_str;
+		    },
+		    false))
+		{
+		  child = kv.second;
+		  break;
+		}
+	    }
+
+	  if (child.has_value ())
+	    {
+	      break;
+	    }
+
+	  auto rib_lookup = current_node->rib.get (seg.name);
+	  if (rib_lookup && !rib_lookup->is_ambiguous ())
+	    {
+	      if (Analysis::Mappings::get ()
+		    .lookup_glob_container (rib_lookup->get_node_id ())
+		    .has_value ())
+		{
+		  NodeId leaf_module
+		    = stack.find_leaf_definition (rib_lookup->get_node_id ())
+			.value_or (Definition (rib_lookup->get_node_id ()))
+			.id;
+
+		  if (auto new_child = stack.dfs_node (stack.root, leaf_module))
+		    {
+		      child = new_child.value ();
+		      break;
+		    }
+		  else
+		    {
+		      return tl::nullopt;
+		    }
+		}
+	      else
+		{
+		  // FIXME: Resolve segments always resolves in the Types NS
+		  // correct? If so, we should remove the template parameter for
+		  // this function - and use NS::Types directly here instead of
+		  // N
+		  insert_segment_resolution (Usage (seg.node_id),
+					     Definition (
+					       rib_lookup->get_node_id ()),
+					     N);
+
+		  return tl::nullopt;
+		}
+	    }
+
+	  if (!searched_prelude
+	      && should_search_prelude<N> (current_node, iterator, segments))
+	    {
+	      searched_prelude = true;
+	      current_node = &stack.lang_prelude;
+	      continue;
+	    }
+
+	  if (!is_start (iterator, segments)
+	      || current_node->rib.kind == Rib::Kind::Module
+	      || current_node->is_prelude ())
+	    {
+	      return tl::nullopt;
+	    }
+
+	  current_node = &current_node->parent.value ();
+	}
+
+      // if child didn't point to a value
+      // the while loop above would have returned or kept looping
+      current_node = &child->get ();
+      insert_segment_resolution (Usage (seg.node_id),
+				 Definition (current_node->id), N);
+    }
+
+  return *current_node;
+}
+
+template <>
+inline tl::optional<Rib::Definition>
+NameResolutionContext::resolve_final_segment (
+  ForeverStack<Namespace::Types> &stack,
+  typename ForeverStack<Namespace::Types>::Node &final_node,
+  std::string &seg_name, bool is_lower_self)
+{
+  if (is_lower_self)
+    return Rib::Definition::NonShadowable (final_node.id);
+  else
+    return final_node.rib.get (seg_name);
+}
+
+template <Namespace N>
+tl::optional<Rib::Definition>
+NameResolutionContext::resolve_final_segment (
+  ForeverStack<N> &stack, typename ForeverStack<N>::Node &final_node,
+  std::string &seg_name, bool is_lower_self)
+{
+  return final_node.rib.get (seg_name);
 }
 
 } // namespace Resolver2_0

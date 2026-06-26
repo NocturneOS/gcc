@@ -21,12 +21,14 @@
 #include "rust-hir-full-decls.h"
 #include "rust-hir-pattern.h"
 #include "rust-hir-type-check-base.h"
+#include "rust-hir-type-check-intrinsic.h"
 #include "rust-hir-type-check-type.h"
 #include "rust-hir-type-check-expr.h"
 #include "rust-hir-type-check-pattern.h"
+#include "rust-rib.h"
 #include "rust-type-util.h"
 #include "rust-tyty.h"
-#include "rust-immutable-name-resolution-context.h"
+#include "rust-finalized-name-resolution-context.h"
 
 namespace Rust {
 namespace Resolver {
@@ -156,6 +158,11 @@ TypeCheckTopLevelExternItem::visit (HIR::ExternalFunctionItem &function)
     region_constraints);
 
   context->insert_type (function.get_mappings (), fnType);
+
+  if (parent.get_abi () == Rust::ABI::INTRINSIC
+      && IntrinsicChecker::check (fnType) == IntrinsicCheckResult::Invalid)
+    return;
+
   resolved = fnType;
 }
 
@@ -339,11 +346,11 @@ TypeCheckImplItem::visit (HIR::Function &function)
 			   param_tyty);
     }
 
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
 
   CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (function.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (function.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Types);
 
   RustIdent ident{canonical_path, function.get_locus ()};
   auto fnType = new TyTy::FnType (
@@ -400,10 +407,11 @@ TypeCheckImplItem::visit (HIR::ConstantItem &constant)
     }
 
   // special case when this is a generic constant
-  auto &nr_ctx
-    = Resolver2_0::ImmutableNameResolutionContext::get ().resolver ();
+  auto &nr_ctx = Resolver2_0::FinalizedNameResolutionContext::get ();
+  // TODO: Is Values the correct NS?
   CanonicalPath canonical_path
-    = nr_ctx.to_canonical_path (constant.get_mappings ().get_nodeid ());
+    = nr_ctx.to_canonical_path (constant.get_mappings ().get_nodeid (),
+				Resolver2_0::Namespace::Values);
   RustIdent ident{canonical_path, constant.get_locus ()};
   auto fnType = new TyTy::FnType (
     constant.get_mappings ().get_hirid (),

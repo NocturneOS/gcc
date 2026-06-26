@@ -462,7 +462,7 @@ tl::optional<typename std::vector<ResolutionPath::Segment>::const_iterator>
 ForeverStack<N>::find_starting_point (
   const std::vector<ResolutionPath::Segment> &segments,
   std::reference_wrapper<Node> &starting_point,
-  std::function<void (Usage, Definition)> insert_segment_resolution,
+  std::function<void (Usage, Definition, Namespace)> insert_segment_resolution,
   std::vector<Error> &collect_errors)
 {
   auto iterator = segments.begin ();
@@ -485,7 +485,7 @@ ForeverStack<N>::find_starting_point (
 	{
 	  starting_point = root;
 	  insert_segment_resolution (Usage (seg.node_id),
-				     Definition (starting_point.get ().id));
+				     Definition (starting_point.get ().id), N);
 	  iterator++;
 	  break;
 	}
@@ -494,7 +494,7 @@ ForeverStack<N>::find_starting_point (
 	  // insert segment resolution and exit
 	  starting_point = find_closest_module (starting_point);
 	  insert_segment_resolution (Usage (seg.node_id),
-				     Definition (starting_point.get ().id));
+				     Definition (starting_point.get ().id), N);
 	  iterator++;
 	  break;
 	}
@@ -513,7 +513,7 @@ ForeverStack<N>::find_starting_point (
 	    = find_closest_module (starting_point.get ().parent.value ());
 
 	  insert_segment_resolution (Usage (seg.node_id),
-				     Definition (starting_point.get ().id));
+				     Definition (starting_point.get ().id), N);
 	  continue;
 	}
 
@@ -524,147 +524,6 @@ ForeverStack<N>::find_starting_point (
     }
 
   return iterator;
-}
-
-template <Namespace N>
-tl::optional<typename ForeverStack<N>::Node &>
-ForeverStack<N>::resolve_segments (
-  Node &starting_point, const std::vector<ResolutionPath::Segment> &segments,
-  typename std::vector<ResolutionPath::Segment>::const_iterator iterator,
-  std::function<void (Usage, Definition)> insert_segment_resolution,
-  std::vector<Error> &collect_errors)
-{
-  Node *current_node = &starting_point;
-  for (; !is_last (iterator, segments); iterator++)
-    {
-      auto &seg = *iterator;
-
-      std::string str = seg.name;
-      rust_debug ("[ARTHUR]: resolving segment part: %s", str.c_str ());
-
-      // check that we don't encounter *any* leading keywords afterwards
-      if (check_leading_kw_at_start (collect_errors, seg,
-				     seg.is_crate_path_seg ()
-				       || seg.is_super_path_seg ()
-				       || seg.is_lower_self_seg ()))
-	return tl::nullopt;
-
-      tl::optional<std::reference_wrapper<Node>> child = tl::nullopt;
-
-      /*
-       * On every iteration this loop either
-       *
-       * 1. terminates
-       *
-       * 2. decreases the depth of the node pointed to by current_node until
-       *    current_node reaches the root
-       *
-       * 3. If the root node is reached, and we were not able to resolve the
-       *    segment, we search the prelude rib for the segment, by setting
-       *    current_node to point to the prelude, and toggling the
-       *    searched_prelude boolean to true. If current_node is the prelude
-       *    rib, and searched_prelude is true, we will exit.
-       *
-       * This ensures termination.
-       *
-       */
-      bool searched_prelude = false;
-      while (true)
-	{
-	  if (is_start (iterator, segments)
-	      && current_node->rib.kind == Rib::Kind::TraitOrImpl)
-	    {
-	      // we can't reference associated types/functions like this
-	      current_node = &current_node->parent.value ();
-	      continue;
-	    }
-
-	  // may set the value of child
-	  for (auto &kv : current_node->children)
-	    {
-	      auto &link = kv.first;
-
-	      if (link.path.map_or (
-		    [&str] (Identifier path) {
-		      auto &path_str = path.as_string ();
-		      return str == path_str;
-		    },
-		    false))
-		{
-		  child = kv.second;
-		  break;
-		}
-	    }
-
-	  if (child.has_value ())
-	    {
-	      break;
-	    }
-
-	  auto rib_lookup = current_node->rib.get (seg.name);
-	  if (rib_lookup && !rib_lookup->is_ambiguous ())
-	    {
-	      if (Analysis::Mappings::get ()
-		    .lookup_glob_container (rib_lookup->get_node_id ())
-		    .has_value ())
-		{
-		  child = dfs_node (root, rib_lookup->get_node_id ()).value ();
-		  break;
-		}
-	      else
-		{
-		  insert_segment_resolution (Usage (seg.node_id),
-					     Definition (
-					       rib_lookup->get_node_id ()));
-		  return tl::nullopt;
-		}
-	    }
-
-	  if (current_node->is_root () && !searched_prelude)
-	    {
-	      searched_prelude = true;
-	      current_node = &lang_prelude;
-	      continue;
-	    }
-
-	  if (!is_start (iterator, segments)
-	      || current_node->rib.kind == Rib::Kind::Module
-	      || current_node->is_prelude ())
-	    {
-	      return tl::nullopt;
-	    }
-
-	  current_node = &current_node->parent.value ();
-	}
-
-      // if child didn't point to a value
-      // the while loop above would have returned or kept looping
-      current_node = &child->get ();
-      insert_segment_resolution (Usage (seg.node_id),
-				 Definition (current_node->id));
-    }
-
-  return *current_node;
-}
-
-template <>
-inline tl::optional<Rib::Definition>
-ForeverStack<Namespace::Types>::resolve_final_segment (Node &final_node,
-						       std::string &seg_name,
-						       bool is_lower_self)
-{
-  if (is_lower_self)
-    return Rib::Definition::NonShadowable (final_node.id);
-  else
-    return final_node.rib.get (seg_name);
-}
-
-template <Namespace N>
-tl::optional<Rib::Definition>
-ForeverStack<N>::resolve_final_segment (Node &final_node, std::string &seg_name,
-					bool is_lower_self)
-{
-  return final_node.rib.get (seg_name);
 }
 
 template <Namespace N>
@@ -873,6 +732,69 @@ ForeverStack<N>::is_module_descendant (NodeId parent, NodeId child) const
 {
   return dfs_node (dfs_node (root, parent).value (), child).has_value ();
 }
+
+static tl::expected<Definition, LookupFinalizeError>
+find_leaf_definition_inner (const Usage &key,
+			    const std::map<Usage, Definition> &resolved_nodes,
+			    std::set<Usage> &keys_seen)
+{
+  auto original_definition = resolved_nodes.find (key);
+  auto possible_import = Usage (original_definition->second.id);
+
+  if (original_definition == resolved_nodes.end ())
+    return tl::make_unexpected (LookupFinalizeError::NoDefinition);
+
+  if (!keys_seen.insert (key).second)
+    return tl::make_unexpected (LookupFinalizeError::Loop);
+
+  if (resolved_nodes.find (possible_import) == resolved_nodes.end ())
+    return original_definition->second;
+
+  // We're dealing with an import - a reference to another
+  // definition. Go through the chain and update the original key's
+  // corresponding definition.
+  return find_leaf_definition_inner (possible_import, resolved_nodes,
+				     keys_seen);
+}
+
+template <Namespace N>
+tl::expected<Definition, LookupFinalizeError>
+ForeverStack<N>::find_leaf_definition (const NodeId &key) const
+{
+  std::set<Usage> keys_seen;
+
+  return find_leaf_definition_inner (Usage (key), resolved_nodes, keys_seen);
+}
+
+#if 0
+template <Namespace N>
+void
+ForeverStack<N>::flatten ()
+{
+  for (auto &k_v : resolved_nodes)
+    {
+      // Loop detection
+      auto keys_seen = std::set<Usage> ();
+
+      auto result
+	= find_leaf_definition_inner (k_v.first, resolved_nodes, keys_seen);
+
+      if (!result)
+	{
+	  // Trigger an ICE if we haven't found a definition because that's
+	  // really weird
+	  rust_assert (result.error () != LookupFinalizeError::NoDefinition);
+
+	  // FIXME: This needs to be improved and tested, but later
+	  rust_error_at (UNDEF_LOCATION, "import loop");
+	  continue;
+	}
+
+      // Replace the Definition for this Usage in the map. This may be a no-op.
+      k_v.second = result.value ();
+    }
+}
+#endif
 
 // FIXME: Can we add selftests?
 
