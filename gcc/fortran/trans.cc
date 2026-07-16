@@ -33,6 +33,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-array.h"
 #include "trans-types.h"
 #include "trans-const.h"
+#include "trans-descriptor.h"
 
 /* Naming convention for backend interface code:
 
@@ -2696,7 +2697,9 @@ trans_code (gfc_code * code, tree cond)
 
       if (res != NULL_TREE && ! IS_EMPTY_STMT (res))
 	{
-	  if (TREE_CODE (res) != STATEMENT_LIST)
+	  /* Don't try to set location for trees that don't have one,
+	     e.g. STATEMENT_LIST or error_mark_node.  */
+	  if (EXPR_P (res))
 	    SET_EXPR_LOCATION (res, input_location);
 
 	  /* Add the new statement to the block.  */

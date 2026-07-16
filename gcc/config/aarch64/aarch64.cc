@@ -61,6 +61,7 @@
 #include "dwarf2.h"
 #include "dwarf2out.h"
 #include "gimple-iterator.h"
+#include "gimple-fold.h"
 #include "tree-vectorizer.h"
 #include "aarch64-cost-tables.h"
 #include "dumpfile.h"
@@ -481,7 +482,7 @@ struct processor
 };
 
 /* Architectures implementing AArch64.  */
-static CONSTEXPR const processor all_architectures[] =
+static constexpr const processor all_architectures[] =
 {
 #define AARCH64_ARCH(NAME, CORE, ARCH_IDENT, D, E) \
   {NAME, AARCH64_CPU_##CORE, AARCH64_CPU_##CORE, AARCH64_ARCH_##ARCH_IDENT, \
@@ -928,7 +929,7 @@ static const attribute_spec aarch64_gnu_attributes[] =
 			  aarch64_pcs_exclusions },
   { "indirect_return",    0, 0, false, true, true, true, NULL, NULL },
   { "arm_sve_vector_bits", 1, 1, false, true,  false, true,
-			  aarch64_sve::handle_arm_sve_vector_bits_attribute,
+			  aarch64_acle::handle_arm_sve_vector_bits_attribute,
 			  NULL },
   { "Advanced SIMD type", 1, 1, false, true,  false, true,  NULL, NULL },
   { "SVE type",		  3, 3, false, true,  false, true,  NULL, NULL },
@@ -1149,7 +1150,7 @@ pure_scalable_type_info::analyze (const_tree type)
 
   /* Check for SVTs, SPTs, and built-in tuple types that map to PSTs.  */
   piece p = {};
-  if (aarch64_sve::builtin_type_p (type, &p.num_zr, &p.num_pr))
+  if (aarch64_acle::builtin_type_p (type, &p.num_zr, &p.num_pr))
     {
       machine_mode mode = TYPE_MODE_RAW (type);
       gcc_assert (VECTOR_MODE_P (mode)
@@ -1323,7 +1324,7 @@ aarch64_some_values_include_pst_objects_p (const_tree type)
   if (TYPE_SIZE (type) && integer_zerop (TYPE_SIZE (type)))
     return false;
 
-  if (aarch64_sve::builtin_type_p (type))
+  if (aarch64_acle::builtin_type_p (type))
     return true;
 
   if (TREE_CODE (type) == ARRAY_TYPE || TREE_CODE (type) == COMPLEX_TYPE)
@@ -1565,6 +1566,26 @@ aarch64_debugger_regno (unsigned regno)
       equivalent DWARF register.  */
    return DWARF_FRAME_REGISTERS;
 }
+
+#if defined(HAVE_AS_TLS) && defined(HAVE_AS_DTPREL_RELOC)
+/* Implementation of TARGET_ASM_OUTPUT_DWARF_DTPREL.  */
+static void
+aarch64_output_dwarf_dtprel (FILE *f, int size, rtx x)
+{
+  /* The AArch64 ABI defines static DTPREL relocations only for 8-byte (.xword)
+     DWARF entries.  For any other size there is no valid dtprel(symbol)
+     encoding and rejecting the request.  */
+  if (size != 8)
+    {
+      error ("unsupported size %d for DTPREL relocation, allowed: 8", size);
+      return;
+    }
+  fputs ("\t.xword\t", f);
+  fputs ("%dtprel(", f);
+  output_addr_const (f, x);
+  fputs (")", f);
+}
+#endif
 
 /* Implement TARGET_DWARF_FRAME_REG_MODE.  */
 static machine_mode
@@ -2229,6 +2250,87 @@ aarch64_preferred_else_value (unsigned, tree, unsigned int nops, tree *ops)
   return nops == 3 ? ops[2] : ops[0];
 }
 
+/* Try to widen a signed, overflow-undefined multiply by a power of two before
+   converting it to a wider integral type.
+
+   This helps AArch64 instruction selection expose a form that can be emitted
+   as SBFIZ, avoiding an otherwise separate sign-extension around the
+   shift/bitfield operation.
+
+   For example, rewrite:
+
+     _2 = _1 * 2;
+     _3 = (long int) _2;
+
+   into:
+
+     _6 = (long int) _1;
+     _3 = _6 * 2;
+
+   This is valid because overflow in the original narrow signed multiply is
+   undefined.  For all defined executions, widening the multiplicand before the
+   multiply produces the same value as multiplying in the narrow type and then
+   converting the result.
+
+   The original narrow multiply is removed immediately.  There is no DCE pass
+   after AArch64 instruction selection, so leaving it behind would keep dead
+   multiplications in the final optimized GIMPLE dump.  */
+static bool
+aarch64_try_widen_mult_by_pow2 (const gassign *convert,
+				gimple_stmt_iterator *gsi)
+{
+  tree type = TREE_TYPE (gimple_assign_lhs (convert));
+  tree inner = gimple_assign_rhs1 (convert);
+  tree inner_type = TREE_TYPE (inner);
+
+  if (!INTEGRAL_TYPE_P (type)
+      || !INTEGRAL_TYPE_P (inner_type)
+      || !TYPE_OVERFLOW_UNDEFINED (inner_type)
+      || TYPE_PRECISION (type) <= TYPE_PRECISION (inner_type)
+      || TYPE_PRECISION (type) > BITS_PER_WORD
+      || TREE_CODE (inner) != SSA_NAME
+      || !has_single_use (inner))
+    return false;
+
+  gimple *stmt = SSA_NAME_DEF_STMT (inner);
+  if (!is_gimple_assign (stmt)
+      || gimple_assign_rhs_code (stmt) != MULT_EXPR)
+    return false;
+
+  tree multiplicand = gimple_assign_rhs1 (stmt);
+  tree pow2const = gimple_assign_rhs2 (stmt);
+  if (!integer_pow2p (pow2const)
+      || tree_int_cst_sgn (pow2const) <= 0)
+    return false;
+
+  gimple_stmt_iterator stmt_gsi = gsi_for_stmt (stmt);
+
+  gimple_seq stmts = NULL;
+  tree widened_multiplicand = gimple_convert (&stmts,
+					      gimple_location (convert),
+					      type, multiplicand);
+
+  gsi_insert_seq_before (gsi, stmts, GSI_SAME_STMT);
+
+  tree widened_pow2const = fold_convert (type, pow2const);
+
+  tree mul_lhs = gimple_assign_lhs (convert);
+  gassign *mul_stmt
+    = gimple_build_assign (mul_lhs, MULT_EXPR,
+			   widened_multiplicand,
+			   widened_pow2const);
+
+  gsi_replace (gsi, mul_stmt, true);
+
+  /* INNER was used only by CONVERT, which we just replaced.  The defining
+     multiply is therefore dead, so remove it.  */
+  gcc_checking_assert (has_zero_uses (inner));
+  gsi_remove (&stmt_gsi, true);
+  release_defs (stmt);
+
+  return true;
+}
+
 /* Implement TARGET_INSTRUCTION_SELECTION.  The target hook is used to
    change generic sequences to a form AArch64 has an easier time expanding
    instructions for.  It's not supposed to be used for generic rewriting that
@@ -2242,6 +2344,10 @@ aarch64_instruction_selection (function * /* fun */, gimple_stmt_iterator *gsi)
 
   if (!assign)
     return false;
+
+  if (CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (assign))
+      && aarch64_try_widen_mult_by_pow2 (assign, gsi))
+    return true;
 
   /* Convert
 	p == q ? s1 : s2;
@@ -2591,7 +2697,9 @@ aarch64_fntype_abi (const_tree fntype)
   if (lookup_attribute ("aarch64_vector_pcs", TYPE_ATTRIBUTES (fntype)))
     return aarch64_simd_abi ();
 
-  if (lookup_attribute ("preserve_none", TYPE_ATTRIBUTES (fntype)))
+  /* Fall back to AAPCS for variadic functions.  */
+  if (lookup_attribute ("preserve_none", TYPE_ATTRIBUTES (fntype))
+      && !stdarg_p (fntype))
     return aarch64_preserve_none_abi ();
 
   if (aarch64_returns_value_in_sve_regs_p (fntype)
@@ -2777,8 +2885,8 @@ aarch64_call_switches_pstate_sm (aarch64_isa_mode callee_mode)
 static bool
 aarch64_compatible_vector_types_p (const_tree type1, const_tree type2)
 {
-  return (aarch64_sve::builtin_type_p (type1)
-	  == aarch64_sve::builtin_type_p (type2));
+  return (aarch64_acle::builtin_type_p (type1)
+	  == aarch64_acle::builtin_type_p (type2));
 }
 
 /* Return true if we should emit CFI for register REGNO.  */
@@ -7493,7 +7601,15 @@ aarch64_function_arg_alignment (machine_mode mode, const_tree type,
 	  *abi_break_gcc_14 = TYPE_ALIGN (type);
 	  type = TYPE_MAIN_VARIANT (TREE_TYPE (type));
 	}
-      gcc_assert (!TYPE_USER_ALIGN (type));
+      /* Ignore any user-specified alignment: the AAPCS64 uses the
+	 type's natural alignment for scalars and vectors.  We normally
+	 strip user alignment by taking the TYPE_MAIN_VARIANT above, but
+	 an attribute that affects type identity (such as may_alias) can
+	 make a type its own main variant while still recording the user
+	 alignment, so handle that case explicitly here (PR124146).  For
+	 a scalar or vector the natural alignment is that of its mode.  */
+      if (TYPE_USER_ALIGN (type))
+	return GET_MODE_ALIGNMENT (mode);
       return TYPE_ALIGN (type);
     }
 
@@ -16798,7 +16914,7 @@ static void
 aarch64_init_builtins ()
 {
   aarch64_general_init_builtins ();
-  aarch64_sve::init_builtins ();
+  aarch64_acle::init_builtins ();
   if (TARGET_AARCH64_MS_ABI)
     {
       aarch64_ms_variadic_abi_init_builtins ();
@@ -16842,7 +16958,7 @@ aarch64_gimple_fold_builtin (gimple_stmt_iterator *gsi)
       break;
 
     case AARCH64_BUILTIN_SVE:
-      new_stmt = aarch64_sve::gimple_fold_builtin (subcode, gsi, stmt);
+      new_stmt = aarch64_acle::gimple_fold_builtin (subcode, gsi, stmt);
       break;
     }
 
@@ -16866,7 +16982,7 @@ aarch64_expand_builtin (tree exp, rtx target, rtx, machine_mode, int ignore)
       return aarch64_general_expand_builtin (subcode, exp, target, ignore);
 
     case AARCH64_BUILTIN_SVE:
-      return aarch64_sve::expand_builtin (subcode, exp, target);
+      return aarch64_acle::expand_builtin (subcode, exp, target);
     }
   gcc_unreachable ();
 }
@@ -16882,7 +16998,7 @@ aarch64_builtin_decl (unsigned int code, bool initialize_p)
       return aarch64_general_builtin_decl (subcode, initialize_p);
 
     case AARCH64_BUILTIN_SVE:
-      return aarch64_sve::builtin_decl (subcode, initialize_p);
+      return aarch64_acle::builtin_decl (subcode, initialize_p);
     }
   gcc_unreachable ();
 }
@@ -17191,9 +17307,13 @@ aarch64_sched_variable_issue (FILE *, int, rtx_insn *insn, int more)
 static int
 aarch64_sched_first_cycle_multipass_dfa_lookahead (void)
 {
-  int issue_rate = aarch64_sched_issue_rate ();
+  /* Do not use DFA lookahead during sched_fusion or when dispatch
+     scheduling is enabled.  */
+  if (sched_fusion || aarch64_sched_dispatch (NULL, IS_DISPATCH_ON))
+    return 0;
 
-  return issue_rate > 1 && !sched_fusion ? issue_rate : 0;
+  int issue_rate = aarch64_sched_issue_rate ();
+  return issue_rate > 1 ? issue_rate : 0;
 }
 
 
@@ -17458,7 +17578,7 @@ private:
   unsigned int adjust_body_cost (loop_vec_info, const aarch64_vector_costs *,
 				 unsigned int);
   bool prefer_unrolled_loop () const;
-  unsigned int determine_suggested_unroll_factor ();
+  unsigned int determine_suggested_unroll_factor (loop_vec_info loop_vinfo);
 
   /* True if we have performed one-time initialization based on the
      vec_info.  */
@@ -19020,7 +19140,8 @@ adjust_body_cost_sve (const aarch64_vec_op_count *ops,
 }
 
 unsigned int
-aarch64_vector_costs::determine_suggested_unroll_factor ()
+aarch64_vector_costs::
+determine_suggested_unroll_factor (loop_vec_info loop_vinfo)
 {
   bool sve = m_vec_flags & VEC_ANY_SVE;
   /* If we are trying to unroll an Advanced SIMD main loop that contains
@@ -19075,6 +19196,16 @@ aarch64_vector_costs::determine_suggested_unroll_factor ()
 	  unroll_factor = MIN (unroll_factor, temp);
 	 }
       max_unroll_factor = MAX (max_unroll_factor, unroll_factor);
+    }
+
+  /* For known iteration loops, cap suggested unroll factor to avoid redundant
+     unrolled chunks.  Use CEIL rather than truncating division to make sure
+     the completely unrolled vector loop covers all scalar iterations.  */
+  if (LOOP_VINFO_NITERS_KNOWN_P (loop_vinfo))
+    {
+      unsigned int niters = LOOP_VINFO_INT_NITERS (loop_vinfo);
+      unsigned int estimated_vf = vect_vf_for_cost (loop_vinfo);
+      max_unroll_factor = MIN (max_unroll_factor, CEIL (niters, estimated_vf));
     }
 
   /* Make sure unroll factor is power of 2.  */
@@ -19268,7 +19399,8 @@ aarch64_vector_costs::finish_cost (const vector_costs *uncast_scalar_costs)
     {
       m_costs[vect_body] = adjust_body_cost (loop_vinfo, scalar_costs,
 					     m_costs[vect_body]);
-      m_suggested_unroll_factor = determine_suggested_unroll_factor ();
+      m_suggested_unroll_factor
+	= determine_suggested_unroll_factor (loop_vinfo);
 
       /* For gather and scatters there's an additional overhead for the first
 	 iteration.  For low count loops they're not beneficial so model the
@@ -19963,11 +20095,17 @@ aarch64_override_options_internal (struct gcc_options *opts,
       && opts->x_optimize >= aarch64_tune_params.prefetch->default_opt_level)
     opts->x_flag_prefetch_loop_arrays = 1;
 
-  /* Avoid loop-dependant FMA chains.  */
+  /* Avoid loop-dependant FMA chains.  The reassoc-side reorder helper
+     keeps using --param=avoid-fma-max-bits; the widening-mul-side
+     deferring is gated separately by --param=widening-mul-defer-fma, so we
+     suppress only the deferring on these cores while leaving the reassoc
+     reorder active.  */
   if (aarch64_tune_params.extra_tuning_flags
       & AARCH64_EXTRA_TUNE_AVOID_CROSS_LOOP_FMA)
-    SET_OPTION_IF_UNSET (opts, opts_set, param_avoid_fma_max_bits,
-			 512);
+    {
+      SET_OPTION_IF_UNSET (opts, opts_set, param_avoid_fma_max_bits, 512);
+      SET_OPTION_IF_UNSET (opts, opts_set, param_widening_mul_defer_fma, 0);
+    }
 
   /* Consider fully pipelined FMA in reassociation.  */
   if (aarch64_tune_params.extra_tuning_flags
@@ -23132,7 +23270,7 @@ aarch64_member_type_forces_blk (const_tree field_or_array, machine_mode mode)
      For structures, the "multiple" case is indicated by MODE being
      VOIDmode.  */
   unsigned int num_zr, num_pr;
-  if (aarch64_sve::builtin_type_p (type, &num_zr, &num_pr) && num_pr > 2)
+  if (aarch64_acle::builtin_type_p (type, &num_zr, &num_pr) && num_pr > 2)
     {
       if (TREE_CODE (field_or_array) == ARRAY_TYPE)
 	return !simple_cst_equal (TYPE_SIZE (field_or_array),
@@ -23184,7 +23322,7 @@ aapcs_vfp_sub_candidate (const_tree type, machine_mode *modep,
   machine_mode mode;
   HOST_WIDE_INT size;
 
-  if (aarch64_sve::builtin_type_p (type))
+  if (aarch64_acle::builtin_type_p (type))
     return -1;
 
   switch (TREE_CODE (type))
@@ -23408,7 +23546,7 @@ aarch64_short_vector_p (const_tree type,
 
   if (type && VECTOR_TYPE_P (type))
     {
-      if (aarch64_sve::builtin_type_p (type))
+      if (aarch64_acle::builtin_type_p (type))
 	return false;
       size = int_size_in_bytes (type);
     }
@@ -23904,7 +24042,7 @@ aarch64_mangle_type (const_tree type)
     {
       const char *res;
       if ((res = aarch64_general_mangle_builtin_type (type))
-	  || (res = aarch64_sve::mangle_builtin_type (type)))
+	  || (res = aarch64_acle::mangle_builtin_type (type)))
 	return res;
     }
 
@@ -23941,7 +24079,7 @@ static bool
 aarch64_verify_type_context (location_t loc, type_context_kind context,
 			     const_tree type, bool silent_p)
 {
-  return aarch64_sve::verify_type_context (loc, context, type, silent_p);
+  return aarch64_acle::verify_type_context (loc, context, type, silent_p);
 }
 
 /* Find the first rtx_insn before insn that will generate an assembly
@@ -31246,7 +31384,7 @@ simd_clone_adjust_sve_vector_type (tree type, bool is_mask, poly_uint64 simdlen)
      However, it doesn't seem worth trying to fix that until we have a
      way of handling implementations that operate on unpacked types.  */
   type = build_distinct_type_copy (type);
-  aarch64_sve::add_sve_type_attribute (type, num_zr, num_pr, NULL, NULL);
+  aarch64_acle::add_sve_type_attribute (type, num_zr, num_pr, NULL, NULL);
   return type;
 }
 
@@ -31487,7 +31625,7 @@ aarch64_invalid_unary_op (int op, const_tree type)
 {
   if (VECTOR_BOOLEAN_TYPE_P (type)
       && !TYPE_INDIVISIBLE_P (type)
-      && aarch64_sve::builtin_type_p (type))
+      && aarch64_acle::builtin_type_p (type))
     return aarch64_valid_vector_boolean_op (op);
 
   /* Reject all single-operand operations on __mfp8 except for &.  */
@@ -31511,12 +31649,12 @@ aarch64_invalid_binary_op (int op, const_tree type1,
       && !TYPE_INDIVISIBLE_P (type1)
       && !TYPE_INDIVISIBLE_P (type2))
     {
-      if ((aarch64_sve::builtin_type_p (type1)
-	  != aarch64_sve::builtin_type_p (type2)))
+      if ((aarch64_acle::builtin_type_p (type1)
+	   != aarch64_acle::builtin_type_p (type2)))
 	return N_("cannot combine GNU and SVE vectors in a binary operation");
 
-      if (aarch64_sve::builtin_type_p (type1)
-	  && aarch64_sve::builtin_type_p (type2)
+      if (aarch64_acle::builtin_type_p (type1)
+	  && aarch64_acle::builtin_type_p (type2)
 	  && VECTOR_BOOLEAN_TYPE_P (type1)
 	  && VECTOR_BOOLEAN_TYPE_P (type2))
 	return aarch64_valid_vector_boolean_op (op);
@@ -33994,6 +34132,11 @@ aarch64_libgcc_floating_mode_supported_p
 
 #undef TARGET_DWARF_FRAME_REG_MODE
 #define TARGET_DWARF_FRAME_REG_MODE aarch64_dwarf_frame_reg_mode
+
+#if defined(HAVE_AS_TLS) && defined(HAVE_AS_DTPREL_RELOC)
+#undef TARGET_ASM_OUTPUT_DWARF_DTPREL
+#define TARGET_ASM_OUTPUT_DWARF_DTPREL aarch64_output_dwarf_dtprel
+#endif
 
 #undef TARGET_OUTPUT_CFI_DIRECTIVE
 #define TARGET_OUTPUT_CFI_DIRECTIVE aarch64_output_cfi_directive

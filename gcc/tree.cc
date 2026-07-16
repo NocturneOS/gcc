@@ -2201,23 +2201,20 @@ build_vector_from_ctor (tree type, const vec<constructor_elt, va_gc> *v)
   if (vec_safe_length (v) == 0)
     return build_zero_cst (type);
 
-  unsigned HOST_WIDE_INT idx, nelts, step = 1;
+  unsigned HOST_WIDE_INT idx, npatterns, nelts_per_pattern;
   tree value;
 
   /* If the vector is a VLA, build a VLA constant vector.  */
-  if (!TYPE_VECTOR_SUBPARTS (type).is_constant (&nelts))
-    {
-      nelts = constant_lower_bound (TYPE_VECTOR_SUBPARTS (type));
-      gcc_assert (vec_safe_length (v) <= nelts);
-      step = 2;
-    }
+  npatterns = constant_lower_bound (TYPE_VECTOR_SUBPARTS (type));
+  nelts_per_pattern = TYPE_VECTOR_SUBPARTS (type).is_constant () ? 1 : 2;
+  gcc_assert (vec_safe_length (v) <= npatterns);
 
-  tree_vector_builder vec (type, nelts, step);
+  tree_vector_builder vec (type, npatterns, nelts_per_pattern);
   FOR_EACH_CONSTRUCTOR_VALUE (v, idx, value)
     {
       if (TREE_CODE (value) == VECTOR_CST)
 	{
-	  /* If NELTS is constant then this must be too.  */
+	  /* If NPATTERNS is constant then this must be too.  */
 	  unsigned int sub_nelts = VECTOR_CST_NELTS (value).to_constant ();
 	  for (unsigned i = 0; i < sub_nelts; ++i)
 	    vec.quick_push (VECTOR_CST_ELT (value, i));
@@ -2225,7 +2222,7 @@ build_vector_from_ctor (tree type, const vec<constructor_elt, va_gc> *v)
       else
 	vec.quick_push (value);
     }
-  while (vec.length () < nelts * step)
+  while (vec.length () < npatterns * nelts_per_pattern)
     vec.quick_push (build_zero_cst (TREE_TYPE (type)));
 
   return vec.build ();
@@ -15140,6 +15137,22 @@ default_is_empty_record (const_tree type)
   return is_empty_type (TYPE_MAIN_VARIANT (type));
 }
 
+
+/* Determine whether TYPE is an ISO C99 flexible array member type "[]".  */
+
+bool
+flexible_array_member_type_p (const_tree type)
+{
+  if (TREE_CODE (type) == ARRAY_TYPE
+      && TYPE_SIZE (type) == NULL_TREE
+      && TYPE_DOMAIN (type) != NULL_TREE
+      && TYPE_MAX_VALUE (TYPE_DOMAIN (type)) == NULL_TREE)
+    return true;
+
+  return false;
+}
+
+
 /* Determine whether TYPE is a structure with a flexible array member,
    or a union containing such a structure (possibly recursively).  */
 
@@ -15156,12 +15169,7 @@ flexible_array_type_p (const_tree type)
 	  last = x;
       if (last == NULL_TREE)
 	return false;
-      if (TREE_CODE (TREE_TYPE (last)) == ARRAY_TYPE
-	  && TYPE_SIZE (TREE_TYPE (last)) == NULL_TREE
-	  && TYPE_DOMAIN (TREE_TYPE (last)) != NULL_TREE
-	  && TYPE_MAX_VALUE (TYPE_DOMAIN (TREE_TYPE (last))) == NULL_TREE)
-	return true;
-      return false;
+       return flexible_array_member_type_p (TREE_TYPE (last));
     case UNION_TYPE:
       for (x = TYPE_FIELDS (type); x != NULL_TREE; x = DECL_CHAIN (x))
 	{

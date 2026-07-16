@@ -370,6 +370,9 @@ UrlSuffix(gcc/Warning-Options.html#index-Wc_002b_002b23-extensions)
 Wc++26-extensions
 UrlSuffix(gcc/Warning-Options.html#index-Wc_002b_002b26-extensions)
 
+Wc++29-extensions
+UrlSuffix(gcc/Warning-Options.html#index-Wc_002b_002b29-extensions)
+
 Wcalloc-transposed-args
 UrlSuffix(gcc/Warning-Options.html#index-Wcalloc-transposed-args)
 
@@ -678,6 +681,9 @@ UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Winvalid-offsetof)
 
 Winvalid-pch
 UrlSuffix(gcc/Warning-Options.html#index-Winvalid-pch)
+
+Winvalid-specialization
+UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-Winvalid-specialization)
 
 Winvalid-utf8
 UrlSuffix(gcc/Warning-Options.html#index-Winvalid-utf8)

@@ -41,8 +41,7 @@
 
 extern void __gg__mabort();
 
-
-// The unnecessary abort() that follows is necessary to make cppcheck be 
+// The unnecessary abort() that follows is necessary to make cppcheck be
 // aware that massert() actually terminates processing after a failed
 // malloc().
 #define massert(p) if(!p){__gg__mabort();abort();}

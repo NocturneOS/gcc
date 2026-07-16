@@ -743,8 +743,6 @@ extern const char *host_detect_local_cpu (int argc, const char **argv);
 #define POINTER_SIZE (TARGET_X32 ? 32 : BITS_PER_WORD)
 #define LONG_LONG_TYPE_SIZE 64
 
-#define WIDEST_HARDWARE_FP_SIZE 80
-
 #if defined (TARGET_BI_ARCH) || TARGET_64BIT_DEFAULT
 #define MAX_BITS_PER_WORD 64
 #else
@@ -2506,8 +2504,7 @@ constexpr wide_int_bitmask PTA_PANTHERLAKE =
 constexpr wide_int_bitmask PTA_DIAMONDRAPIDS = PTA_GRANITERAPIDS_D
   | PTA_AVXIFMA | PTA_AVXNECONVERT | PTA_AVXVNNIINT16 | PTA_AVXVNNIINT8
   | PTA_CMPCCXADD | PTA_SHA512 | PTA_SM3 | PTA_SM4 | PTA_AVX10_2
-  | PTA_APX_F | PTA_AMX_AVX512 | PTA_AMX_FP8 | PTA_AMX_TF32 | PTA_MOVRS
-  | PTA_AMX_MOVRS;
+  | PTA_APX_F | PTA_AMX_AVX512 | PTA_AMX_FP8 | PTA_MOVRS | PTA_AMX_MOVRS;
 constexpr wide_int_bitmask PTA_NOVALAKE = PTA_PANTHERLAKE | PTA_PREFETCHI
   | PTA_AVX512F | PTA_AVX512CD | PTA_AVX512VL | PTA_AVX512BW | PTA_AVX512DQ
   | PTA_AVX512VBMI | PTA_AVX512IFMA | PTA_AVX512VNNI | PTA_AVX512VBMI2
@@ -2805,25 +2802,25 @@ struct GTY(()) machine_frame_state
      value within the frame.  If false then the offset above should be
      ignored.  Note that DRAP, if valid, *always* points to the CFA and
      thus has an offset of zero.  */
-  BOOL_BITFIELD sp_valid : 1;
-  BOOL_BITFIELD fp_valid : 1;
-  BOOL_BITFIELD drap_valid : 1;
+  bool sp_valid : 1;
+  bool fp_valid : 1;
+  bool drap_valid : 1;
 
   /* Indicate whether the local stack frame has been re-aligned.  When
      set, the SP/FP offsets above are relative to the aligned frame
      and not the CFA.  */
-  BOOL_BITFIELD realigned : 1;
+  bool realigned : 1;
 
   /* Indicates whether the stack pointer has been re-aligned.  When set,
      SP/FP continue to be relative to the CFA, but the stack pointer
      should only be used for offsets > sp_realigned_offset, while
      the frame pointer should be used for offsets <= sp_realigned_fp_last.
      The flags realigned and sp_realigned are mutually exclusive.  */
-  BOOL_BITFIELD sp_realigned : 1;
+  bool sp_realigned : 1;
 
   /* When APX_PPX used in prologue, force epilogue to emit
   popp instead of move and leave.  */
-  BOOL_BITFIELD apx_ppx_used : 1;
+  bool apx_ppx_used : 1;
 
   /* If sp_realigned is set, this is the last valid offset from the CFA
      that can be used for access with the frame pointer.  */
@@ -2900,15 +2897,15 @@ struct GTY(()) machine_function {
   ENUM_BITFIELD(calling_abi) call_abi : 8;
 
   /* Nonzero if the function accesses a previous frame.  */
-  BOOL_BITFIELD accesses_prev_frame : 1;
+  bool accesses_prev_frame : 1;
 
   /* Set by ix86_compute_frame_layout and used by prologue/epilogue
      expander to determine the style used.  */
-  BOOL_BITFIELD use_fast_prologue_epilogue : 1;
+  bool use_fast_prologue_epilogue : 1;
 
   /* Nonzero if the current function calls pc thunk and
      must not use the red zone.  */
-  BOOL_BITFIELD pc_thunk_call_expanded : 1;
+  bool pc_thunk_call_expanded : 1;
 
   /* If true, the current function needs the default PIC register, not
      an alternate register (on x86) and must not use the red zone (on
@@ -2919,17 +2916,17 @@ struct GTY(()) machine_function {
      if all such instructions are optimized away.  Use the
      ix86_current_function_calls_tls_descriptor macro for a better
      approximation.  */
-  BOOL_BITFIELD tls_descriptor_call_expanded_p : 1;
+  bool tls_descriptor_call_expanded_p : 1;
 
   /* True if TLS descriptor is called more than once.  */
-  BOOL_BITFIELD tls_descriptor_call_multiple_p : 1;
+  bool tls_descriptor_call_multiple_p : 1;
 
   /* If true, the current function has a STATIC_CHAIN is placed on the
      stack below the return address.  */
-  BOOL_BITFIELD static_chain_on_stack : 1;
+  bool static_chain_on_stack : 1;
 
   /* If true, it is safe to not save/restore DRAP register.  */
-  BOOL_BITFIELD no_drap_save_restore : 1;
+  bool no_drap_save_restore : 1;
 
   /* Function type.  */
   ENUM_BITFIELD(function_type) func_type : 2;
@@ -2939,7 +2936,7 @@ struct GTY(()) machine_function {
 
   /* If true, the current function has local indirect jumps, like
      "indirect_jump" or "tablejump".  */
-  BOOL_BITFIELD has_local_indirect_jump : 1;
+  bool has_local_indirect_jump : 1;
 
   /* How to generate function return.  */
   ENUM_BITFIELD(indirect_branch) function_return_type : 3;
@@ -2952,15 +2949,15 @@ struct GTY(()) machine_function {
      if there is scratch register available for indirect sibcall.  In
      64-bit, rax, r10 and r11 are scratch registers which aren't used to
      pass arguments and can be used for indirect sibcall.  */
-  BOOL_BITFIELD arg_reg_available : 1;
+  bool arg_reg_available : 1;
 
   /* If true, we're out-of-lining reg save/restore for regs clobbered
      by 64-bit ms_abi functions calling a sysv_abi function.  */
-  BOOL_BITFIELD call_ms2sysv : 1;
+  bool call_ms2sysv : 1;
 
   /* If true, the incoming 16-byte aligned stack has an offset (of 8) and
      needs padding prior to out-of-line stub save/restore area.  */
-  BOOL_BITFIELD call_ms2sysv_pad_in : 1;
+  bool call_ms2sysv_pad_in : 1;
 
   /* This is the number of extra registers saved by stub (valid range is
      0-6). Each additional register is only saved/restored by the stubs
@@ -2969,32 +2966,32 @@ struct GTY(()) machine_function {
   unsigned int call_ms2sysv_extra_regs:3;
 
   /* Nonzero if the function places outgoing arguments on stack.  */
-  BOOL_BITFIELD outgoing_args_on_stack : 1;
+  bool outgoing_args_on_stack : 1;
 
   /* If true, ENDBR or patchable area is queued at function entrance.  */
   ENUM_BITFIELD(queued_insn_type) insn_queued_at_entrance : 2;
 
   /* If true, the function label has been emitted.  */
-  BOOL_BITFIELD function_label_emitted : 1;
+  bool function_label_emitted : 1;
 
   /* True if the function needs a stack frame.  */
-  BOOL_BITFIELD stack_frame_required : 1;
+  bool stack_frame_required : 1;
 
   /* True if we should act silently, rather than raise an error for
      invalid calls.  */
-  BOOL_BITFIELD silent_p : 1;
+  bool silent_p : 1;
 
   /* True if red zone is used.  */
-  BOOL_BITFIELD red_zone_used : 1;
+  bool red_zone_used : 1;
 
   /* True if inline asm with redzone clobber has been seen.  */
-  BOOL_BITFIELD asm_redzone_clobber_seen : 1;
+  bool asm_redzone_clobber_seen : 1;
 
   /* True if this is a recursive function.  */
-  BOOL_BITFIELD recursive_function : 1;
+  bool recursive_function : 1;
 
   /* True if by_pieces op is currently in use.  */
-  BOOL_BITFIELD by_pieces_in_use : 1;
+  bool by_pieces_in_use : 1;
 
   /* The largest alignment, in bytes, of stack slot actually used.  */
   unsigned int max_used_stack_alignment;

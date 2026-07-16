@@ -40,7 +40,7 @@
 #include "tree-vector-builder.h"
 #include "rtx-vector-builder.h"
 #include "vec-perm-indices.h"
-#include "aarch64-sve-builtins.h"
+#include "aarch64-acle-builtins.h"
 #include "aarch64-sve-builtins-shapes.h"
 #include "aarch64-sve-builtins-base.h"
 #include "aarch64-sve-builtins-functions.h"
@@ -49,7 +49,7 @@
 #include "gimple-fold.h"
 #include "tree-ssa.h"
 
-using namespace aarch64_sve;
+using namespace aarch64_acle;
 
 namespace {
 
@@ -199,7 +199,7 @@ public:
 class svac_impl : public function_base
 {
 public:
-  CONSTEXPR svac_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svac_impl (int unspec) : m_unspec (unspec) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -248,7 +248,7 @@ public:
 class svaddv_impl : public reduction
 {
 public:
-  CONSTEXPR svaddv_impl ()
+  constexpr svaddv_impl ()
     : reduction (UNSPEC_SADDV, UNSPEC_UADDV, UNSPEC_FADDV) {}
 
   gimple *
@@ -264,7 +264,7 @@ public:
 class svadr_bhwd_impl : public function_base
 {
 public:
-  CONSTEXPR svadr_bhwd_impl (unsigned int shift) : m_shift (shift) {}
+  constexpr svadr_bhwd_impl (unsigned int shift) : m_shift (shift) {}
 
   rtx
   expand (function_expander &e) const override
@@ -286,7 +286,7 @@ public:
 class svandv_impl : public reduction
 {
 public:
-  CONSTEXPR svandv_impl () : reduction (UNSPEC_ANDV) {}
+  constexpr svandv_impl () : reduction (UNSPEC_ANDV) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -328,7 +328,7 @@ public:
 class svbrk_binary_impl : public function_base
 {
 public:
-  CONSTEXPR svbrk_binary_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svbrk_binary_impl (int unspec) : m_unspec (unspec) {}
 
   rtx
   expand (function_expander &e) const override
@@ -344,7 +344,7 @@ public:
 class svbrk_unary_impl : public function_base
 {
 public:
-  CONSTEXPR svbrk_unary_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svbrk_unary_impl (int unspec) : m_unspec (unspec) {}
 
   rtx
   expand (function_expander &e) const override
@@ -378,7 +378,7 @@ public:
 class svclast_impl : public quiet<function_base>
 {
 public:
-  CONSTEXPR svclast_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svclast_impl (int unspec) : m_unspec (unspec) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -458,7 +458,7 @@ public:
 class svcmp_impl : public function_base
 {
 public:
-  CONSTEXPR svcmp_impl (tree_code code, int unspec_for_fp)
+  constexpr svcmp_impl (tree_code code, int unspec_for_fp)
     : m_code (code), m_unspec_for_fp (unspec_for_fp) {}
 
   gimple *
@@ -516,7 +516,7 @@ public:
 class svcmp_wide_impl : public function_base
 {
 public:
-  CONSTEXPR svcmp_wide_impl (tree_code code, int unspec_for_sint,
+  constexpr svcmp_wide_impl (tree_code code, int unspec_for_sint,
 			     int unspec_for_uint)
     : m_code (code), m_unspec_for_sint (unspec_for_sint),
       m_unspec_for_uint (unspec_for_uint) {}
@@ -618,7 +618,7 @@ public:
 class svcnt_bhwd_impl : public function_base
 {
 public:
-  CONSTEXPR svcnt_bhwd_impl (machine_mode ref_mode) : m_ref_mode (ref_mode) {}
+  constexpr svcnt_bhwd_impl (machine_mode ref_mode) : m_ref_mode (ref_mode) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -779,7 +779,7 @@ public:
       {
 	machine_mode mode0 = e.result_mode ();
 	machine_mode mode1 = GET_MODE (e.args[0]);
-	if (e.fpm_mode == aarch64_sve::FPM_set)
+	if (e.fpm_mode == aarch64_acle::FPM_set)
 	  icode = code_for_aarch64_sme2_fp8_cvt (mode1);
 	else
 	  {
@@ -858,7 +858,7 @@ public:
 class svdiv_impl : public rtx_code_function
 {
 public:
-  CONSTEXPR svdiv_impl ()
+  constexpr svdiv_impl ()
     : rtx_code_function (DIV, UDIV, UNSPEC_COND_FDIV) {}
 
   gimple *
@@ -945,7 +945,7 @@ public:
   expand (function_expander &e) const override
   {
     insn_code icode;
-    if (e.fpm_mode == aarch64_sve::FPM_set)
+    if (e.fpm_mode == aarch64_acle::FPM_set)
       icode = code_for_aarch64_sve_dot (e.result_mode ());
     else
       {
@@ -979,7 +979,7 @@ public:
     insn_code icode;
     machine_mode mode0 = GET_MODE (e.args[0]);
     machine_mode mode1 = GET_MODE (e.args[1]);
-    if (e.fpm_mode == aarch64_sve::FPM_set)
+    if (e.fpm_mode == aarch64_acle::FPM_set)
       {
 	icode = code_for_aarch64_sve_dot_lane (mode0);
       }
@@ -1280,7 +1280,7 @@ public:
 class sveorv_impl : public reduction
 {
 public:
-  CONSTEXPR sveorv_impl () : reduction (UNSPEC_XORV) {}
+  constexpr sveorv_impl () : reduction (UNSPEC_XORV) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -1308,8 +1308,27 @@ public:
 class svext_bhw_impl : public function_base
 {
 public:
-  CONSTEXPR svext_bhw_impl (scalar_int_mode from_mode)
+  constexpr svext_bhw_impl (scalar_int_mode from_mode)
     : m_from_mode (from_mode) {}
+
+  gimple *
+  fold (gimple_folder &f) const override
+  {
+    /* For unsigned types this is a zero-extend, i.e. a bitwise AND with a
+       constant mask.  The _x form and an all-true _z already lower to that
+       AND; fold the merging form with an all-true predicate to it too, since
+       the predicate makes the inactive operand dead.  */
+    if (f.pred != PRED_m
+	|| !f.type_suffix (0).unsigned_p
+	|| !is_ptrue (f.gp_value (f.call), f.type_suffix (0).element_bytes))
+      return NULL;
+
+    tree op = gimple_call_arg (f.call, 2);
+    tree mask = build_int_cstu (TREE_TYPE (TREE_TYPE (f.lhs)),
+				GET_MODE_MASK (m_from_mode));
+    tree mask_vec = build_vector_from_val (TREE_TYPE (f.lhs), mask);
+    return gimple_build_assign (f.lhs, BIT_AND_EXPR, op, mask_vec);
+  }
 
   rtx
   expand (function_expander &e) const override
@@ -1537,7 +1556,7 @@ public:
 class svlast_impl : public quiet<function_base>
 {
 public:
-  CONSTEXPR svlast_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svlast_impl (int unspec) : m_unspec (unspec) {}
 
   bool is_lasta () const { return m_unspec == UNSPEC_LASTA; }
   bool is_lastb () const { return m_unspec == UNSPEC_LASTB; }
@@ -2040,7 +2059,7 @@ public:
 class svldxf1_impl : public full_width_access
 {
 public:
-  CONSTEXPR svldxf1_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svldxf1_impl (int unspec) : m_unspec (unspec) {}
 
   unsigned int
   call_properties (const function_instance &) const override
@@ -2067,7 +2086,7 @@ public:
 class svldxf1_extend_impl : public extending_load
 {
 public:
-  CONSTEXPR svldxf1_extend_impl (type_suffix_index memory_type, int unspec)
+  constexpr svldxf1_extend_impl (type_suffix_index memory_type, int unspec)
     : extending_load (memory_type), m_unspec (unspec) {}
 
   unsigned int
@@ -2117,7 +2136,7 @@ public:
 class svlsl_impl : public rtx_code_function
 {
 public:
-  CONSTEXPR svlsl_impl ()
+  constexpr svlsl_impl ()
     : rtx_code_function (ASHIFT, ASHIFT) {}
 
   gimple *
@@ -2140,7 +2159,7 @@ public:
 class svminv_impl : public reduction
 {
 public:
-  CONSTEXPR svminv_impl ()
+  constexpr svminv_impl ()
     : reduction (UNSPEC_SMINV, UNSPEC_UMINV, UNSPEC_FMINV) {}
 
   gimple *
@@ -2160,7 +2179,7 @@ public:
 class svmaxnmv_impl : public reduction
 {
 public:
-  CONSTEXPR svmaxnmv_impl () : reduction (UNSPEC_FMAXNMV) {}
+  constexpr svmaxnmv_impl () : reduction (UNSPEC_FMAXNMV) {}
   gimple *
   fold (gimple_folder &f) const override
   {
@@ -2177,7 +2196,7 @@ public:
 class svmaxv_impl : public reduction
 {
 public:
-  CONSTEXPR svmaxv_impl ()
+  constexpr svmaxv_impl ()
     : reduction (UNSPEC_SMAXV, UNSPEC_UMAXV, UNSPEC_FMAXV) {}
 
   gimple *
@@ -2197,7 +2216,7 @@ public:
 class svminnmv_impl : public reduction
 {
 public:
-  CONSTEXPR svminnmv_impl () : reduction (UNSPEC_FMINNMV) {}
+  constexpr svminnmv_impl () : reduction (UNSPEC_FMINNMV) {}
   gimple *
   fold (gimple_folder &f) const override
   {
@@ -2329,7 +2348,7 @@ public:
 class svmul_impl : public rtx_code_function
 {
 public:
-  CONSTEXPR svmul_impl ()
+  constexpr svmul_impl ()
     : rtx_code_function (MULT, MULT, UNSPEC_COND_FMUL, UNSPEC_FMUL) {}
 
   gimple *
@@ -2339,7 +2358,7 @@ public:
        Unpredicated functions have only 2 arguments (rn, rm) so will cause the
        code below to crash.  Also skip if it does not operate on integers,
        since all the optimizations below are for integer multiplication.  */
-    if (!f.type_suffix (0).integer_p || f.pred == aarch64_sve::PRED_none)
+    if (!f.type_suffix (0).integer_p || f.pred == aarch64_acle::PRED_none)
       return nullptr;
 
     if (auto *res = f.fold_const_binary (MULT_EXPR))
@@ -2462,7 +2481,7 @@ public:
 class svnot_impl : public rtx_code_function
 {
 public:
-  CONSTEXPR svnot_impl () : rtx_code_function (NOT, NOT, -1) {}
+  constexpr svnot_impl () : rtx_code_function (NOT, NOT, -1) {}
 
   rtx
   expand (function_expander &e) const override
@@ -2493,7 +2512,7 @@ public:
 class svorv_impl : public reduction
 {
 public:
-  CONSTEXPR svorv_impl () : reduction (UNSPEC_IORV) {}
+  constexpr svorv_impl () : reduction (UNSPEC_IORV) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -2527,7 +2546,7 @@ public:
 class svpfirst_svpnext_impl : public function_base
 {
 public:
-  CONSTEXPR svpfirst_svpnext_impl (int unspec) : m_unspec (unspec) {}
+  constexpr svpfirst_svpnext_impl (int unspec) : m_unspec (unspec) {}
   gimple *
   fold (gimple_folder &f) const override
   {
@@ -2555,7 +2574,7 @@ public:
 class svprf_bhwd_impl : public function_base
 {
 public:
-  CONSTEXPR svprf_bhwd_impl (machine_mode mode) : m_mode (mode) {}
+  constexpr svprf_bhwd_impl (machine_mode mode) : m_mode (mode) {}
 
   unsigned int
   call_properties (const function_instance &) const override
@@ -2579,7 +2598,7 @@ public:
 class svprf_bhwd_gather_impl : public function_base
 {
 public:
-  CONSTEXPR svprf_bhwd_gather_impl (machine_mode mode) : m_mode (mode) {}
+  constexpr svprf_bhwd_gather_impl (machine_mode mode) : m_mode (mode) {}
 
   unsigned int
   call_properties (const function_instance &) const override
@@ -2617,7 +2636,7 @@ public:
 class svptest_impl : public function_base
 {
 public:
-  CONSTEXPR svptest_impl (rtx_code compare) : m_compare (compare) {}
+  constexpr svptest_impl (rtx_code compare) : m_compare (compare) {}
   gimple *
   fold (gimple_folder &f) const override
   {
@@ -2736,7 +2755,7 @@ public:
 class svqdec_svqinc_bhwd_impl : public function_base
 {
 public:
-  CONSTEXPR svqdec_svqinc_bhwd_impl (rtx_code code_for_sint,
+  constexpr svqdec_svqinc_bhwd_impl (rtx_code code_for_sint,
 				     rtx_code code_for_uint,
 				     scalar_int_mode elem_mode)
     : m_code_for_sint (code_for_sint),
@@ -2783,7 +2802,7 @@ public:
 class svqdec_bhwd_impl : public svqdec_svqinc_bhwd_impl
 {
 public:
-  CONSTEXPR svqdec_bhwd_impl (scalar_int_mode elem_mode)
+  constexpr svqdec_bhwd_impl (scalar_int_mode elem_mode)
     : svqdec_svqinc_bhwd_impl (SS_MINUS, US_MINUS, elem_mode) {}
 };
 
@@ -2791,7 +2810,7 @@ public:
 class svqinc_bhwd_impl : public svqdec_svqinc_bhwd_impl
 {
 public:
-  CONSTEXPR svqinc_bhwd_impl (scalar_int_mode elem_mode)
+  constexpr svqinc_bhwd_impl (scalar_int_mode elem_mode)
     : svqdec_svqinc_bhwd_impl (SS_PLUS, US_PLUS, elem_mode) {}
 };
 
@@ -2799,7 +2818,7 @@ public:
 class svqdecp_svqincp_impl : public function_base
 {
 public:
-  CONSTEXPR svqdecp_svqincp_impl (rtx_code code_for_sint,
+  constexpr svqdecp_svqincp_impl (rtx_code code_for_sint,
 				  rtx_code code_for_uint)
     : m_code_for_sint (code_for_sint),
       m_code_for_uint (code_for_uint)
@@ -2922,7 +2941,7 @@ public:
 class svrint_impl : public function_base
 {
 public:
-  CONSTEXPR svrint_impl (optab_tag optab, int cond_unspec)
+  constexpr svrint_impl (optab_tag optab, int cond_unspec)
     : m_optab (optab), m_cond_unspec (cond_unspec)
   {}
 
@@ -3221,7 +3240,7 @@ public:
 class svsub_impl : public rtx_code_function
 {
 public:
-  CONSTEXPR svsub_impl ()
+  constexpr svsub_impl ()
     : rtx_code_function (MINUS, MINUS, UNSPEC_COND_FSUB) {}
 
   rtx
@@ -3240,7 +3259,7 @@ public:
 class svtrn_impl : public binary_permute
 {
 public:
-  CONSTEXPR svtrn_impl (int base)
+  constexpr svtrn_impl (int base)
     : binary_permute (base ? UNSPEC_TRN2 : UNSPEC_TRN1), m_base (base) {}
 
   gimple *
@@ -3281,7 +3300,7 @@ public:
 class svunpk_impl : public quiet<function_base>
 {
 public:
-  CONSTEXPR svunpk_impl (bool high_p) : m_high_p (high_p) {}
+  constexpr svunpk_impl (bool high_p) : m_high_p (high_p) {}
 
   gimple *
   fold (gimple_folder &f) const override
@@ -3323,7 +3342,7 @@ public:
 class svusdot_impl : public function_base
 {
 public:
-  CONSTEXPR svusdot_impl (bool su) : m_su (su) {}
+  constexpr svusdot_impl (bool su) : m_su (su) {}
 
   rtx
   expand (function_expander &e) const override
@@ -3351,7 +3370,7 @@ private:
 class svuzp_impl : public binary_permute
 {
 public:
-  CONSTEXPR svuzp_impl (unsigned int base)
+  constexpr svuzp_impl (unsigned int base)
     : binary_permute (base ? UNSPEC_UZP2 : UNSPEC_UZP1), m_base (base) {}
 
   gimple *
@@ -3374,7 +3393,7 @@ public:
 class svwhilelx_impl : public while_comparison
 {
 public:
-  CONSTEXPR svwhilelx_impl (int unspec_for_sint, int unspec_for_uint, bool eq_p)
+  constexpr svwhilelx_impl (int unspec_for_sint, int unspec_for_uint, bool eq_p)
     : while_comparison (unspec_for_sint, unspec_for_uint), m_eq_p (eq_p)
   {}
 
@@ -3473,7 +3492,7 @@ public:
 class svzip_impl : public binary_permute
 {
 public:
-  CONSTEXPR svzip_impl (unsigned int base)
+  constexpr svzip_impl (unsigned int base)
     : binary_permute (base ? UNSPEC_ZIP2 : UNSPEC_ZIP1), m_base (base) {}
 
   gimple *
@@ -3517,7 +3536,7 @@ public:
 
 } /* end anonymous namespace */
 
-namespace aarch64_sve {
+namespace aarch64_acle {
 
 FUNCTION (svabd, svabd_impl,)
 FUNCTION (svabs, quiet<rtx_code_function>, (ABS, ABS, UNSPEC_COND_FABS))
@@ -3820,4 +3839,4 @@ NEON_SVE_BRIDGE_FUNCTION (svget_neonq, svget_neonq_impl,)
 NEON_SVE_BRIDGE_FUNCTION (svset_neonq, svset_neonq_impl,)
 NEON_SVE_BRIDGE_FUNCTION (svdup_neonq, svdup_neonq_impl,)
 
-} /* end namespace aarch64_sve */
+}

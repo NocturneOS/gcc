@@ -531,6 +531,10 @@ Wc++26-extensions
 C++ ObjC++ Var(warn_cxx26_extensions) Warning Init(1) CppReason(CPP_W_CXX26_EXTENSIONS)
 Warn about C++26 constructs in code compiled with an older standard.
 
+Wc++29-extensions
+C++ ObjC++ Var(warn_cxx29_extensions) Warning Init(1) CppReason(CPP_W_CXX29_EXTENSIONS)
+Warn about C++29 constructs in code compiled with an older standard.
+
 Wcalloc-transposed-args
 C ObjC C++ ObjC++ Var(warn_calloc_transposed_args) Warning LangEnabledBy(C ObjC C++ ObjC++,Wextra)
 Warn about suspicious calls to calloc-like functions where sizeof expression is the earlier size argument and not the latter.
@@ -962,6 +966,10 @@ Warn about invalid uses of the \"offsetof\" macro.
 Winvalid-pch
 C ObjC C++ ObjC++ CPP(warn_invalid_pch) CppReason(CPP_W_INVALID_PCH) Var(cpp_warn_invalid_pch) Init(0) Warning
 Warn about PCH files that are found but not used.
+
+Winvalid-specialization
+C++ ObjC++ Var(warn_invalid_specialization) Init(1) Warning
+Error about specializations of templates with \"clang::no_specializations\" attribute.
 
 Winvalid-utf8
 C ObjC C++ ObjC++ CPP(cpp_warn_invalid_utf8) CppReason(CPP_W_INVALID_UTF8) Var(warn_invalid_utf8) Init(0) Warning

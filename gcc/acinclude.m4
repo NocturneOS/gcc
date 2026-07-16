@@ -41,7 +41,7 @@ dnl Arrange to define HAVE_DECL_<FUNCTION> to 0 or 1 as appropriate.
 dnl gcc_AC_CHECK_DECLS(SYMBOLS,
 dnl 	[ACTION-IF-NEEDED [, ACTION-IF-NOT-NEEDED [, INCLUDES]]])
 AC_DEFUN([gcc_AC_CHECK_DECLS],
-[AC_FOREACH([gcc_AC_Func], [$1],
+[m4_foreach_w([gcc_AC_Func], [$1],
   [AH_TEMPLATE(AS_TR_CPP(HAVE_DECL_[]gcc_AC_Func),
   [Define to 1 if we found a declaration for ']gcc_AC_Func[', otherwise
    define to 0.])])dnl
@@ -308,8 +308,8 @@ int (*fp) (void) __attribute__ ((section (".init_array"))) = foo;
 	    gcc_cv_initfini_array=yes
 	  fi
 	elif test x"$gcc_cv_as" != x -a x"$gcc_cv_ld" != x -a x"$gcc_cv_objdump" != x ; then
-	  case $target:$solaris_as in
-	    i?86-*-solaris2*:yes | x86_64-*-solaris2*:yes)
+	  case $target:$as_flavor in
+	    i?86-*-solaris2*:solaris | x86_64-*-solaris2*:solaris)
 	      sh_flags='"a"'
 	      sh_type='@progbits'
 	      ;;
@@ -323,7 +323,7 @@ int (*fp) (void) __attribute__ ((section (".init_array"))) = foo;
 	      sh_type='%progbits'
 	      ;;
 	  esac
-	  if test x$solaris_ld = xno; then
+	  if test x$ld_flavor = xgnu; then
 	    cat > conftest.s <<EOF
 .section .dtors,$sh_flags,$sh_type
 .balign 4
@@ -444,10 +444,11 @@ AC_DEFUN([gcc_CHECK_ATTRIBUTE_ALIAS], [
   AC_CACHE_CHECK([whether the host/build supports symbol aliases],
                  gcc_cv_have_attribute_alias, [
   if test "x${build}" = "x${host}"; then
-    AC_TRY_LINK([
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
 extern "C" void foo(void) { }
-extern void bar(void) __attribute__((alias("foo")));],
-    [bar();], gcc_cv_have_attribute_alias=yes, gcc_cv_have_attribute_alias=no)
+extern void bar(void) __attribute__((alias("foo")));]],
+    [[bar();]])],
+    [gcc_cv_have_attribute_alias=yes], [gcc_cv_have_attribute_alias=no])
   else
     gcc_cv_have_attribute_alias=no
   fi])
@@ -461,7 +462,7 @@ dnl # Used by gcc_GAS_CHECK_FEATURE
 dnl #
 AC_DEFUN([gcc_GAS_FLAGS],
 [AC_CACHE_CHECK([assembler flags], gcc_cv_as_flags,
-[ case "$target:$gas" in
+[ case "$target:$as_flavor" in
   *-*-darwin*:*)
     dnl Darwin with the native assembler uses -arch i386/x86_64/ppc/ppc64.
     dnl
@@ -489,7 +490,7 @@ AC_DEFUN([gcc_GAS_FLAGS],
 	;;
     esac
     ;;
-  *-*-solaris2*:no)
+  *-*-solaris2*:solaris)
     dnl Solaris with the native assembler uses -m32/-m64 consistently.
     case "$target" in
       i?86-*-* | sparc-*-*)

@@ -62,6 +62,7 @@
 #include "common-defs.h"
 #include "io.h"
 #include "gcobolio.h"
+#include "cobol-endian.h"
 #include "libgcobol.h"
 #include "gfileio.h"
 #include "charmaps.h"
@@ -132,7 +133,6 @@ typedef struct
   union
     {
     unsigned __int128 val128;
-    uint64_t          val64;
     };
   } COMBINED;
 
@@ -352,11 +352,27 @@ __gg__binary_to_string_encoded( char *result,
     char *p = combined_string;
     const char *pend = p + digits;
     char *d = result;
-    while(p < pend)
+
+    /* We take advantage of knowing that every character in combined_string
+       becomes just the low byte of a little-endian int16 or 32, and the high
+       byte of a big-endian.  */
+    if( charmap->is_big_endian() )
       {
-      *d++ = *p++;
-      memset(d, 0, stride-1);
-      d += stride-1;
+      while(p < pend)
+        {
+        memset(d, 0, stride-1);
+        d += stride-1;
+        *d++ = *p++;
+        }
+      }
+    else
+      {
+      while(p < pend)
+        {
+        *d++ = *p++;
+        memset(d, 0, stride-1);
+        d += stride-1;
+        }
       }
     }
   return retval;
@@ -393,6 +409,7 @@ packed_from_combined(const COMBINED &combined)
     {
     // Stage 1: pull from int128 until the top half is zero.
     __int128 value128 = combined.val128;
+#if COBOL_LITTLE_ENDIAN
     while(value128>>64)
       {
       *(--d) = bin2pd[value128%100];
@@ -405,10 +422,22 @@ packed_from_combined(const COMBINED &combined)
       *(--d) = bin2pd[value64%100];
       value64 /= 100;
       }
+#else
+    // The cute trick for little-endian is trickier in big-endian.  Right now
+    // it's late, and I don't feel like it.  It would be easier if there were
+    // __int128 constants, because the test up above could be
+    //    while(value128/2^64)
+    // but that's not available as of this writing.
+    while(d > combined_string)
+      {
+      *(--d) = bin2pd[value128%100];
+      value128 /= 100;
+      }
+#endif
     }
   else
     {
-    uint64_t value = combined.val64;
+    uint64_t value = combined.val128;
     while(d > combined_string)
       {
       *(--d) = bin2pd[value%100];
@@ -430,80 +459,6 @@ __gg__binary_to_packed( unsigned char *result,
   combined.val128 = value;
   packed_from_combined(combined);
   memcpy(result, combined_string, length);
-  }
-
-
-#define digit_rt(loc, offset) (((loc)[(offset) * stride]) & 0x0F)
-
-static __int128
-num_disp_dive_rt(const unsigned char *pdigits,
-                    int            ndigits,
-                    int            stride)
-  {
-  __int128 retval;
-  switch(ndigits)
-    {
-    case 1:
-      retval =  digit_rt(pdigits, 0);
-      break;
-    case 2:
-      retval =  digit_rt(pdigits, 0)*10
-              + digit_rt(pdigits, 1);
-      break;
-    case 3:
-      retval =  digit_rt(pdigits, 0)*100
-              + digit_rt(pdigits, 1)*10
-              + digit_rt(pdigits, 2);
-      break;
-    case 4:
-      retval =  digit_rt(pdigits, 0)*1000
-              + digit_rt(pdigits, 1)*100
-              + digit_rt(pdigits, 2)*10
-              + digit_rt(pdigits, 3);
-      break;
-    default:
-      {
-      int nright = ndigits/2;
-      int nleft  = ndigits - nright;
-      __int128 pot = __gg__power_of_ten(nright);
-      retval =   num_disp_dive_rt(pdigits,               nleft, stride) * pot
-               + num_disp_dive_rt(pdigits+nleft*stride, nright, stride);
-      break;
-      }
-    }
-  return retval;
-  }
-
-extern "C"
-__int128
-__gg__numeric_display_to_binary(const unsigned char *signp,
-                                const unsigned char *pdigits,
-                                      int            ndigits,
-                                      int            stride)
-  {
-  __int128 retval;
-
-  retval = num_disp_dive_rt(pdigits, ndigits, stride);
-
-  // For speed, we assume this value is well-formed:
-  if( *signp == ascii_minus )
-    {
-    retval = -retval;
-    }
-  else
-    {
-    unsigned int sbyte = *signp & 0xF0;
-    switch(sbyte)
-      {
-      case 0x60: // EBCDIC '-' is 0x60, and no other 0x6z characters matter.
-      case 0x70: // ASCII internal negative
-      case 0xD0: // EBDIC internal negative
-        retval = -retval;
-      break;
-      }
-    }
-
-  return retval;
   }
 
 const unsigned char __gg__dp2bin[256] =

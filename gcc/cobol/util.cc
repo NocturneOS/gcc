@@ -55,6 +55,7 @@
 #include "cdfval.h"
 #include "lexio.h"
 
+#include "tm.h"
 #include "../../libgcobol/ec.h"
 #include "../../libgcobol/common-defs.h"
 #include "symbols.h"
@@ -62,8 +63,12 @@
 #include "../../libgcobol/io.h"
 #include "genapi.h"
 #include "genutil.h"
+#include "../../libgcobol/cobol-endian.h"
 #include "../../libgcobol/charmaps.h"
 #include "../../libgcobol/valconv.h"
+
+#include "tm.h"
+#include "target.h"
 
 #pragma GCC diagnostic ignored "-Wunused-result"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
@@ -1391,7 +1396,9 @@ binary_initial( char *retval,
                 int drdigits)
   {
   // This routine returns an xmalloced buffer designed to replace the
-  // data.initial member of the incoming field
+  // data.initial member of the incoming field.  The 'retval' becomes the
+  // binary representation of 'value' in the target machine's native endian
+  // encoding.
 
   int scaled_rdigits = get_scaled_rdigits(field);
 
@@ -1685,12 +1692,11 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc ) {
         binary_initial(retval, this, value, l_rdigits);
         if( attr & big_endian_e )
           {
-          // This is a big-endian value, so swap retval end-for-end:
-          size_t left = 0;
-          size_t right = data.capacity() - 1;
-          while(left < right)
+          if(!BYTES_BIG_ENDIAN)
             {
-            std::swap(retval[left++], retval[right--]);
+            // The target is little-endian, so we have to swap our value to make
+            // it big-endian.
+            std::reverse(retval, retval + data.capacity());
             }
           }
         break;
@@ -1810,9 +1816,47 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc ) {
             *pretval++ = ascii_plus;
             }
           }
-
+        if(     (attr & signable_e)
+            && !(attr & separate_e) )
+          {
+          // The value is signable and internal;
+          char *sign_loc;
+          if( attr & leading_e )
+            {
+            // The sign is in the first character
+            sign_loc = retval;
+            }
+          else
+            {
+            // The sign is in the final character
+            sign_loc = retval + char_capacity() - 1;
+            }
+          if( negative )
+            {
+            // We have to convert the very first digit into the negative flag
+            const charmap_t *charmap = __gg__get_charmap(codeset.encoding);
+            if( charmap->is_like_ebcdic() )
+              {
+              if( *sign_loc == ascii_zero )
+                {
+                /* When EBCDIC '0' is 0xF0.  The negative flag version is 0xD0,
+                   which is right left brace.  */
+                *sign_loc = ascii_rbrace;
+                }
+              else
+                {
+                /* EBCDIC '1' through '9' is 0xF1 through 0xF9, and they need
+                   to be converted to 0xD0 through 0xD9.  */
+                *sign_loc = (*sign_loc - ascii_zero) + ascii_J-1;
+                }
+              }
+            else
+              {
+              *sign_loc = (*sign_loc - ascii_zero) + ascii_p;
+              }
+            }
+          }
         // It's at this point we convert to the target encoding:
-        charmap_t *charmap = __gg__get_charmap(codeset.encoding);
         size_t retval_length = pretval - retval;
         if( retval_length != char_capacity() ) {
           cbl_errx( "%s: %s %lu %s %lu",
@@ -1838,18 +1882,6 @@ cbl_field_t::encode_numeric( const char input[], cbl_loc_t loc ) {
         }
         gcc_assert(nbytes == data.capacity());
         memcpy(retval, converted, data.capacity());
-        if(     (attr & signable_e)
-            && !(attr & separate_e) )
-          {
-          // This value is signable, and not separate.  So, the sign
-          // information goes into the first or last byte:
-          char *sign_location = attr & leading_e
-                        ? retval
-                        : retval + (data.digits-1) * charmap->stride() ;
-          cbl_char_t schar = charmap->set_digit_negative(*sign_location,
-                                                          negative);
-          memcpy(sign_location, &schar, charmap->stride());
-          }
         break;
         }
 
@@ -2605,28 +2637,15 @@ namespace match_proc {
       found_t() : n(0), isym(0) {}
       found_t(size_t n, size_t isym) : n(n), isym(isym) {}
     };
-    void error(const cbl_name_t program_name,
+    void error(const cbl_loc_t& loc,
                const tgt_t&tgt,
                const found_t& found) const 
     {
       const char *clause = tgt == tgts.first? "" : "THRU ";
+      assert( 1 != found.n );
+      const char *status = found.n == 0? "procedure not found" : "ambiguous reference";
           
-      switch( found.n ) {
-      case 1:
-        gcc_unreachable();
-        break;
-      case 0:
-        // error: not found
-        dbgmsg("%s:%d PERFORM %s%s not resolved",
-               program_name, line, clause, tgt.name.c_str());
-        break;
-      default:        
-        assert( 1 < found.n );
-        // error: ambiguous
-        dbgmsg("%s:%d PERFORM %s%s ambiguous",
-               program_name, line, clause, tgt.name.c_str());
-        break;
-      }
+      error_msg(loc, "%s: PERFORM %s%s", status, clause, tgt.name.c_str());
     }
   };
 
@@ -2640,7 +2659,15 @@ namespace match_proc {
     bool operator<( const sect_t& that ) const {
       return name < that.name;
     }
+    const sect_t& ambiguous() {
+      isym = 0;
+      return *this;
+    }
+    bool is_unique() const {
+      return isym != 0;
+    }
   };
+
   struct para_t {
     size_t isym, parent;
     std::string name;
@@ -2655,33 +2682,32 @@ namespace match_proc {
       }
       return name < that.name;
     }
+    const para_t& ambiguous() {
+      isym = 0;
+      return *this;
+    }
     std::string parent_name() const {
       if( ! parent ) return std::string();
       const auto f = cbl_label_of(symbol_at(parent));
       return lcase(f->name);
     }
   };
-  struct proc_t {
-    size_t n, isym; // index of first of n matching pairs
-    std::string para, sect;
-    proc_t( size_t n, size_t isym,
-            const std::string& para,
-            const std::string& sect )
-      : n(n), isym(isym), para(para), sect(sect)
-    {}
-    bool operator<( const proc_t& that ) const {
-      if( para == that.para ) {
-        return sect < that.sect;
-      }
-      return para < that.para;
-    }
-  };
 
   class procedures_t {
     std::set<sect_t> sects;
     std::set<para_t> paras;
-    std::set<proc_t> procs;
     friend bool statements_verify();
+    template <typename T>
+    // If the element name is not unique, set its isym to 0 so it can't be referenced.
+      static void update_set( T& names, size_t isym ) {
+        auto p = names.insert(isym);
+        if( ! p.second ) {
+          auto ambig = *p.first;
+          names.erase(p.first);
+          p = names.insert(ambig.ambiguous());
+          assert(p.second);
+        }
+      }
   public:
     procedures_t( size_t program ) {
       // find sections and paragraphs
@@ -2690,30 +2716,16 @@ namespace match_proc {
           const auto& L = *cbl_label_of(e);
           auto isym = e - symbols_begin();
           switch(L.type) {
-          case LblSection: 
-            sects.insert(isym);
+          case LblSection:
+            update_set(sects, isym);
             break;
           case LblParagraph:
-            paras.insert(isym);
+            update_set(paras, isym);
             break;
           default:
             continue;
           }
         }
-      }
-      // join sections and paragraphs, unreduced
-      std::list<proc_t> all;
-      for( const auto& para : paras ) {
-        std::set<sect_t> parents;
-        std::copy_if( sects.begin(), sects.end(), std::inserter(parents, parents.begin()),
-                      [para]( const auto& sect ) {
-                        return para.parent_name() == sect.name;
-                      } );
-        std::transform( parents.begin(), parents.end(), std::back_inserter(all), 
-                        [para]( const auto& sect ) {
-                          proc_t proc(1, para.isym, para.name, sect.name);
-                          return proc;
-                        } );
       }
       // insert paragraph procedures
       struct stat_t {
@@ -2725,58 +2737,94 @@ namespace match_proc {
           return *this;
         }
       };
-      std::map<proc_t, stat_t> nprocs;
-      for( const auto& proc : all ) {
-        auto& stat = nprocs[proc];
-        stat.update( proc.isym );
-      }
-      std::transform(nprocs.begin(), nprocs.end(), std::inserter(procs, procs.begin()),
-                     []( const auto& elem ) {
-                       proc_t proc ( elem.second.n, elem.second.isym,
-                                     elem.first.para, elem.first.sect );
-                       return proc;
-                     } );
       // insert section procedures
       std::map<sect_t, stat_t> nsects;
       for( const auto& sect : sects ) {
         auto& stat = nsects[sect];
         stat.update( sect.isym );
       }
-      std::transform(nsects.begin(), nsects.end(), std::inserter(procs, procs.begin()),
-                     []( const auto& elem ) {
-                       proc_t proc ( elem.second.n, elem.second.isym,
-                                     std::string(), elem.first.name );
-                       return proc;
-                     } );
     }
 
     stmt_t::found_t
     find( const stmt_t& stmt, const stmt_t::tgt_t& tgt ) {
       if( tgt.empty() ) return stmt_t::found_t();
       std::string curr ( lcase( cbl_label_of(symbol_at(stmt.curr))->name ) );
+      std::set<para_t> matched;
 
-      auto p = std::find_if(procs.cbegin(), procs.cend(),
-                            [curr, tgt](auto proc) {
-                              return match(proc, tgt, curr);
-                            });
-      size_t n = std::count_if(p, procs.end(),
-                               [curr, tgt](const auto& proc) {
-                                 return match(proc, tgt, curr);
-                               });
+      // Match a paragraph name tgt.proc within curr, the current section.
+      std::copy_if(paras.cbegin(), paras.cend(),
+                   std::inserter(matched, matched.begin()),
+                   [curr, tgt](const auto& para) {
+                     return match_in_section(para, tgt, curr);
+                   });
+      // Match a section name if unqualified and unique.
+      if( matched.empty() && tgt.qual.empty() ) {
+        // target does not name a paragraph
+        if( std::none_of(paras.cbegin(), paras.cend(),
+                         [tgt](const auto& para) {
+                           return match_any_paragraph(para, tgt);
+                         }) ) {
+          // target may name a section
+          if( ! sects.empty() ) {
+            auto fake = *sects.begin();
+            fake.isym = 0;
+            fake.name = tgt.name;
+            auto p = sects.find(fake); // matches by name only, not isym
+            if( p != sects.end() && p->is_unique()) {
+              para_t para( p->isym );
+              matched.insert(para);
+            }
+          }
+        }
+      }
+      if( matched.empty() ){
+        // Match a paragraph or section anywhere in the program.
+        std::copy_if(paras.cbegin(), paras.cend(),
+                     std::inserter(matched, matched.begin()),
+                     [tgt](const auto& para) {
+                       return match(para, tgt);
+                   });
+      };
+
+      size_t n = matched.size();
       stmt_t::found_t found = {n, 0};
       if( n ) {
-        assert(p != procs.end());
-        found.isym = p->isym;
+        const para_t& para(*matched.begin());
+        found.isym = para.isym;
+        if( yydebug && 1 < n ) {
+          for( const auto& para : matched ) {
+            fprintf(stderr, "procedures_t::find:%d: ambig: %s of #%lu, %s\n", __LINE__,
+                    para.name.c_str(), (unsigned long)para.parent, 
+                    para.parent_name().c_str());
+          }
+        }
       }
       return found;
     }
   protected:
-    static bool match( const proc_t& proc, const stmt_t::tgt_t& tgt, const std::string& curr ) {
-      return ( proc.para == tgt.name && tgt.qual.empty() )
-        ||   ( proc.sect == tgt.name && tgt.qual.empty() )
-        ||   ( proc.para == tgt.name && proc.sect == tgt.qual )
-        ||   ( proc.para == tgt.name && proc.sect == curr );
-    }    
+    static bool match_in_section( const para_t& para,
+                                  const stmt_t::tgt_t& tgt,
+                                  const std::string& curr )
+    {
+      return para.name == tgt.name && para.parent_name() == curr
+        &&   (tgt.qual == curr || tgt.qual.empty());
+    }
+    static bool match_any_paragraph( const para_t& para,
+                                     const stmt_t::tgt_t& tgt )
+    {
+      assert( tgt.qual.empty() ); 
+      return para.name == tgt.name;
+    }
+    static bool match( const para_t& para,
+                       const stmt_t::tgt_t& tgt )
+    {
+      if( tgt.qual.empty() ) {
+        return para.parent_name() == tgt.name
+          ||   para.name == tgt.name;
+      } 
+      return para.name == tgt.name
+        &&   para.parent_name() == tgt.qual;
+    }
 
     void dump(const stmt_t& stmt) {
       std::string target( stmt.tgts.first.name );
@@ -2801,13 +2849,6 @@ namespace match_proc {
         fprintf(stderr, "\t" "#%lu %s of #%lu\n",
                 (unsigned long)para.isym, para.name.c_str(), (unsigned long)para.parent);
       }
-      fprintf(stderr, "%lu Procedures:\n", (unsigned long)procs.size());
-      for( auto proc : procs ) {
-        std::string section("");
-        if( ! proc.sect.empty() ) section += "of " + proc.sect;
-        fprintf(stderr, "\t" "n=%lu %s %s\n",
-                (unsigned long)proc.isym, proc.para.c_str(), section.c_str());
-      }
       return;
     }
   }; // procedures
@@ -2826,11 +2867,11 @@ namespace match_proc {
 
     // Verify each PERFORM statement target is a unique reference
     for( const auto& stmt : stmts ) {
+      if( symbol_at(stmt.curr)->program != iprog ) continue;
       stmt_t::found_t found = procedures.find(stmt, stmt.tgts.first.lcase());
       stmt_t::found_t thru  = procedures.find(stmt, stmt.tgts.second.lcase());
 
       if( found.n == 1 && (thru.n == 1 || stmt.tgts.second.empty()) ) {
-        // update proc call list
         if( stmt.tgts.first.qual.empty() ) {
           dbgmsg("%s:%d PERFORM %s is ok", program_name, stmt.line,
                  stmt.tgts.first.name.c_str());
@@ -2842,15 +2883,15 @@ namespace match_proc {
         continue;
       }
       nerr++;
-      
+      cbl_loc_t loc(stmt.line);
       if( found.n != 1 ) {
-        stmt.error(program_name, stmt.tgts.first, found);
+        stmt.error(loc, stmt.tgts.first, found);
         if( nerr == 1 && yydebug ) {
           procedures.dump(stmt);
         }
       }
       if( thru.n != 1 && ! stmt.tgts.second.empty() ) {
-        stmt.error(program_name, stmt.tgts.second, thru);
+        stmt.error(loc, stmt.tgts.second, thru);
       }
     }
     return nerr == 0;
@@ -3377,7 +3418,6 @@ void cobol_trunc_binary( int cobol_trunc_binary ) {
  * to enforce uniqueness, and the scanner to maintain line numbers.
  */
 bool cobol_filename( const char *name, ino_t inode ) {
-  //const line_map *lines = NULL;
   if( inode == 0 ) {
     auto p = old_filenames.find(name);
     if( p == old_filenames.end() ) {
@@ -3392,10 +3432,14 @@ bool cobol_filename( const char *name, ino_t inode ) {
       assert(inode != 0);
     }
   }
+  
   linemap_add(line_table, LC_ENTER, sysp, name, 1);
   input_filename_vestige = name;
   bool pushed = input_filenames.push( input_file_t(name, inode, 1) );
-  dbgmsg("%s: %s %s", __func__, pushed? "pushed" : "set to", name);
+  dbgmsg("%s: %s %s line %d-%d inode %ld", __func__,
+         pushed? "pushed" : "set to", name,
+         cobol_location().first_line,
+         cobol_location().last_line, inode);
   return pushed;
 }
 
@@ -3481,8 +3525,8 @@ void current_location_minus_one_clear()
  * with start and caret at the first line/column of LOC, and finishing at the
  * last line/column of LOC.
  */
-static void
-gcc_location_set_impl( const cbl_loc_t& loc ) {
+void
+gcc_location_set( const cbl_loc_t& loc ) {
   // Set the position to the first line & column in the location.
  static location_t loc_m_1 = 0;
  const location_t
@@ -3507,16 +3551,6 @@ gcc_location_set_impl( const cbl_loc_t& loc ) {
 
   location_dump(__func__, __LINE__, "parser", loc);
 }
-
-void gcc_location_set( const cbl_loc_t& loc ) {
-  gcc_location_set_impl(loc);
-}
-
-#if 0
-void gcc_location_set( const YDFLTYPE& loc ) {
-  gcc_location_set_impl(loc);
-}
-#endif
 
 #ifdef NDEBUG
 # define verify_format(M)
@@ -3551,6 +3585,7 @@ static const diagnostics::option_id option_zero;
 
 void gcc_location_dump() {
     linemap_dump_location( line_table, token_location, stderr );
+    fprintf(stderr, "\n");
 }
 
 

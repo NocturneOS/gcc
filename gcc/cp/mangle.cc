@@ -888,14 +888,14 @@ write_tparms_constraints (tree constraints)
     {
       tree probe = constraints;
       while (probe
-	     && !EXPR_LOCATION (probe)
+	     && !cp_expr_location (probe)
 	     && TREE_CODE (probe) == TRUTH_ANDIF_EXPR)
 	{
 	  tree op1 = TREE_OPERAND (probe, 1);
-	  probe = (EXPR_LOCATION (op1) ? op1
+	  probe = (cp_expr_location (op1) ? op1
 		   : TREE_OPERAND (probe, 0));
 	}
-      if (probe && EXPR_LOCATION (probe))
+      if (probe && cp_expr_location (probe))
 	{
 	  write_char ('Q');
 	  write_constraint_expression (probe);
@@ -5131,7 +5131,7 @@ mangle_decomp (const tree decl, vec<tree> &decls)
 
    We use the production
 
-    <special-name> ::= CT <type> <offset number> _ <base type>  */
+    <special-name> ::= TC <type> <offset number> _ <base type>  */
 
 tree
 mangle_ctor_vtbl_for_type (const tree type, const tree binfo)

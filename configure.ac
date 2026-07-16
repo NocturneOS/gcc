@@ -1789,36 +1789,36 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
   CFLAGS="$CFLAGS $gmpinc"
   # Check for the recommended and required versions of GMP.
   AC_MSG_CHECKING([for the correct version of gmp.h])
-  AC_TRY_COMPILE([#include "gmp.h"],[
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include "gmp.h"]], [[
   #define GCC_GMP_VERSION_NUM(a,b,c) (((a) << 16L) | ((b) << 8) | (c))
   #define GCC_GMP_VERSION GCC_GMP_VERSION_NUM(__GNU_MP_VERSION,__GNU_MP_VERSION_MINOR,__GNU_MP_VERSION_PATCHLEVEL)
   #if GCC_GMP_VERSION < GCC_GMP_VERSION_NUM(4,2,3)
   choke me
   #endif
-  ], [AC_TRY_COMPILE([#include <gmp.h>],[
+  ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>]], [[
   #define GCC_GMP_VERSION_NUM(a,b,c) (((a) << 16L) | ((b) << 8) | (c))
   #define GCC_GMP_VERSION GCC_GMP_VERSION_NUM(__GNU_MP_VERSION,__GNU_MP_VERSION_MINOR,__GNU_MP_VERSION_PATCHLEVEL)
   #if GCC_GMP_VERSION < GCC_GMP_VERSION_NUM(4,3,2)
   choke me
   #endif
-  ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+  ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
    [AC_MSG_RESULT([no]); have_gmp=no])
 
   # If we have GMP, check the MPFR version.
   if test x"$have_gmp" = xyes; then
     # Check for the recommended and required versions of MPFR.
     AC_MSG_CHECKING([for the correct version of mpfr.h])
-    AC_TRY_COMPILE([#include <gmp.h>
-    #include <mpfr.h>],[
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>
+    #include <mpfr.h>]],[[
     #if MPFR_VERSION < MPFR_VERSION_NUM(3,1,0)
     choke me
     #endif
-    ], [AC_TRY_COMPILE([#include <gmp.h>
-    #include <mpfr.h>],[
+    ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <gmp.h>
+    #include <mpfr.h>]],[[
     #if MPFR_VERSION < MPFR_VERSION_NUM(3,1,6)
     choke me
     #endif
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
      [AC_MSG_RESULT([no]); have_gmp=no])
   fi
 
@@ -1826,15 +1826,15 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
   if test "x$require_mpc" = xyes && test x"$have_gmp" = xyes ; then
     # Check for the recommended and required versions of MPC.
     AC_MSG_CHECKING([for the correct version of mpc.h])
-    AC_TRY_COMPILE([#include <mpc.h>],[
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     #if MPC_VERSION < MPC_VERSION_NUM(0,8,0)
     choke me
     #endif
-    ], [AC_TRY_COMPILE([#include <mpc.h>],[
+    ]])], [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     #if MPC_VERSION < MPC_VERSION_NUM(0,8,1)
     choke me
     #endif
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([buggy but acceptable])])],
      [AC_MSG_RESULT([no]); have_gmp=no])
   fi
 
@@ -1843,7 +1843,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     saved_LIBS="$LIBS"
     LIBS="$LIBS $gmplibs"
     AC_MSG_CHECKING([for the correct version of the gmp/mpfr libraries])
-    AC_TRY_LINK([#include <mpfr.h>],[
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <mpfr.h>]], [[
     mpfr_t n;
     mpfr_t x;
     int t;
@@ -1854,7 +1854,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     mpfr_subnormalize (x, t, MPFR_RNDN);
     mpfr_clear(n);
     mpfr_clear(x);
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
     LIBS="$saved_LIBS"
   fi
 
@@ -1863,7 +1863,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     saved_LIBS="$LIBS"
     LIBS="$LIBS $gmplibs"
     AC_MSG_CHECKING([for the correct version of the mpc libraries])
-    AC_TRY_LINK([#include <mpc.h>],[
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <mpc.h>]], [[
     mpc_t c;
     mpc_init2 (c, 53);
     mpc_set_ui_ui (c, 1, 1, MPC_RNDNN);
@@ -1871,7 +1871,7 @@ if test "x$require_gmp" = xyes && test "x$have_gmp" = xno; then
     mpc_pow (c, c, c, MPC_RNDNN);
     mpc_acosh (c, c, MPC_RNDNN);
     mpc_clear (c);
-    ], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
+    ]])], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no]); have_gmp=no])
     LIBS="$saved_LIBS"
   fi
 
@@ -3823,21 +3823,6 @@ case "$target:$have_compiler:$host:$target:$enable_multilib" in
     if test x${dev64} != xyes ; then
       AC_MSG_ERROR([I suspect your system does not have 32-bit development libraries (libc and headers). If you have them, rerun configure with --enable-multilib. If you do not have them, and want to build a 64-bit-only compiler, rerun configure with --disable-multilib.])
     fi
-    ;;
-esac
-
-# For s390, -m31 is deprecated.  Emit a warning if --enable-multilib and
-# --enable-obsolete are explicitly specified.  If --enable-multilib is
-# specified implicitly or --enable-obsolete is missing, error out.
-case "$target:$enable_multilib:$enable_obsolete" in
-  s390*:yes:yes)
-    AC_MSG_WARN([Support for -m31 is deprecated and will be removed.])
-    ;;
-  s390*::*)
-    AC_MSG_ERROR([Support for -m31 is deprecated and will be removed. Explicitly specify --disable-multilib or --enable-multilib --enable-obsolete to build it anyway.])
-    ;;
-  s390*:yes:*)
-    AC_MSG_ERROR([Support for -m31 is deprecated and will be removed. Specify --enable-obsolete to build it anyway.])
     ;;
 esac
 

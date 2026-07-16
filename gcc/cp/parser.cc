@@ -292,7 +292,8 @@ static void missing_template_diag
 static FILE *cp_lexer_debug_stream;
 
 /* Nonzero if we are parsing an unevaluated operand: an operand to
-   sizeof, typeof, or alignof.  */
+   sizeof, typeof, or alignof.  This is a count since operands to
+   sizeof can be nested.  */
 int cp_unevaluated_operand;
 
 /* Nonzero if we are parsing a reflect-expression and shouldn't strip
@@ -8570,9 +8571,33 @@ cp_parser_postfix_expression (cp_parser *parser, bool address_p, bool cast_p,
 	else
 	  {
 	    tree expression;
+	    /* [expr.typeid]/4-5: parse the operand unevaluated first; if it is
+	       a polymorphic glvalue, roll back and re-parse it evaluated,
+	       since an evaluated parse has irreversible side-effects
+	       (mark_used -> instantiation; lambda capture).  */
+	    cp_lexer_save_tokens (parser->lexer);
+	    {
+	      cp_unevaluated u;
+	      expression = cp_parser_expression (parser, &idk);
+	    }
+	    /* If we're already within an unevaluated operand, everything
+	       in the subtree stays not potentially evaluated regardless
+	       of [expr.typeid]/4 ([basic.def.odr]/3), so the evaluated
+	       re-parse below can have nothing to do; skip it.  */
+	    if (expression != error_mark_node
+		&& processing_template_decl == 0
+		&& !cp_unevaluated_operand
+		&& typeid_evaluated_p (expression))
+	      {
+		/* Re-parse the operand evaluated so the /4 side-effects occur.
+		   The unevaluated pass above called no mark_used and captured
+		   nothing, so rolling back has nothing to undo.  */
+		cp_lexer_rollback_tokens (parser->lexer);
+		expression = cp_parser_expression (parser, &idk);
+	      }
+	    else
+	      cp_lexer_commit_tokens (parser->lexer);
 
-	    /* Look for an expression.  */
-	    expression = cp_parser_expression (parser, & idk);
 	    /* Compute its typeid.  */
 	    postfix_expression = build_typeid (expression, tf_warning_or_error);
 	    /* Look for the `)' token.  */
@@ -33273,6 +33298,7 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
   /* First, parse name of the attribute, a.k.a attribute-token.  */
 
   token = cp_lexer_peek_token (parser->lexer);
+  location_t id_loc = token->location;
   if (token->type == CPP_NAME)
     attr_id = token->u.value;
   else if (token->type == CPP_KEYWORD)
@@ -33286,6 +33312,17 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
   cp_lexer_consume_token (parser->lexer);
 
   token = cp_lexer_peek_token (parser->lexer);
+  auto canonicalize_attr_ns_name = [] (tree attr_ns)
+    {
+     /* In clang, __clang__ is predefined macro, and the supported alternate
+	 namespace is _Clang rather than __clang__ because of that.
+	 Don't handle ___Clang__ that way though.  */
+      if (id_equal (attr_ns, "_Clang"))
+	attr_ns = get_identifier ("clang");
+      else
+	attr_ns = canonicalize_attr_name (attr_ns);
+      return attr_ns;
+    };
   if (token->type == CPP_SCOPE)
     {
       /* We are seeing a scoped attribute token.  */
@@ -33295,6 +33332,11 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	error_at (token->location, "attribute using prefix used together "
 				   "with scoped attribute token");
       attr_ns = attr_id;
+
+      if (id_equal (attr_ns, "__clang__"))
+	warning_at (id_loc, OPT_Wattributes,
+		    "alternate attribute namespace for %<clang%> is "
+		    "%<_Clang%> rather than %<__clang__%>");
 
       token = cp_lexer_peek_token (parser->lexer);
       if (token->type == CPP_NAME)
@@ -33311,7 +33353,7 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	}
       cp_lexer_consume_token (parser->lexer);
 
-      attr_ns = canonicalize_attr_name (attr_ns);
+      attr_ns = canonicalize_attr_ns_name (attr_ns);
       attr_id = canonicalize_attr_name (attr_id);
       attribute = build_tree_list (build_tree_list (attr_ns, attr_id),
 				   NULL_TREE);
@@ -33319,7 +33361,7 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
     }
   else if (attr_ns)
     {
-      attr_ns = canonicalize_attr_name (attr_ns);
+      attr_ns = canonicalize_attr_ns_name (attr_ns);
       attr_id = canonicalize_attr_name (attr_id);
       attribute = build_tree_list (build_tree_list (attr_ns, attr_id),
 				   NULL_TREE);
@@ -33398,6 +33440,10 @@ cp_parser_std_attribute (cp_parser *parser, tree attr_ns)
 	     && cxx_dialect >= cxx26
 	     && (is_attribute_p ("deprecated", attr_id)
 		 || is_attribute_p ("nodiscard", attr_id)))
+      attr_flag = uneval_string_attr;
+    else if (attr_ns
+	     && is_attribute_p ("clang", attr_ns)
+	     && is_attribute_p ("no_specializations", attr_id))
       attr_flag = uneval_string_attr;
 
     /* If this is a fake attribute created to handle -Wno-attributes,
@@ -34068,7 +34114,6 @@ cp_parser_std_attribute_spec (cp_parser *parser)
       && cp_lexer_peek_nth_token (parser->lexer, 2)->type == CPP_OPEN_SQUARE)
     {
       tree attr_ns = NULL_TREE;
-      tree attr_name = NULL_TREE;
 
       cp_lexer_consume_token (parser->lexer);
       cp_lexer_consume_token (parser->lexer);
@@ -34088,12 +34133,6 @@ cp_parser_std_attribute_spec (cp_parser *parser)
 	  return attributes;
 	}
 
-      if (token->type == CPP_NAME)
-	{
-	  attr_name = token->u.value;
-	  attr_name = canonicalize_attr_name (attr_name);
-	}
-
       if (cp_lexer_next_token_is_keyword (parser->lexer, RID_USING))
 	{
 	  token = cp_lexer_peek_nth_token (parser->lexer, 2);
@@ -34111,6 +34150,11 @@ cp_parser_std_attribute_spec (cp_parser *parser)
 		pedwarn (input_location, OPT_Wc__17_extensions,
 			 "attribute using prefix only available "
 			 "with %<-std=c++17%> or %<-std=gnu++17%>");
+
+	      if (id_equal (attr_ns, "__clang__"))
+		warning_at (token->location, OPT_Wattributes,
+			    "alternate attribute namespace for %<clang%> is "
+			    "%<_Clang%> rather than %<__clang__%>");
 
 	      cp_lexer_consume_token (parser->lexer);
 	      cp_lexer_consume_token (parser->lexer);
@@ -44139,7 +44183,10 @@ parse_next:
 	    if (traits_var != NULL_TREE)
 	      dup_mod_tok = mod_tok;
 	    else
-	      traits_var = t;
+	      {
+		traits_var = t;
+		mark_exp_read (traits_var);
+	      }
 	  }
 	else
 	  {
@@ -44224,6 +44271,7 @@ parse_next:
 	  legacy_traits = arg;
 	  if (legacy_traits == error_mark_node)
 	    goto end;
+	  mark_exp_read (legacy_traits);
 	  gcc_rich_location richloc (make_location (tok->location,
 						    tok->location, close_loc));
 	  if (nl == list)

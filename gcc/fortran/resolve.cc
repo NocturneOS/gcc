@@ -6164,7 +6164,12 @@ gfc_resolve_ref (gfc_expr *expr)
   n_components = 0;
   array_ref = NULL;
 
-  if (expr->expr_type == EXPR_VARIABLE && IS_PDT (expr))
+  /* Use the declared type of the base symbol to initialize last_pdt when the
+     expression is not itself a PDT. This matters for ASSOCIATE variables whose
+     component reference may still point to a PDT template.  */
+  if (expr->expr_type == EXPR_VARIABLE
+      && (IS_PDT (expr)
+	  || (expr->ref && expr->symtree && IS_PDT (expr->symtree->n.sym))))
     last_pdt = expr->symtree->n.sym->ts.u.derived;
 
   for (ref = expr->ref; ref; ref = ref->next)
@@ -9750,7 +9755,7 @@ check_symbols:
     }
 
 success:
-  gfc_used_in_allocate_expr (e, &e->where);
+  gfc_used_in_allocate_expr (e, &e->where, ALLOCATED_ALLOCATE_STMT);
 
   if (code->expr3)
     gfc_value_set_at (e->symtree->n.sym, &code->expr3->where, VALUE_VARDEF);
@@ -11769,6 +11774,10 @@ resolve_transfer (gfc_code *code)
       return;
     }
 
+  if (dt && (dt->dt_io_kind->value.iokind == M_WRITE
+	     || dt->dt_io_kind->value.iokind == M_PRINT))
+    gfc_value_used_expr (exp, VALUE_USED);
+
   if (exp == NULL || (exp->expr_type != EXPR_VARIABLE
 		      && exp->expr_type != EXPR_FUNCTION
 		      && exp->expr_type != EXPR_ARRAY
@@ -11900,10 +11909,6 @@ resolve_transfer (gfc_code *code)
 		 "an assumed-size array", &code->loc);
       return;
     }
-
-  if (dt && (dt->dt_io_kind->value.iokind == M_WRITE
-	     || dt->dt_io_kind->value.iokind == M_PRINT))
-    gfc_value_used_expr (exp, VALUE_USED);
 
 }
 
@@ -14366,16 +14371,38 @@ start:
 	case EXEC_END_BLOCK:
 	case EXEC_END_NESTED_BLOCK:
 	case EXEC_CYCLE:
-	case EXEC_PAUSE:
 	  break;
 
 	case EXEC_STOP:
 	case EXEC_ERROR_STOP:
+	  if (code->expr1 != NULL && t)
+	    {
+	      if (!(code->expr1->ts.type == BT_CHARACTER
+		    || code->expr1->ts.type == BT_INTEGER))
+		gfc_error ("STOP code at %L must be either INTEGER or CHARACTER "
+			   "type", &code->expr1->where);
+	      else if (code->expr1->rank != 0)
+		gfc_error ("STOP code at %L must be scalar",
+			   &code->expr1->where);
+	      else if (code->expr1->ts.type == BT_CHARACTER
+		       && code->expr1->ts.kind != gfc_default_character_kind)
+		gfc_error ("STOP code at %L must be default character KIND=%d",
+			   &code->expr1->where, (int) gfc_default_character_kind);
+	      else if (code->expr1->ts.type == BT_INTEGER
+		       && code->expr1->ts.kind != gfc_default_integer_kind)
+		gfc_notify_std (GFC_STD_F2018, "STOP code at %L must be default "
+				"integer KIND=%d", &code->expr1->where,
+				(int) gfc_default_integer_kind);
+	    }
 	  if (code->expr2 != NULL
 	      && (code->expr2->ts.type != BT_LOGICAL
 		  || code->expr2->rank != 0))
 	    gfc_error ("QUIET specifier at %L must be a scalar LOGICAL",
 		       &code->expr2->where);
+
+	  /* Fall through.  */
+	case EXEC_PAUSE:
+	  gfc_value_used_expr (code->expr1, VALUE_USED);
 	  break;
 
 	case EXEC_EXIT:
@@ -16402,13 +16429,8 @@ gfc_resolve_finalizers (gfc_symbol* derived, bool *finalizable)
 	      tmp = gfc_get_finalizer ();
 	      *tmp = *list;
 	      tmp->next = NULL;
-	      if (*prev_link)
-		{
-		  (*prev_link)->next = tmp;
-		  prev_link = &tmp;
-		}
-	      else
-		*prev_link = tmp;
+	      *prev_link = tmp;
+	      prev_link = &(tmp->next);
 	      list->proc_tree = gfc_find_sym_in_symtree (list->proc_sym);
 	    }
 	}
@@ -18498,6 +18520,7 @@ resolve_symbol (gfc_symbol *sym)
   gfc_component *c;
   symbol_attribute class_attr;
   gfc_array_spec *as;
+  bool declared_has_coarray_comp = false;
 
   if (sym->resolve_symbol_called >= 1)
     return;
@@ -18691,6 +18714,8 @@ skip_interfaces:
       as = CLASS_DATA (sym)->as;
       class_attr = CLASS_DATA (sym)->attr;
       class_attr.pointer = class_attr.class_pointer;
+      declared_has_coarray_comp = CLASS_DATA (sym)->ts.u.derived
+				  && CLASS_DATA (sym)->ts.u.derived->attr.coarray_comp;
     }
   else
     {
@@ -19158,9 +19183,8 @@ skip_interfaces:
   /* F2008, C541.  */
   if ((((sym->ts.type == BT_DERIVED && sym->ts.u.derived->attr.coarray_comp)
 	|| (sym->ts.type == BT_CLASS && sym->attr.class_ok
-	    && sym->ts.u.derived && CLASS_DATA (sym)
-	    && CLASS_DATA (sym)->attr.coarray_comp))
-       || (class_attr.codimension && class_attr.allocatable))
+	    && declared_has_coarray_comp))
+	|| (class_attr.codimension && class_attr.allocatable))
       && sym->attr.dummy && sym->attr.intent == INTENT_OUT)
     {
       gfc_error ("Variable %qs at %L is INTENT(OUT) and can thus not be an "
@@ -20816,24 +20840,6 @@ find_unused_vs_set (gfc_symbol *sym)
       || attr->volatile_ || attr->asynchronous || !attr->referenced)
     return;
 
-  if (warn_unused_intent_out && attr->value_set == VALUE_INTENT_OUT
-      && !var_value_is_used (sym))
-    {
-      gfc_warning (OPT_Wunused_intent_out, "Variable %qs passed to "
-		   "INTENT(OUT) argument at %L but value never used",
-		   sym->name, &sym->other_loc);
-      attr->warning_emitted = 1;
-      return;
-    }
-
-  if (warn_unused_read && attr->value_set == VALUE_READ && !var_value_is_used (sym))
-    {
-      gfc_warning (OPT_Wunused_read, "Variable %qs read at %L but never "
-		   "used", sym->name, &sym->other_loc);
-      attr->warning_emitted = 1;
-      return;
-    }
-
   /* There is no allocation in sight, but the variable is used anyway.  This
      might be hidden behind PRESENT, but issue a warning nonetheless.  If
      people complain, we might want to make this to an extra option to be
@@ -20946,14 +20952,49 @@ find_unused_vs_set (gfc_symbol *sym)
 	  attr->warning_emitted = 1;
 	  return;
 	}
-      if (attr->allocatable && attr->allocated && !var_value_is_used (sym))
+      if (attr->allocatable && !var_value_is_used (sym))
 	{
-	  gfc_warning (OPT_Wunused_but_set_variable_, "Variable %qs "
-		       "allocated at %L but never used", sym->name,
-		       &sym->extra_loc);
-	  attr->warning_emitted = 1;
-	  return;
+	  if (attr->allocated == ALLOCATED_ALLOCATE_STMT)
+	    {
+	      gfc_warning (OPT_Wunused_but_set_variable_, "Variable %qs "
+			   "allocated at %L but never used", sym->name,
+			   &sym->extra_loc);
+	      attr->warning_emitted = 1;
+	      return;
+	    }
+	  else if (attr->allocated == ALLOCATED_ARG)
+	    {
+	      gfc_warning (OPT_Wunused_but_set_variable_, "Variable %qs maybe "
+			   "allocated as argument at %L but never used",
+			   sym->name, &sym->extra_loc);
+	      attr->warning_emitted = 1;
+	      return;
+	    }
 	}
+    }
+
+  /* -Wunused-intent-out and -Wunused-read are enabled with -Wextra, so
+     check for these conditions at the end.  If one of the warnings
+     with -Wall triggered, we do not want to issue a different warrning
+     for the same variable if the user supplies -Wall -Wextra instead
+     of only -Wall.  */
+
+  if (warn_unused_intent_out && attr->value_set == VALUE_INTENT_OUT
+      && !var_value_is_used (sym))
+    {
+      gfc_warning (OPT_Wunused_intent_out, "Variable %qs passed to "
+		   "INTENT(OUT) argument at %L but value never used",
+		   sym->name, &sym->other_loc);
+      attr->warning_emitted = 1;
+      return;
+    }
+
+  if (warn_unused_read && attr->value_set == VALUE_READ && !var_value_is_used (sym))
+    {
+      gfc_warning (OPT_Wunused_read, "Variable %qs read at %L but never "
+		   "used", sym->name, &sym->other_loc);
+      attr->warning_emitted = 1;
+      return;
     }
 }
 
@@ -21000,7 +21041,12 @@ gfc_resolve (gfc_namespace *ns)
 
   if (warn_unused_but_set_variable || warn_unused_intent_out
       || warn_unused_read || warn_undefined_vars)
-    warn_unused_vs_set (ns);
+    {
+      int error_count;
+      gfc_get_errors (NULL, &error_count);
+      if (error_count == 0)
+	warn_unused_vs_set (ns);
+    }
 
   if (ns->omp_assumes)
     gfc_resolve_omp_assumptions (ns->omp_assumes);

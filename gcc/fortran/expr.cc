@@ -2162,16 +2162,26 @@ simplify_const_ref (gfc_expr *p)
       switch (p->ref->type)
 	{
 	case REF_ARRAY:
+	  /* <type/kind spec>, parameter :: x(<int>) = scalar_expr
+	     will generate this.  */
+	  if (p->expr_type != EXPR_ARRAY)
+	    {
+	      if (p->ref->u.ar.type == AR_ELEMENT)
+		{
+		  int dim;
+		  for (dim = 0; dim < p->ref->u.ar.dimen; dim++)
+		    if (!p->ref->u.ar.start[dim]
+			|| p->ref->u.ar.start[dim]->expr_type != EXPR_CONSTANT)
+		      return true;
+		}
+
+	      remove_subobject_ref (p, NULL);
+	      break;
+	    }
+
 	  switch (p->ref->u.ar.type)
 	    {
 	    case AR_ELEMENT:
-	      /* <type/kind spec>, parameter :: x(<int>) = scalar_expr
-		 will generate this.  */
-	      if (p->expr_type != EXPR_ARRAY)
-		{
-		  remove_subobject_ref (p, NULL);
-		  break;
-		}
 	      if (!find_array_element (p->value.constructor, &p->ref->u.ar, &cons))
 		return false;
 
@@ -7115,10 +7125,16 @@ gfc_pdt_find_component_copy_initializer (gfc_symbol *sym, const char *name)
 bool has_parameterized_comps (gfc_symbol * der_type)
 {
   bool parameterized_comps = false;
+
+  if (!der_type->attr.pdt_type && !der_type->attr.pdt_comp)
+    return false;
+
   for (gfc_component *c = der_type->components; c; c = c->next)
     if (c->attr.pdt_array || c->attr.pdt_string)
       parameterized_comps = true;
-    else if (IS_PDT (c) && strcmp (der_type->name, c->ts.u.derived->name))
-      parameterized_comps = has_parameterized_comps (c->ts.u.derived);
+    else if (IS_PDT (c) && strcmp (der_type->name, c->ts.u.derived->name)
+	     && has_parameterized_comps (c->ts.u.derived))
+      parameterized_comps = true;
+
   return parameterized_comps;
 }

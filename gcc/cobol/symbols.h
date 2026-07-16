@@ -1411,6 +1411,12 @@ protected:
     if( crv == by_reference_e ) return false;
     return refer.field != NULL;
   }
+  static bool capacity_ok( const cbl_field_t *formal, const cbl_field_t *actual ) {
+    if( formal->data.capacity() == actual->data.capacity() ) return true;
+    if( formal->data.capacity() == 1 && formal->has_attr(any_length_e) ) return true;
+    if( actual->data.capacity() == 1 && actual->has_attr(any_length_e) ) return true;
+    return false;
+  }
 };
 
 // In support of serial/linear search:
@@ -1558,26 +1564,6 @@ struct cbl_label_t {
 };
 
 struct parser_tgt_t;
-
-class cbl_label_ref_t {
-  bool qualified;             // caller mentioned paragraph & section
-  cbl_label_t *target;
-  const cbl_label_t& context; // section called from
-  int line;                   // point of reference
-  parser_tgt_t *handle;
-public:
-  cbl_label_ref_t( size_t program, const cbl_label_t& context, int line,
-                   const char name[], size_t isect = 0 );
-
-  cbl_label_t * target_of() { return target; }
-
-  parser_tgt_t * handle_of(parser_tgt_t *parser_tgt) {
-    return this->handle = parser_tgt;
-  }
-  parser_tgt_t * handle_of() {
-    return this->handle;
-  }
-};
 
 static inline bool
 label_lessthan( const cbl_label_t & a, const cbl_label_t & b ) {
@@ -2389,8 +2375,11 @@ void build_symbol_map();
 bool update_symbol_map( symbol_elem_t *e );
 
 void update_symbol_map2( const symbol_elem_t *elem );
+void update_symbol_map2( const cbl_file_t& file );
 void finalize_symbol_map2();
 void dump_symbol_map2();
+
+bool was_fd_name( const cbl_field_t * field ); // uses symbol_map2, sort of
 
 symbol_elem_t * symbol_register( const char name[] );
 
@@ -2685,7 +2674,8 @@ struct cbl_perform_tgt_t {
     return ito? cbl_label_of(symbol_at(ito)) : NULL;
   }
 
-
+  const cbl_label_t * recurses( const cbl_label_t *para,
+                                const cbl_label_t *sect ) const;
   void dump() const {
     assert(ifrom);
     if( !ito ) {
@@ -2866,35 +2856,34 @@ cbl_namelist_t teed_up_names();
 
 size_t end_of_group( size_t igroup );
 
-struct symbol_elem_t * symbol_typedef( size_t program, std::list<const char *> names );
-struct symbol_elem_t * symbol_typedef( size_t program, const char name[] );
-struct symbol_elem_t * symbol_field( size_t program,
-                                     size_t parent, const char name[] );
-struct cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
-                                     size_t section, const char name[],
-                                     const char os_name[] = NULL );
-struct symbol_elem_t * symbol_function( size_t parent,
-                                        const char name[], bool prototype = false );
-struct cbl_label_t *   symbol_function_any( size_t parent, const char name[] );
-struct cbl_label_t *   symbol_program( size_t parent,
-                                       const char name[], bool prototype = false );
+symbol_elem_t * symbol_typedef( size_t program, std::list<const char *> names );
+symbol_elem_t * symbol_typedef( size_t program, const char name[] );
+symbol_elem_t * symbol_field( size_t program, size_t parent, const char name[] );
+cbl_label_t *   symbol_label( size_t program, cbl_label_type_t type,
+                              size_t section, const char name[],
+                              const char os_name[] = NULL );
+symbol_elem_t * symbol_function( size_t parent,
+                                 const char name[], bool prototype = false );
+cbl_label_t *   symbol_function_any( size_t parent, const char name[] );
+cbl_label_t *   symbol_program( size_t parent,
+                                const char name[], bool prototype = false );
 
-struct symbol_elem_t * symbol_literalA( size_t program, const char name[] );
+symbol_elem_t * symbol_literalA( size_t program, const char name[] );
 
-struct cbl_special_name_t * symbol_special( special_name_t id );
-struct symbol_elem_t * symbol_special( size_t program, const char name[] );
-struct symbol_elem_t * symbol_locale( size_t program, const char name[] );
-struct symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
+cbl_special_name_t * symbol_special( special_name_t id );
+symbol_elem_t * symbol_special( size_t program, const char name[] );
+symbol_elem_t * symbol_locale( size_t program, const char name[] );
+symbol_elem_t * symbol_alphabet( size_t program, const char name[] );
 
-struct symbol_elem_t * symbol_file( size_t program, const char name[] );
-struct cbl_field_t   * symbol_file_record( const cbl_file_t *file );
+symbol_elem_t * symbol_file( size_t program, const char name[] );
+cbl_field_t   * symbol_file_record( const cbl_file_t *file );
 cbl_file_t::varying_t symbol_file_record_sizes( struct cbl_file_t *file );
-struct cbl_section_t * symbol_section( size_t program,
-                                       struct cbl_section_t *section );
+cbl_section_t * symbol_section( size_t program,
+                                struct cbl_section_t *section );
 
 size_t symbol_label_id( const cbl_label_t *label );
 
-struct cbl_field_t * parent_of( const cbl_field_t *f );
+cbl_field_t * parent_of( const cbl_field_t *f );
  const cbl_field_t * occurs_in( const cbl_field_t *f );
 
 cbl_field_t *rename_not_ok( const cbl_field_t *first, const cbl_field_t *last);

@@ -2935,35 +2935,37 @@ inverse_conditions_p (const_tree cond1, const_tree cond2)
 			      TREE_OPERAND (cond2, 1), 0));
 }
 
-/* Return a tree for the comparison which is the combination of
+/* Return a code for the comparison which is the combination of
    doing the AND or OR (depending on CODE) of the two operations LCODE
    and RCODE on the identical operands LL_ARG and LR_ARG.  Take into account
-   the possibility of trapping if the mode has NaNs, and return NULL_TREE
-   if this makes the transformation invalid.  */
+   the possibility of trapping if the mode has NaNs, and return ERROR_MARK
+   if this makes the transformation invalid. If the resulting code is
+   INTEGER_CST, then *RES will be set to a non-NULL CONSTANT.  */
 
-tree
-combine_comparisons (location_t loc,
-		     enum tree_code code, enum tree_code lcode,
-		     enum tree_code rcode, tree truth_type,
-		     tree ll_arg, tree lr_arg)
+enum tree_code
+combine_comparisons (enum tree_code code, enum tree_code lcode,
+		       enum tree_code rcode, tree truth_type,
+		       bool honor_nans, tree *res)
 {
-  bool honor_nans = HONOR_NANS (ll_arg);
   enum comparison_code lcompcode = comparison_to_compcode (lcode);
   enum comparison_code rcompcode = comparison_to_compcode (rcode);
   int compcode;
+  *res = NULL_TREE;
 
   switch (code)
     {
     case TRUTH_AND_EXPR: case TRUTH_ANDIF_EXPR:
+    case BIT_AND_EXPR:
       compcode = lcompcode & rcompcode;
       break;
 
     case TRUTH_OR_EXPR: case TRUTH_ORIF_EXPR:
+    case BIT_IOR_EXPR:
       compcode = lcompcode | rcompcode;
       break;
 
     default:
-      return NULL_TREE;
+      return ERROR_MARK;
     }
 
   if (!honor_nans)
@@ -3004,24 +3006,45 @@ combine_comparisons (location_t loc,
 	   trapped, we may now generate a spurious trap.  */
 	if (rtrap && !ltrap
 	    && (code == TRUTH_ANDIF_EXPR || code == TRUTH_ORIF_EXPR))
-	  return NULL_TREE;
+	  return ERROR_MARK;
 
 	/* If we changed the conditions that cause a trap, we lose.  */
 	if ((ltrap || rtrap) != trap)
-	  return NULL_TREE;
+	  return ERROR_MARK;
       }
 
-  if (compcode == COMPCODE_TRUE)
-    return constant_boolean_node (true, truth_type);
-  else if (compcode == COMPCODE_FALSE)
-    return constant_boolean_node (false, truth_type);
-  else
+  if (compcode == COMPCODE_TRUE || compcode == COMPCODE_FALSE)
     {
-      enum tree_code tcode;
-
-      tcode = compcode_to_comparison ((enum comparison_code) compcode);
-      return fold_build2_loc (loc, tcode, truth_type, ll_arg, lr_arg);
+      *res = constant_boolean_node (compcode == COMPCODE_TRUE, truth_type);
+      return INTEGER_CST;
     }
+  else
+    return compcode_to_comparison ((enum comparison_code) compcode);
+}
+
+/* Return a tree for the comparison which is the combination of
+   doing the AND or OR (depending on CODE) of the two operations LCODE
+   and RCODE on the identical operands LL_ARG and LR_ARG.  Take into account
+   the possibility of trapping if the mode has NaNs, and return NULL_TREE
+   if this makes the transformation invalid.  */
+
+tree
+combine_comparisons (location_t loc,
+		     enum tree_code code, enum tree_code lcode,
+		     enum tree_code rcode, tree truth_type,
+		     tree ll_arg, tree lr_arg)
+{
+  bool honor_nans = HONOR_NANS (ll_arg);
+  tree_code rescode;
+  tree res;
+  rescode = combine_comparisons (code, lcode, rcode, truth_type,
+				 honor_nans, &res);
+  if (rescode == ERROR_MARK)
+    return NULL_TREE;
+  if (rescode == INTEGER_CST)
+    return res;
+
+  return fold_build2_loc (loc, rescode, truth_type, ll_arg, lr_arg);
 }
 
 /* Return nonzero if two operands (typically of the same tree node)
@@ -6995,6 +7018,92 @@ fold_real_zero_addition_p (const_tree type, const_tree arg,
      (i) X - 0 is the same as X with default rounding.
      (ii) X + 0 is X when X can't possibly be -0.0.  */
   return negate || (arg && !tree_expr_maybe_real_minus_zero_p (arg));
+}
+
+/* Subroutine of match.pd that determines if it is safe to optimize
+   a floating point comparison of an integer value, known to be between
+   LO and HI, using comparison operator CMP, against the real constant
+   R in floating point type FMT, as the same integer comparison against
+   the integer constant I, with sign ISIGN.
+
+   For example, with IEEE-754, (float)x == 2.0f may replaced with x == 2
+   because the floating point representations of the neighboring integers
+   (float)1 and (float)3 are distinct from 2.0f, having values 1.0f and
+   3.0f respectively.  On the other hand (float)x == 16777220.0f can't
+   be replaced by x == 16777220 as (float)16777221 is also 1677220.0f
+   due to truncation/rounding.
+*/
+bool
+fold_cmp_float_cst_p (wide_int lo, wide_int hi, enum tree_code cmp,
+		      const REAL_VALUE_TYPE *r, format_helper fmt,
+		      wide_int i, signop isign)
+{
+  REAL_VALUE_TYPE raw;
+  REAL_VALUE_TYPE rnd;
+  bool check_im1 = true;
+  bool check_ip1 = true;
+
+  switch (cmp)
+    {
+    case EQ_EXPR:
+    case NE_EXPR:
+      /* Check both i-1 and i+1.  */
+      break;
+
+    case LT_EXPR:
+    case GE_EXPR:
+      /* Only check i-1.  */
+      check_ip1 = false;
+      break;
+
+    case LE_EXPR:
+    case GT_EXPR:
+      /* Only check i+1.  */
+      check_im1 = false;
+      break;
+
+    default:
+      return false;
+    }
+
+    if (flag_rounding_math && i != 0)
+      {
+	real_from_integer (&raw, VOIDmode, i, isign);
+	if (!real_identical (r, &raw))
+	  return false;
+      }
+
+    if (check_im1 && wi::gt_p (i, lo, isign))
+      {
+	if (flag_rounding_math)
+	  {
+	    real_from_integer (&raw, VOIDmode, i - 1, isign);
+	    real_convert (&rnd, fmt, &raw);
+	    if (!real_identical (&raw, &rnd))
+	      return false;
+	  }
+	else
+	  real_from_integer (&rnd, fmt, i - 1, isign);
+	if (real_identical (r, &rnd))
+	  return false;
+      }
+
+    if (check_ip1 && wi::lt_p (i, hi, isign))
+      {
+	if (flag_rounding_math)
+	  {
+	    real_from_integer (&raw, VOIDmode, i + 1, isign);
+	    real_convert (&rnd, fmt, &raw);
+	    if (!real_identical (&raw, &rnd))
+	      return false;
+	  }
+	else
+	  real_from_integer (&rnd, fmt, i + 1, isign);
+	if (real_identical (r, &rnd))
+	  return false;
+      }
+
+  return true;
 }
 
 /* Subroutine of match.pd that optimizes comparisons of a division by

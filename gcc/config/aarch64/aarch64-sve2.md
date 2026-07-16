@@ -56,6 +56,7 @@
 ;; ---- [INT] Multi-register operations
 ;; ---- [INT] Clamp to minimum/maximum
 ;; ---- [INT] Multiplication
+;; ---- [INT] Unpredicated high-part multiplication
 ;; ---- [INT] Scaled high-part multiplication
 ;; ---- [INT] General binary arithmetic that maps to unspecs
 ;; ---- [INT] Saturating binary arithmetic
@@ -974,6 +975,22 @@
      [ w        , 0 , vsm ; *              ] mul\t%Z0.<Vetype>, %Z0.<Vetype>, #%2
      [ ?&w      , w , vsm ; yes            ] movprfx\t%Z0, %Z1\;mul\t%Z0.<Vetype>, %Z0.<Vetype>, #%2
   }
+  [(set_attr "sve_type" "sve_int_mul")]
+)
+
+;; -------------------------------------------------------------------------
+;; ---- [INT] Unpredicated high-part multiplication
+;; -------------------------------------------------------------------------
+
+;; SVE2 unpredicated SMULH/UMULH.
+(define_insn "@aarch64_sve2_<optab><mode>"
+  [(set (match_operand:SVE_I 0 "register_operand" "=w")
+	(unspec:SVE_I
+	  [(match_operand:SVE_I 1 "register_operand" "w")
+	   (match_operand:SVE_I 2 "register_operand" "w")]
+	  MUL_HIGHPART))]
+  "TARGET_SVE2"
+  "<su>mulh\t%0.<Vetype>, %1.<Vetype>, %2.<Vetype>"
   [(set_attr "sve_type" "sve_int_mul")]
 )
 
@@ -4715,7 +4732,7 @@
 	     (match_operand:VNx16QI 1 "register_operand" "%0")
 	     (match_operand:VNx16QI 2 "register_operand" "w"))]
           CRYPTO_AES))]
-  "TARGET_SVE2_AES"
+  "TARGET_SVE_AES"
   "aes<aes_op>\t%0.b, %0.b, %2.b"
   [(set_attr "type" "crypto_aese")]
 )
@@ -4726,7 +4743,7 @@
 	(unspec:VNx16QI
 	  [(match_operand:VNx16QI 1 "register_operand" "0")]
 	  CRYPTO_AESMC))]
-  "TARGET_SVE2_AES"
+  "TARGET_SVE_AES"
   "aes<aesmc_op>\t%0.b, %0.b"
   [(set_attr "type" "crypto_aesmc")]
 )
@@ -4745,7 +4762,7 @@
 		(match_operand:VNx16QI 2 "register_operand" "w"))]
 	     UNSPEC_AESE)]
 	  UNSPEC_AESMC))]
-  "TARGET_SVE2_AES && aarch64_fusion_enabled_p (AARCH64_FUSE_AES_AESMC)"
+  "TARGET_SVE_AES && aarch64_fusion_enabled_p (AARCH64_FUSE_AES_AESMC)"
   "aese\t%0.b, %0.b, %2.b\;aesmc\t%0.b, %0.b"
   [(set_attr "type" "crypto_aese")
    (set_attr "length" "8")]
@@ -4760,7 +4777,7 @@
 		(match_operand:VNx16QI 2 "register_operand" "w"))]
 	     UNSPEC_AESD)]
 	  UNSPEC_AESIMC))]
-  "TARGET_SVE2_AES && aarch64_fusion_enabled_p (AARCH64_FUSE_AES_AESMC)"
+  "TARGET_SVE_AES && aarch64_fusion_enabled_p (AARCH64_FUSE_AES_AESMC)"
   "aesd\t%0.b, %0.b, %2.b\;aesimc\t%0.b, %0.b"
   [(set_attr "type" "crypto_aese")
    (set_attr "length" "8")]

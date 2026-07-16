@@ -727,12 +727,10 @@ simplify_context::simplify_truncation (machine_mode mode, rtx op,
 	}
     }
 
-  /* Turn (truncate:M1 (*_extract:M2 (reg:M2) (len) (pos))) into
-     (*_extract:M1 (truncate:M1 (reg:M2)) (len) (pos')) if possible without
-     changing len.  */
+  /* Turn (truncate:M1 (*_extract:M2 (reg:M3) (len) (pos))) into
+     (*_extract:M1 (truncate:M1 (reg:M3)) (len) (pos')) if possible.  */
   if ((GET_CODE (op) == ZERO_EXTRACT || GET_CODE (op) == SIGN_EXTRACT)
-      && REG_P (XEXP (op, 0))
-      && GET_MODE (XEXP (op, 0)) == GET_MODE (op)
+      && precision <= GET_MODE_UNIT_PRECISION (GET_MODE (XEXP (op, 0)))
       && CONST_INT_P (XEXP (op, 1))
       && CONST_INT_P (XEXP (op, 2)))
     {
@@ -741,7 +739,8 @@ simplify_context::simplify_truncation (machine_mode mode, rtx op,
       unsigned HOST_WIDE_INT pos = UINTVAL (XEXP (op, 2));
       if (BITS_BIG_ENDIAN && pos >= op_precision - precision)
 	{
-	  op0 = simplify_gen_unary (TRUNCATE, mode, op0, GET_MODE (op0));
+	  if (GET_MODE (op0) != mode)
+	    op0 = simplify_gen_unary (TRUNCATE, mode, op0, GET_MODE (op0));
 	  if (op0)
 	    {
 	      pos -= op_precision - precision;
@@ -751,7 +750,8 @@ simplify_context::simplify_truncation (machine_mode mode, rtx op,
 	}
       else if (!BITS_BIG_ENDIAN && precision >= len + pos)
 	{
-	  op0 = simplify_gen_unary (TRUNCATE, mode, op0, GET_MODE (op0));
+	  if (GET_MODE (op0) != mode)
+	    op0 = simplify_gen_unary (TRUNCATE, mode, op0, GET_MODE (op0));
 	  if (op0)
 	    return simplify_gen_ternary (GET_CODE (op), mode, mode, op0,
 					 XEXP (op, 1), XEXP (op, 2));
@@ -941,10 +941,34 @@ simplify_context::simplify_unary_operation_1 (rtx_code code, machine_mode mode,
       /* (not (eq X Y)) == (ne X Y), etc. if BImode or the result of the
 	 comparison is all ones.   */
       if (COMPARISON_P (op)
-	  && (mode == BImode || STORE_FLAG_VALUE == -1)
+	  && ((SCALAR_INT_MODE_P (mode) && STORE_FLAG_VALUE == -1)
+#ifdef VECTOR_STORE_FLAG_VALUE
+	      || (GET_MODE_CLASS (mode) == MODE_VECTOR_INT
+		  && VECTOR_STORE_FLAG_VALUE (mode) == constm1_rtx)
+#endif
+	      || mode == BImode)
 	  && ((reversed = reversed_comparison_code (op, NULL)) != UNKNOWN))
 	return simplify_gen_relational (reversed, mode, VOIDmode,
 					XEXP (op, 0), XEXP (op, 1));
+
+      /* (not (neg (eq X Y))) is (neg (ne X Y)), etc. if the result of
+	 the comparison is one.  */
+      if (GET_CODE (op) == NEG
+	  && COMPARISON_P (XEXP (op, 0))
+	  && ((SCALAR_INT_MODE_P (mode) && STORE_FLAG_VALUE == 1)
+#ifdef VECTOR_STORE_FLAG_VALUE
+	      || (GET_MODE_CLASS (mode) == MODE_VECTOR_INT
+		  && VECTOR_STORE_FLAG_VALUE (mode) == const1_rtx)
+#endif
+	     )
+	  && ((reversed = reversed_comparison_code (XEXP (op, 0), NULL))
+	      != UNKNOWN))
+	{
+	  temp = simplify_gen_relational (reversed, mode, VOIDmode,
+					  XEXP (XEXP (op, 0), 0),
+					  XEXP (XEXP (op, 0), 1));
+	  return simplify_gen_unary (NEG, mode, temp, mode);
+	}
 
       /* (not (plus X -1)) can become (neg X).  */
       if (GET_CODE (op) == PLUS
@@ -7802,6 +7826,21 @@ simplify_context::simplify_ternary_operation (rtx_code code, machine_mode mode,
 		  if (!(sel & ~sel0 & mask) && !side_effects_p (XEXP (op0, 1)))
 		    return simplify_gen_ternary (code, mode, mode,
 						 XEXP (op0, 0), op1, op2);
+
+		  /* Replace (vec_merge (vec_merge a b m) a n) with
+		     (vec_merge a b (m|~n)).  */
+		  if (rtx_equal_p (XEXP (op0, 0), op1)
+		      && ! side_effects_p (op1))
+		    return simplify_gen_ternary (code, mode, mode,
+						 op1, XEXP (op0, 1),
+						 GEN_INT ((sel0 | ~sel) & mask));
+		  /* Replace (vec_merge (vec_merge b a m) a n) with
+		     (vec_merge b a (m&n)).  */
+		  if (rtx_equal_p (XEXP (op0, 1), op1)
+		      && ! side_effects_p (op1))
+		    return simplify_gen_ternary (code, mode, mode,
+						 XEXP (op0, 0), op1,
+						 GEN_INT (sel & sel0 & mask));
 		}
 	    }
 	  if (GET_CODE (op1) == VEC_MERGE)
@@ -7816,6 +7855,22 @@ simplify_context::simplify_ternary_operation (rtx_code code, machine_mode mode,
 		  if (!(~sel & ~sel1 & mask) && !side_effects_p (XEXP (op1, 1)))
 		    return simplify_gen_ternary (code, mode, mode,
 						 op0, XEXP (op1, 0), op2);
+
+		  /* Replace (vec_merge a (vec_merge a b m) n) with
+		     (vec_merge a b (m|n)).  */
+		  if (rtx_equal_p (XEXP (op1, 0), op0)
+		      && ! side_effects_p (op0))
+		    return simplify_gen_ternary (code, mode, mode,
+						 op0, XEXP (op1, 1),
+						 GEN_INT ((sel | sel1) & mask));
+
+		  /* Replace (vec_merge a (vec_merge b a m) n) with
+		     (vec_merge a b (~m|n)).  */
+		  if (rtx_equal_p (XEXP (op1, 1), op0)
+		      && ! side_effects_p (op0))
+		    return simplify_gen_ternary (code, mode, mode,
+						 op0, XEXP (op1, 0),
+						 GEN_INT ((sel | ~sel1) & mask));
 		}
 	    }
 

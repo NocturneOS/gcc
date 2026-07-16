@@ -543,12 +543,16 @@ gnat_to_gnu_entity (Entity_Id gnat_entity, tree gnu_expr, bool definition)
 	  esize = UI_To_Int (Esize (gnat_entity));
 
 	  if (IN (kind, Float_Kind))
-#ifdef WIDEST_HARDWARE_FP_SIZE
-	    max_esize = fp_prec_to_size (WIDEST_HARDWARE_FP_SIZE);
-#else
-	    max_esize
-	      = fp_prec_to_size (TYPE_PRECISION (long_double_type_node));
-#endif
+	    {
+	      /* This block is executed the first time to translate the GNAT
+		 node corresponding to Gigi's longest_float_type_node, so the
+		 tree is not yet saved at this time.  */
+	      if (longest_float_type_node)
+		max_esize
+		  = fp_prec_to_size (TYPE_PRECISION (longest_float_type_node));
+	      else
+		max_esize = esize;
+	    }
 	  else if (IN (kind, Access_Kind))
 	    max_esize = POINTER_SIZE * 2;
 	  else
@@ -8432,20 +8436,21 @@ warn_on_field_placement (tree gnu_field, Node_Id gnat_component_list,
       : "?.q?record layout may cause performance issues";
   const char *msg2
     = Ekind (gnat_field) == E_Discriminant
-      ? "?.q?discriminant & whose length is not multiple of a byte"
+      ? "\\?.q?discriminant &# whose length is not multiple of a byte"
       : field_has_self_size (gnu_field)
-	? "?.q?component & whose length depends on a discriminant"
+	? "\\?.q?component &# whose length depends on a discriminant"
 	: field_has_variable_size (gnu_field)
-	  ? "?.q?component & whose length is not fixed"
-	  : "?.q?component & whose length is not multiple of a byte";
+	  ? "\\?.q?component &# whose length is not fixed"
+	  : "\\?.q?component &# whose length is not multiple of a byte";
   const char *msg3
     = do_reorder
-      ? "?.q?comes too early and was moved down"
-      : "?.q?comes too early and ought to be moved down";
+      ? "\\?.q?comes too early and was moved down"
+      : "\\?.q?comes too early and ought to be moved down";
 
-  post_error (msg1, gnat_field);
-  post_error_ne (msg2, gnat_field, gnat_field);
-  post_error (msg3, gnat_field);
+  post_error (msg1, gnat_record_type);
+  Error_Msg_Sloc = Sloc(gnat_field);
+  post_error_ne (msg2, gnat_record_type, gnat_field);
+  post_error (msg3, gnat_record_type);
 }
 
 /* Likewise but for every field present on GNU_FIELD_LIST.  */

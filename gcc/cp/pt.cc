@@ -50,6 +50,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "omp-general.h"
 #include "pretty-print-markup.h"
 #include "contracts.h"
+#include "escaped_string.h"
 
 /* The type of functions taking a tree, and some additional data, and
    returning an int.  */
@@ -1031,6 +1032,48 @@ maybe_new_partial_specialization (tree& type)
   return false;
 }
 
+/* Diagnose if SPEC is a specialization of [[clang::no_specializations]]
+   template.  */
+
+static void
+maybe_diagnose_no_specializations (tree spec)
+{
+  tree tmpl;
+  if (TREE_CODE (spec) == TYPE_DECL)
+    tmpl = CLASSTYPE_TI_TEMPLATE (TREE_TYPE (spec));
+  else
+    tmpl = DECL_TI_TEMPLATE (spec);
+  tree t = DECL_TEMPLATE_RESULT (tmpl), attr;
+  if (TREE_CODE (t) == TYPE_DECL)
+    attr = lookup_attribute ("no_specializations",
+    			     TYPE_ATTRIBUTES (TREE_TYPE (t)));
+  else
+    attr = lookup_attribute ("no_specializations", DECL_ATTRIBUTES (t));
+  if (!attr)
+    return;
+
+  auto_diagnostic_group d;
+  escaped_string msg;
+  tree args = TREE_VALUE (attr);
+  bool complained;
+  if (args)
+    msg.escape (TREE_STRING_POINTER (TREE_VALUE (args)));
+  if (msg)
+    complained
+      = permerror_opt (DECL_SOURCE_LOCATION (spec),
+		       OPT_Winvalid_specialization,
+		       "%qD cannot be specialized: %qs",
+		       spec, (const char *) msg);
+  else
+    complained
+      = permerror_opt (DECL_SOURCE_LOCATION (spec),
+		       OPT_Winvalid_specialization,
+		       "%qD cannot be specialized", spec);
+  if (complained)
+    inform (DECL_SOURCE_LOCATION (DECL_TEMPLATE_RESULT (tmpl)),
+	    "declared %qs here", "clang::no_specializations");
+}
+
 /* The TYPE is being declared.  If it is a template type, that means it
    is a partial specialization.  Do appropriate error-checking.  */
 
@@ -1091,6 +1134,7 @@ maybe_process_partial_specialization (tree type)
 	    return error_mark_node;
 	  SET_CLASSTYPE_TEMPLATE_SPECIALIZATION (type);
 	  DECL_SOURCE_LOCATION (TYPE_MAIN_DECL (type)) = input_location;
+	  maybe_diagnose_no_specializations (TYPE_NAME (type));
 	  if (processing_template_decl)
 	    {
 	      tree decl = push_template_decl (TYPE_MAIN_DECL (type));
@@ -1203,6 +1247,7 @@ maybe_process_partial_specialization (tree type)
 	  DECL_SOURCE_LOCATION (TYPE_MAIN_DECL (type)) = input_location;
 	  CLASSTYPE_TI_ARGS (type)
 	    = INNERMOST_TEMPLATE_ARGS (CLASSTYPE_TI_ARGS (type));
+	  maybe_diagnose_no_specializations (TYPE_NAME (type));
 	}
     }
   else if (processing_specialization)
@@ -1885,6 +1930,11 @@ iterative_hash_template_arg (tree arg, hashval_t val)
 
          So just hash the closure type.  */
       return iterative_hash_template_arg (TREE_TYPE (arg), val);
+
+    case REQUIRES_EXPR:
+      val = iterative_hash_template_arg (REQUIRES_EXPR_PARMS (arg), val);
+      val = iterative_hash_template_arg (REQUIRES_EXPR_REQS (arg), val);
+      return iterative_hash_template_arg (REQUIRES_EXPR_EXTRA_ARGS (arg), val);
 
     case CAST_EXPR:
     case IMPLICIT_CONV_EXPR:
@@ -3449,6 +3499,12 @@ check_explicit_specialization (tree declarator,
 			   || DECL_DESTRUCTOR_P (decl))
 		      || DECL_CLONED_FUNCTION_P (DECL_CHAIN (decl)));
 	}
+
+      if (decl
+	  && VAR_OR_FUNCTION_DECL_P (decl)
+	  && DECL_LANG_SPECIFIC (decl)
+	  && DECL_TEMPLATE_SPECIALIZATION (decl))
+	maybe_diagnose_no_specializations (decl);
     }
 
   return decl;
@@ -19917,7 +19973,15 @@ tsubst_stmt (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 			if (tsubst_decomp_names (decl, pattern_decl, args,
 						 complain, in_decl, decomp)
 			    == error_mark_node)
-			  decomp = NULL;
+			  {
+			    decomp = NULL;
+			    /* As in cp_finish_decomp.  */
+			    if (TREE_STATIC (decl))
+			      {
+				tree id = get_identifier ("<decomp>");
+				SET_DECL_ASSEMBLER_NAME (decl, id);
+			      }
+			  }
 		      }
 
 		    init = tsubst_init (init, decl, args, complain, in_decl);
@@ -23003,8 +23067,25 @@ tsubst_expr (tree t, tree args, tsubst_flags_t complain, tree in_decl)
 	  }
 	else
 	  {
-	    operand_0 = RECUR (operand_0);
-	    RETURN (build_typeid (operand_0, complain));
+	    /* [expr.typeid]/4-5: substitute the operand unevaluated first, then
+	       again evaluated if it is a polymorphic glvalue, so the /4
+	       side-effects occur.  The unevaluated pass instantiates nothing,
+	       so re-substituting has nothing to undo (PR c++/125886).  */
+	    tree operand;
+	    tree uneval;
+	    {
+	      cp_unevaluated u;
+	      uneval = RECUR (operand_0);
+	    }
+	    /* If we're already within an unevaluated operand, everything
+	       in the subtree stays not potentially evaluated regardless
+	       of [expr.typeid]/4 ([basic.def.odr]/3), so the evaluated
+	       re-parse below can have nothing to do; skip it.  */
+	    if (!cp_unevaluated_operand && typeid_evaluated_p (uneval))
+	      operand = RECUR (operand_0);
+	    else
+	      operand = uneval;
+	    RETURN (build_typeid (operand, complain));
 	  }
       }
 

@@ -707,7 +707,6 @@ static const struct default_options default_options_table[] =
     { OPT_LEVELS_3_PLUS, OPT_fpeel_loops, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_fpredictive_commoning, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_fsplit_loops, NULL, 1 },
-    { OPT_LEVELS_3_PLUS, OPT_fsplit_paths, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_ftree_loop_distribution, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_ftree_partial_pre, NULL, 1 },
     { OPT_LEVELS_3_PLUS, OPT_funswitch_loops, NULL, 1 },
@@ -1537,6 +1536,12 @@ finish_options (struct gcc_options *opts, struct gcc_options *opts_set,
 		    "%<-Wstrict-flex-arrays%> is ignored when"
 		    " %<-fstrict-flex-arrays%> is not present");
       }
+
+  if ((opts->x_flag_openmp_ompt || opts->x_flag_openmp_ompt_detailed)
+      && !opts->x_flag_openmp)
+    error_at (
+      loc,
+      "%<-fopenmp-ompt%> and %<-fopenmp-ompt-detailed%> require %<-fopenmp%>");
 
   diagnose_options (opts, opts_set, loc);
 }

@@ -47,7 +47,7 @@ typedef struct TREEPLET
   } TREEPLET;
 
 void parser_display_internal( tree file_descriptor,
-                              cbl_refer_t refer,
+                        const cbl_refer_t &refer,
                               bool advance=DISPLAY_NO_ADVANCE);
 
 void parser_first_statement( int lineno );
@@ -88,9 +88,9 @@ void parser_accept_date_dow( cbl_field_t *tgt );
 void parser_accept_date_hhmmssff( cbl_field_t *tgt );
 
 void
-parser_alphabet( const cbl_alphabet_t& alphabet );
+parser_alphabet( const cbl_alphabet_t *alphabet );
 void
-parser_alphabet_use( cbl_alphabet_t& alphabet );
+parser_alphabet_use( const cbl_alphabet_t *alphabet );
 
 void
 parser_allocate( cbl_refer_t size_or_based, cbl_refer_t returning, bool initialized );
@@ -236,7 +236,7 @@ void
 parser_perform( struct cbl_label_t *label, bool suppress_nexting=false );
 
 void
-parser_perform_times( struct cbl_label_t *label, cbl_refer_t count );
+parser_perform_times( struct cbl_label_t *label, const cbl_refer_t &count );
 
 void
 parser_perform_start( struct cbl_perform_tgt_t *tgt );
@@ -253,7 +253,7 @@ parser_perform_conditional_end( struct cbl_perform_tgt_t *tgt );
  * For an in-line loop body, tgt->from.type == LblLoop, and tgt->to is NULL.
  */
 void
-parser_perform( const cbl_perform_tgt_t *tgt, cbl_refer_t N );
+parser_perform( const cbl_perform_tgt_t *tgt, const cbl_refer_t &N );
 
 /*
  * A simple UNTIL loop uses 1 varys element.  For VARY loops, the
@@ -346,7 +346,7 @@ callback_t *
 parser_label_addr( struct cbl_label_t *label );
 
 void
-parser_goto( cbl_refer_t value, size_t narg, cbl_label_t * const labels[] );
+parser_goto( const cbl_refer_t &value, size_t narg, cbl_label_t * const labels[] );
 
 void
 parser_alter( cbl_perform_tgt_t *tgt );
@@ -357,8 +357,9 @@ void
 parser_set_numeric(struct cbl_field_t *tgt, ssize_t value);
 
 void
-parser_field_attr_set( cbl_field_t *tgt, cbl_field_attr_t attr, bool on_off = true );
-
+parser_field_attr_set(const cbl_field_t *tgt,
+                      cbl_field_attr_t attr,
+                      bool on_off = true );
 void
 parser_file_add(struct cbl_file_t *file);
 
@@ -376,8 +377,10 @@ parser_file_read( struct cbl_file_t *file,
                   int where );
 
 void
-parser_file_start( struct cbl_file_t *file, relop_t op, int flk,
-                   cbl_refer_t = cbl_refer_t() );
+parser_file_start( struct cbl_file_t *file,
+                   relop_t op,
+                   int flk,
+             const cbl_refer_t &length_ref = cbl_refer_t() );
 
 /*
  * Write *field* to *file*.  *after* is a bool where false
@@ -457,8 +460,8 @@ parser_file_sort(   cbl_file_t *file,
                     cbl_perform_tgt_t *out_proc );
 void
 parser_file_merge(  cbl_file_t *file,
-                    cbl_alphabet_t *alphabet,
-                    const std::vector<cbl_key_t>& keys,
+              const cbl_alphabet_t *alphabet,
+              const std::vector<cbl_key_t>& keys,
                     size_t ninput,
                     cbl_file_t **inputs,
                     size_t noutput,
@@ -466,7 +469,7 @@ parser_file_merge(  cbl_file_t *file,
                     cbl_perform_tgt_t *out_proc );
 
 void
-parser_release( cbl_field_t *record_area );
+parser_release( const cbl_field_t *record_area );
 
 void
 parser_exception_file( cbl_field_t *tgt, cbl_file_t* file = NULL );
@@ -579,7 +582,6 @@ void parser_clear_exception();
 void parser_push_exception();
 void parser_pop_exception();
 
-void parser_call_targets_dump();
 size_t parser_call_target_update( size_t caller,
                                   const char extant[],
                                   const char mangled_tgt[] );

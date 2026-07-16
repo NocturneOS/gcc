@@ -1,3 +1,287 @@
+2026-07-15  James K. Lowden  <jklowden@cobolworx.com>
+
+	* parse_ante.h (procedure_division_ready): Test field with is_typedef().
+
+2026-07-15  James K. Lowden  <jklowden@cobolworx.com>
+
+	* parse.y: Add debug messages during parameter validation.
+	* symbols.h: (cbl_ffi_arg_t::capacity_ok): New function.
+
+2026-07-12  James K. Lowden  <jklowden@cobolworx.com>
+
+	* cbldiag.h (enum cbl_diag_id_t): Add IbmCallFd.
+	* cobol1.cc (cobol_langhook_handle_option): Handle Wcall-fd.
+	* gcobol.1: Document Wcall-fd.
+	* lang-specs.h: Add Wcall-fd.
+	* lang.opt: Same
+	* messages.cc: Add Wcall-fd as IBM dialect option.
+	* parse.y: Use was_fd_name() to prevent misuse.
+	* parse_ante.h (field_find): Add incompatible semantics warning.
+	(parser_move_carefully): Same.
+	* symbols.cc (symbols_update): Add FD name to symbol map.
+	* symbols.h (update_symbol_map2): Declare overload for file.
+	(was_fd_name): Declare function.
+	* symfind.cc (struct funcname): Define to minimize __PRETTY_FUNCTION__.
+	(__funcsig__): Define function-name macro.
+	(class sym_name_t): Redefine public members as const.
+	(class symbol_file_names_t) Define maps for FD names.
+	(update_symbol_map2): Define overload for file.
+	(was_fd_name): Define.
+	(symbol_find): Use new symbol_file_names class.
+
+2026-07-11  Robert Dubner  <rdubner@symas.com>
+
+	* copybook.h (class copybook_t): Mollify cppcheck.
+	* lexio.h (struct filespan_t): Likewise.
+	* symbols.h (symbol_typedef): Add declaration.
+
+2026-07-10  Robert Dubner  <rdubner@symas.com>
+
+	* Make-lang.in: Copy charmaps.cc and valconv.cc without using SED to
+	alter their contents.
+	* cbldiag.h (struct cbl_loc_t): Mollify cppcheck.
+	* compare.cc (alpha_compare_figconst): Endianness.
+	(alpha_compare): Endianness.
+	* genapi.cc (get_class_condition_string): Endianness.
+	(parser_statement_end): Fix initialization.
+	(initialize_variable_internal): Likewise.
+	(leave_section_internal): Likewise.
+	(parser_init_list): Likewise.
+	(parser_alphabet): Pass "cbl_alphabet_t *" instead of
+	"cbl_alphabet_t &"
+	(parser_alphabet_use): Likewise.
+	(program_end_stuff): Endianness.
+	(establish_using): Endianness; use out-of-band metadata to handle
+	passing intermediate_e variables BY VALUE.
+	(parser_trim): Endianness.
+	(parser_sort): Change call to parser_alphabet_use().
+	(parser_file_sort): Likewise.
+	(parser_file_merge): Likewise.
+	(create_and_call): Change handling of BY VALUE; handle RETURN-CODE
+	properly for dialects IBM, MF, and GNU.
+	(actually_create_the_static_field): Endianness.
+	(parser_symbol_add): Endianness.
+	* genapi.h (parser_alphabet): Change declaration.
+	(parser_alphabet_use): Likewise.
+	(parser_file_merge): Make a couple of formal parameters "const".
+	* genmath.cc: Incorporate cobol-endian.h.
+	* genutil.cc (binary_from_numdisp): Endianness.
+	(get_binary_value): Endianness.
+	(safe_cast): Prevent aliasing.
+	(safe_assign): New routine that extracts the binary value from a
+	numeric source, and assigns it to the target, converting as
+	necessary based on the target's TREE_TYPE.
+	* genutil.h (safe_assign): New declaration.
+	* messages.cc: Incorporate cobol-endian.h.
+	* move.cc (mh_source_is_literalN): Use streamlined, endian-safe
+	routines.
+	* parse.y: Incorporate cobol-endian.h; set big_endian_e for
+	FldNumericBin5 when the target machine is big-endian.
+	* parse_ante.h (mode_syntax_only): Formatting.
+	(struct prototype_type_t): Likewise.
+	(is_allowed_name): Likewise.
+	(prototype_args): Likewise.
+	(verify_args): Likewise.
+	(valid_pointer_relop): Likewise.
+	(blankit): Eliminate.
+	(cbl_field_t::blank_initial): Handle multi-byte characters.
+	(cbl_field_t::set_initial): Formatting.
+	(data_division_ready): Likewise.
+	(field_binary_usage): Likewise.
+	(ast_end_program): Likewise.
+	* parse_util.h (intrinsic_invalid_parameter): Eliminate FldIndex as
+	an invalid parameter type.
+	* symbols.cc (symbols_alphabet_set): Remove FldIndex from list of
+	invalid types.
+	(cbl_alphabet_t::reencode): Handle big-endian multi-byte charsets.
+	(iconv_cd): Use helpful_iconv_open().
+	(symbol_label_add): Eliminate overwritten assignment.
+	* util.cc (cbl_field_t::encode_numeric): Handle big-endian
+	numeric-display values.
+
+2026-07-10  James K. Lowden  <jklowden@cobolworx.com>
+
+	* lexio.h (parse_error_inc): Declare function.
+	(struct filespan_t::next_line): Detect and remove NUL,
+
+2026-07-09  James K. Lowden  <jklowden@cobolworx.com>
+
+	PR cobol/126105
+	* parse.y: Remove unnecessary test and improve diagnostic message.
+	* parse_ante.h (yylocation_print): New function.
+	(YYLOCATION_PRINT): Define, because user-defined cbl_loc_t location.
+	* symbols.cc (symbol_typedef): Exclude current field from type search.
+	* symbols.h (symbol_typedef): Delete unused overload.
+
+2026-07-09  James K. Lowden  <jklowden@cobolworx.com>
+
+	PR cobol/126106
+	* parse.y: Report error instead of crashing.
+
+2026-07-08  James K. Lowden  <jklowden@cobolworx.com>
+
+	* genapi.cc (parser_call_targets_dump): Remove function.
+	* genapi.h (parser_call_targets_dump): Same.
+	* parse.y: Instantiate forward labels consistently.
+	(label_add) Capture forward references for efficiency.
+	(paragraph_reference) Use forward reference.
+	(label_add_once): New function.
+	* parse_ante.h (label_add_once): Declare function.
+	(label_instantiate): New function.
+	(ast_enter_exit_section): Improve debug message.
+	* symbols.cc (label_cmp): Allow forward reference to have a parent.
+	(cbl_label_ref_t): Remove class.
+	(symbol_label): Whitespace.
+	(symbols_dump): Add information to output.
+	(symbol_add): Remove program label symbol-assignment to symbol_label_add.
+	(cbl_label_t::str): Add information to output.
+	(symbol_label_add): Assign id to program label.
+	* symbols.h (class cbl_label_ref_t): Remove.
+	(struct symbol_elem_t): Remove struct keyword.
+	(struct cbl_label_t): Same.
+	(struct cbl_special_name_t): Same.
+	(struct cbl_field_t): Same.
+	(symbol_typedef): Same.
+	(symbol_field): Same.
+	(symbol_label): Same.
+	(symbol_function): Same.
+	(symbol_function_any): Same.
+	(symbol_program): Same.
+	(symbol_literalA): Same.
+	(symbol_special): Same.
+	(symbol_locale): Same.
+	(symbol_alphabet): Same.
+	(symbol_file): Same.
+	(symbol_file_record): Same.
+	(struct cbl_section_t): Same.
+	(symbol_section): Same.
+	(parent_of): Same.
+	* util.cc: (match_proc::find) Use only section and paragraph names.
+
+2026-07-08  James K. Lowden  <jklowden@cobolworx.com>
+
+	* parse.y (literal_refmod_valid): Do not deference NULL pointer.
+
+2026-07-06  James K. Lowden  <jklowden@cobolworx.com>
+
+	* cbldiag.h (struct cbl_loc_t): Add as_first_line() function.
+	(location_dump): Shorten diagnostic message.
+	* cdf-copy.cc (copybook_elem_t::open_file): Same.
+	* copybook.h (class copybook_t): Remove debug message.
+	* lexio.cc (parse_copy_directive): Clarify comment.
+	(cdftext::lex_open): Set please_push_filename boolean for open_input.
+	(cdftext::open_input): Issue push directive where COPY appeared.
+	(cdftext::output_push_directive): New function.
+	(cdftext::process_file): Relocate PUSH/POP directives.
+	* lexio.h (class cdftext): Add please_push_filename and output_push_directive().
+	* parse.y: Improve PERFORM diagnostics.
+	* parse_ante.h (ast_enter_exit_section): Correct paragraph section ancestor.
+	* scan.l: Update gcc location for PUSH directive.
+	* symbols.cc (cbl_perform_tgt_t::recurses): New validation function.
+	* symbols.h (struct cbl_perform_tgt_t): Same.
+	* util.cc (cobol_filename): Clarify diagnostic message.
+	(gcc_location_set_impl): Remove function.
+	(gcc_location_set): Implement directly.
+	(gcc_location_dump): Add newline to output.
+
+2026-06-30  Robert Dubner  <rdubner@symas.com>
+
+	* compare.cc (alpha_compare_figconst): Make the code endian-agnostic.
+	(alpha_compare): Likewise.
+	(numeric_alpha_compare): Likewise.
+	(float_compare): Force proper data comparisons.
+	* genapi.cc (parser_goto): Use improved get_binary_value() routine.
+	(parser_perform_times): Likewise.
+	(internal_perform_through_times): Likewise.
+	(parser_display_internal): Set formal parameter to const.
+	(program_end_stuff): Use get_binary_value().
+	(parser_relop_long): Likewise.
+	(parser_see_stop_run): Likewise.
+	(parser_perform): Set formal parameter to const.
+	(parser_perform_inline_times): Use new get_binary_value().
+	(parser_file_write): Likewise.
+	(parser_file_start): Likewise.
+	(handle_gg_trim): Endian.
+	(parser_trim): Likewise.
+	(field_increment): Use new get_binary_value().
+	(parser_lsearch_start): Likewise.
+	(parser_release): Set formal parameter to const.
+	(parser_match_exception): Use new get_binary_value().
+	(parser_field_attr_set): Set formal parameter to const.
+	* genapi.h (parser_display_internal): Likewise.
+	(parser_perform_times): Likewise.
+	(parser_perform): Likewise.
+	(parser_goto): Likewise.
+	(parser_field_attr_set): Likewise.
+	(parser_file_start): Likewise.
+	(parser_release): Likewise.
+	* gengen.cc (gg_assign): Comment.
+	* genmath.cc (fast_add): New get_binary_value; address aliasing.
+	(fast_subtract): Likewise.
+	(fast_multiply): Likewise.
+	(fast_divide): Likewise.
+	* genutil.cc (get_scaled_rdigits): Set formal parameter to const.
+	(get_scaled_digits): Set formal parameter to const.
+	(get_integer_value): Improved data conversion; make local static.
+	(CHECK_FOR_FRACTIONAL_DIGITS): Moved here from genutil.h.
+	(giv_helper): New get_integer_value helper routine.
+	(get_and_check_refstart_and_reflen): get_binary_value and aliasing.
+	(get_depending_on_value_from_odo): Set some variables to const.
+	(get_data_offset): Use new get_integer_value() routine.
+	(digit): Eliminate as part of improved get_binary_value() conversion.
+	(num_disp_dive): Likewise.
+	(pd_dive): Likewise.
+	(get_pd_value): Likewise.
+	(get_binary_value_tree): Likewise.
+	(get_binary_value): New binary conversion routines.
+	(field_is_super_clean): Likewise.
+	(refer_is_working_storage): Likewise.
+	(is_working_storage): Likewise.
+	(refer_refmod_length): Likewise.
+	(binary_from_FldNumericBin5): Likewise.
+	(binary_from_FldLiteralN): Likewise.
+	(binary_from_FldNumericBinary): Likewise.
+	(binary_from_FldNumericDisplay): Likewise.
+	(binary_from_numdisp): Likewise.
+	(binary_from_comp_3): Likewise.
+	(b_from_c3): Likewise.
+	(binary_from_comp_6): Likewise.
+	(binary_from_FldPacked): Likewise.
+	(binary_from_FldFloat): Likewise.
+	(get_location): Avoid aliasing.
+	(safe_cast): Likewise.
+	(attribute_bit_clear): Set formal parameter to const.
+	(attribute_bit_get): Likewise.
+	(attribute_bit_set): Likewise.
+	(round_this_value): New routine for COBOL rounding.
+	* genutil.h (get_scaled_rdigits): Set formal parameter to const.
+	(get_scaled_digits): Set formal parameter to const.
+	(get_binary_value): Modified declaration.
+	(get_binary_value_tree): Eliminate.
+	(CHECK_FOR_FRACTIONAL_DIGITS): Move to genutil.cc.
+	(get_integer_value): Eliminated declaration.
+	(field_is_super_clean): New declaration.
+	(refer_is_working_storage): Changed to is_working_storage().
+	(is_working_storage): Eliminated.
+	(get_location): New declaration for field_t * overload.
+	(safe_cast): New declaration.
+	(attribute_bit_clear): Set formal parameter to const.
+	(attribute_bit_get): Likewise.
+	(attribute_bit_set): Likewise.
+	* move.cc (copy_little_endian_into_place): Changed to
+	copy_native_into_place().
+	(copy_native_into_place): Endian awareness.
+	(mh_little_endian): Change name to mh_to_binary.
+	(mh_to_binary): Endian awareness.
+	(move_helper): Use mh_to_binary.
+	* parse.y: Comment out code pending a bug fix.
+	* parse_ante.h (cbl_field_t::blank_initial): Endian awareness.
+	* show_parse.h: Make a variable const.
+	* structs.cc (member): Set formal parameter to const.
+	* structs.h (member): Likewise.
+	* util.cc (binary_initial): Endian awareness.
+	(cbl_field_t::encode_numeric): Endian and aliasing awareness.
+
 2026-06-25  Robert Dubner  <rdubner@symas.com>
 
 	* gengen.cc (gg_abs): Use fold_build1().

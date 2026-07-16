@@ -50,6 +50,7 @@
 #include "genmath.h"
 #include "structs.h"
 #include "../../libgcobol/gcobolio.h"
+#include "../../libgcobol/cobol-endian.h"
 #include "../../libgcobol/charmaps.h"
 #include "../../libgcobol/valconv.h"
 #include "show_parse.h"
@@ -262,59 +263,24 @@ mh_source_is_literalN(cbl_refer_t &destref,
       case FldPointer:
       case FldIndex:
         {
-        // We know this is a move to an eight-byte value:
         SHOW_PARSE1
           {
           SHOW_PARSE_INDENT
           SHOW_PARSE_TEXT("mh_source_is_literalN: pointer/index")
           }
 
-        if( sourceref.field->data.capacity() < 8 )
-          {
-          // There are too few bytes in sourceref
-          if( sourceref.field->attr & signable_e )
-            {
-            tree highbyte = gg_define_variable(UCHAR);
-            // Pick up the source byte that has the sign bit.
-            gg_assign(highbyte,
-                      gg_get_indirect_reference(gg_add(member(sourceref.field->var_decl_node,
-                                                              "data"),
-                                                build_int_cst_type(SIZE_T,
-                                                                   sourceref.field->data.capacity()-1)),
-                      integer_zero_node));
-            IF( gg_bitwise_and(highbyte, build_int_cst_type(UCHAR, 0x80)),
-                eq_op,
-                build_int_cst_type(UCHAR, 0x80) )
-              {
-              // We are dealing with a negative number
-              gg_memset(gg_add(member(destref.field->var_decl_node, "data"),
-                               refer_offset(destref)),
-                                build_int_cst_type(UCHAR, 0xFF),
-                                build_int_cst_type(SIZE_T, 8));
-              }
-            ELSE
-              gg_memset(gg_add(member(destref.field->var_decl_node, "data"),
-                               refer_offset(destref)),
-                                build_int_cst_type(UCHAR, 0x00),
-                                build_int_cst_type(SIZE_T, 8));
-              ENDIF
-            }
-          else
-            {
-            // The too-short source is positive.
-              gg_memset(gg_add(member(destref.field->var_decl_node, "data"),
-                               refer_offset(destref)),
-                              build_int_cst_type(UCHAR, 0x00),
-                              build_int_cst_type(SIZE_T, 8));
-            }
-          }
+        tree source;
+        get_binary_value(source, sourceref);
 
-        tree literalN_value = get_literalN_value(sourceref.field);
-        scale_by_power_of_ten_N(literalN_value, -sourceref.field->data.rdigits);
-        gg_memcpy(gg_add(member(destref.field->var_decl_node, "data"),
-                               refer_offset(destref)),
-                  gg_get_address_of(literalN_value),
-                  build_int_cst_type(SIZE_T, sourceref.field->data.capacity()));
+        tree dest_type = tree_type_from_refer(destref);
+        tree dest = gg_define_variable(dest_type);
+        gg_assign(dest, gg_cast(dest_type, source));
+
+        tree location;
+        get_location(location, destref);
+        gg_memcpy(location,
+                  gg_get_address_of(dest),
+                  build_int_cst_type(SIZE_T, gg_sizeof(dest_type)));
         moved = true;
 
         break;
@@ -1790,7 +1756,7 @@ mh_binary_to_packed(const cbl_refer_t &destref,
   }
 
 static void
-copy_little_endian_into_place(cbl_field_t *dest,
+copy_native_into_place(cbl_field_t *dest,
                               tree         dest_offset,
                               tree value,
                               int rhs_rdigits,
@@ -1842,7 +1808,20 @@ copy_little_endian_into_place(cbl_field_t *dest,
 
   if( dest->type == FldNumericBinary )
     {
-    gg_assign(target, gg_bswap(target));
+    // We need the target to be big-endian.
+    if( BYTES_BIG_ENDIAN )
+      {
+      // 'target' is already big-endian, so we can leave it be.
+      }
+    else
+      {
+      // 'target' is little-endian, so make it big-endian
+      gg_assign(target, gg_bswap(target));
+      }
+    }
+  else
+    {
+    // We need the target to be native binary, so just leave it be
     }
   // Copy the target to the destination.
   gg_memcpy(dest_pointer,
@@ -1851,14 +1830,14 @@ copy_little_endian_into_place(cbl_field_t *dest,
   }
 
 static bool
-mh_little_endian( const cbl_refer_t &destref,
+mh_to_binary( const cbl_refer_t &destref,
                   const cbl_refer_t &sourceref,
                   const TREEPLET    &tsource,
                         bool check_for_error,
                         tree size_error)
   {
-  // The name of this routine is misleading.  It also handles big-endian
-  // destinations.
+  // This routine moves a numeric value to a binary destination.  The dest
+  // can be little-endian or big-endian.
 
   bool moved = false;
 
@@ -1880,7 +1859,7 @@ mh_little_endian( const cbl_refer_t &destref,
     SHOW_PARSE1
       {
       SHOW_PARSE_INDENT
-      SHOW_PARSE_TEXT("mh_little_endian")
+      SHOW_PARSE_TEXT("mh_to_binary")
       SHOW_PARSE_END
       }
 
@@ -1907,7 +1886,7 @@ mh_little_endian( const cbl_refer_t &destref,
 
       // Get binary value from float actually scales the source value to the
       // dest:: rdigits
-      copy_little_endian_into_place(destref.field,
+      copy_native_into_place(destref.field,
                                     refer_offset(destref),
                                     source,
                                     destref.field->data.rdigits,
@@ -1918,12 +1897,9 @@ mh_little_endian( const cbl_refer_t &destref,
     else
       {
       tree source_type = tree_type_from_refer(sourceref);
-      tree source = gg_define_variable(source_type);
-      get_binary_value( source,
-                        NULL,
-                        sourceref.field,
-                        tsource.offset);
-      copy_little_endian_into_place(destref.field,
+      tree source;
+      get_binary_value(source, sourceref, source_type);
+      copy_native_into_place(destref.field,
                                     refer_offset(destref),
                                     source,
                                     sourceref.field->data.rdigits,
@@ -3450,7 +3426,7 @@ move_helper(tree size_error,        // This is an INT
 
   if( !moved )
     {
-    moved = mh_little_endian( destref,
+    moved = mh_to_binary( destref,
                               sourceref,
                               tsource,
                               restore_on_error,

@@ -899,6 +899,17 @@
   "<bit_optab>i\t%0,%1,%S2"
   [(set_attr "type" "bitmanip")])
 
+;; This form can be created by combine.
+(define_insn "*xor_for_plus_minint"
+  [(set (match_operand:X 0 "register_operand" "=r")
+	(plus:X (match_operand:X 1 "register_operand" "r")
+		(match_operand 2 "const_int_operand")))]
+  "(TARGET_ZBS
+    && (INTVAL (operands[2])
+	== sext_hwi ((HOST_WIDE_INT_1U << (BITS_PER_WORD - 1)), BITS_PER_WORD)))"
+  "binvi\t%0,%1,%S2"
+  [(set_attr "type" "bitmanip")])
+
 ;; We can easily handle zero extensions
 (define_split
   [(set (match_operand:DI 0 "register_operand")
@@ -1177,8 +1188,14 @@
 ;; If we have the ZBA extension, then we can clear the upper half of a 64
 ;; bit object with a zext.w.  So if we have AND where the constant would
 ;; require synthesis of two or more instructions, but 32->64 sign extension
-;; of the constant is a simm12, then we can use zext.w+andi.  If the adjusted
-;; constant is a single bit constant, then we can use zext.w+bclri
+;; of the constant is a simm12, then we can use zext.w+andi.
+;;
+;; If the adjusted constant is a single bit constant, then we can use
+;; zext.w+bclri
+;;
+;; If the original constant uppermost bit was bit 31 and is a consecutive
+;; run of bits, leave the original form alone since it compresses better
+;; a srliw+slli
 ;;
 ;; With the mvconst_internal pattern claiming a single insn to synthesize
 ;; constants, this must be a define_insn_and_split.
@@ -1197,7 +1214,9 @@
       implement with andi or bclri.  */
    && ((SMALL_OPERAND (sext_hwi (INTVAL (operands[2]), 32))
         || (TARGET_ZBS && popcount_hwi (INTVAL (operands[2])) == 31))
-       && INTVAL (operands[2]) != 0x7fffffff)"
+       && INTVAL (operands[2]) != 0x7fffffff)
+   && !(clz_hwi (UINTVAL (operands[2])) == 32
+        && consecutive_bits_operand (operands[2], word_mode))"
   "#"
   "&& 1"
   [(set (match_dup 0) (zero_extend:DI (match_dup 3)))

@@ -39,6 +39,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "trans-types.h"
 #include "trans-array.h"
 #include "trans-const.h"
+#include "trans-descriptor.h"
 #include "arith.h"
 #include "constructor.h"
 #include "gomp-constants.h"
@@ -2122,17 +2123,16 @@ gfc_omp_get_array_size (location_t loc, tree desc, gimple_seq *seq)
   tree extent = build_decl (loc, VAR_DECL, create_tmp_var_name ("extent"),
 			    gfc_array_index_type);
   tree idx = build_decl (loc, VAR_DECL, create_tmp_var_name ("idx"),
-			 signed_char_type_node);
+			 gfc_array_dim_rank_type);
 
-  tree begin = build_zero_cst (signed_char_type_node);
+  tree begin = gfc_rank_cst[0];
   tree end;
   if (GFC_TYPE_ARRAY_AKIND (TREE_TYPE (desc)) == GFC_ARRAY_ASSUMED_SHAPE_CONT
       || GFC_TYPE_ARRAY_AKIND (TREE_TYPE (desc)) == GFC_ARRAY_ASSUMED_SHAPE)
     end = gfc_conv_descriptor_rank (desc);
   else
-    end = build_int_cst (signed_char_type_node,
-			 GFC_TYPE_ARRAY_RANK (TREE_TYPE (desc)));
-  tree step = build_int_cst (signed_char_type_node, 1);
+    end = gfc_rank_cst[GFC_TYPE_ARRAY_RANK (TREE_TYPE (desc))];
+  tree step = gfc_rank_cst[1];
 
   /* size = 0
      for (idx = 0; idx < rank; idx++)
@@ -4061,7 +4061,12 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 			      gfc_init_se (&se, NULL);
 			      gfc_conv_expr (&se, n->u2.allocator);
 			      gfc_add_block_to_block (block, &se.pre);
-			      allocator_ = gfc_evaluate_now (se.expr, block);
+			      t = se.expr;
+			      if (DECL_P (t) && se.post.head == NULL_TREE)
+				allocator_ = (POINTER_TYPE_P (TREE_TYPE (t))
+					      ? build_fold_indirect_ref (t): t);
+			      else
+				allocator_ = gfc_evaluate_now (t, block);
 			      gfc_add_block_to_block (block, &se.post);
 			    }
 			  OMP_CLAUSE_ALLOCATE_ALLOCATOR (node) = allocator_;
@@ -5471,14 +5476,36 @@ gfc_trans_omp_clauses (stmtblock_t *block, gfc_omp_clauses *clauses,
 	    }
 	  break;
 	case OMP_LIST_USES_ALLOCATORS:
-	  /* Ignore omp_null_allocator and pre-defined allocators as no
-	     special treatment is needed. */
 	  for (; n != NULL; n = n->next)
-	    if (n->sym->attr.flavor == FL_VARIABLE)
-	      break;
-	  if (n != NULL)
-	    sorry_at (input_location, "%<uses_allocators%> clause with traits "
-				      "and memory spaces");
+	    {
+	      if (!n->sym->attr.referenced)
+		continue;
+	      tree node = build_omp_clause (input_location,
+					    OMP_CLAUSE_USES_ALLOCATORS);
+	      tree t;
+	      if (n->sym->attr.flavor == FL_VARIABLE)
+		t = gfc_get_symbol_decl (n->sym);
+	      else
+		{
+		  t = gfc_conv_mpz_to_tree (n->sym->value->value.integer,
+					    n->sym->ts.kind);
+		  t = fold_convert (ptr_type_node, t);
+		}
+	      OMP_CLAUSE_USES_ALLOCATORS_ALLOCATOR(node) = t;
+	      if (n->u.memspace_sym)
+		{
+		  n->u.memspace_sym->attr.referenced = true;
+		  OMP_CLAUSE_USES_ALLOCATORS_MEMSPACE (node)
+		    = gfc_get_symbol_decl (n->u.memspace_sym);
+		}
+	      if (n->u2.traits_sym)
+		{
+		  n->u2.traits_sym->attr.referenced = true;
+		  OMP_CLAUSE_USES_ALLOCATORS_TRAITS (node)
+		    = gfc_get_symbol_decl (n->u2.traits_sym);
+		}
+	      omp_clauses = gfc_trans_add_clause (node, omp_clauses);
+	    }
 	  break;
 	default:
 	  break;

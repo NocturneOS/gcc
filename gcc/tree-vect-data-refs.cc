@@ -1037,10 +1037,10 @@ vect_slp_analyze_store_dependences (vec_info *vinfo, slp_tree node)
   stmt_vec_info last_access_info = vect_find_last_scalar_stmt_in_slp (node);
   gcc_assert (DR_IS_WRITE (STMT_VINFO_DATA_REF (last_access_info)));
 
-  for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (node).length (); ++k)
+  for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (node))
     {
       stmt_vec_info access_info
-	= vect_orig_stmt (SLP_TREE_SCALAR_STMTS (node)[k]);
+	= vect_orig_stmt (stmt_vinfo);
       if (access_info == last_access_info)
 	continue;
       data_reference *dr_a = STMT_VINFO_DATA_REF (access_info);
@@ -1103,12 +1103,12 @@ vect_slp_analyze_load_dependences (vec_info *vinfo, slp_tree node,
   stmt_vec_info first_access_info = vect_find_first_scalar_stmt_in_slp (node);
   gcc_assert (DR_IS_READ (STMT_VINFO_DATA_REF (first_access_info)));
 
-  for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (node).length (); ++k)
+  for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (node))
     {
-      if (! SLP_TREE_SCALAR_STMTS (node)[k])
+      if (! stmt_vinfo)
 	continue;
       stmt_vec_info access_info
-	= vect_orig_stmt (SLP_TREE_SCALAR_STMTS (node)[k]);
+	= vect_orig_stmt (stmt_vinfo);
       if (access_info == first_access_info)
 	continue;
       data_reference *dr_a = STMT_VINFO_DATA_REF (access_info);
@@ -1245,8 +1245,8 @@ vect_slp_analyze_instance_dependence (vec_info *vinfo, slp_instance instance)
 
       /* Mark stores in this instance and remember the last one.  */
       last_store_info = vect_find_last_scalar_stmt_in_slp (store);
-      for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (store).length (); ++k)
-	gimple_set_visited (SLP_TREE_SCALAR_STMTS (store)[k]->stmt, true);
+      for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (store))
+	gimple_set_visited (STMT_VINFO_STMT (stmt_vinfo), true);
     }
 
   bool res = true;
@@ -1265,8 +1265,8 @@ vect_slp_analyze_instance_dependence (vec_info *vinfo, slp_instance instance)
 
   /* Unset the visited flag.  */
   if (store)
-    for (unsigned k = 0; k < SLP_TREE_SCALAR_STMTS (store).length (); ++k)
-      gimple_set_visited (SLP_TREE_SCALAR_STMTS (store)[k]->stmt, false);
+    for (auto stmt_vinfo : SLP_TREE_SCALAR_STMTS (store))
+      gimple_set_visited (STMT_VINFO_STMT (stmt_vinfo), false);
 
   /* If this is a SLP instance with a store check if there's a dependent
      load that cannot be forwarded from a previous iteration of a loop
@@ -5729,7 +5729,13 @@ vect_create_addr_base_for_vector_ref (vec_info *vinfo, stmt_vec_info stmt_info,
   innermost_loop_behavior *drb = vect_dr_behavior (vinfo, dr_info);
 
   tree data_ref_base = unshare_expr (drb->base_address);
-  tree base_offset = unshare_expr (get_dr_vinfo_offset (vinfo, dr_info, true));
+  tree vector_offset = NULL_TREE;
+  if (loop_vinfo && dr_info->offset)
+    vector_offset = unshare_expr (dr_info->offset);
+  tree base_offset = unshare_expr (vector_offset
+				   ? drb->offset
+				   : get_dr_vinfo_offset (vinfo, dr_info,
+							  true));
   tree init = unshare_expr (drb->init);
 
   if (loop_vinfo)
@@ -5767,7 +5773,27 @@ vect_create_addr_base_for_vector_ref (vec_info *vinfo, stmt_vec_info stmt_info,
 
   vect_ptr_type = build_pointer_type (TREE_TYPE (DR_REF (dr)));
   dest = vect_get_new_vect_var (vect_ptr_type, vect_pointer_var, base_name);
-  addr_base = force_gimple_operand (addr_base, &seq, true, dest);
+
+  /* Keep vectorizer-added offsets separate from the original scalar access
+     address.  Forming "base + scalar offset" first gives the target a better
+     chance of sharing it with other address calculations, such as the
+     misalignment check used for masked alignment peeling.  */
+  if (vector_offset)
+    {
+      tree scalar_dest = vect_get_new_vect_var (vect_ptr_type,
+						vect_pointer_var, base_name);
+      gimple_seq addr_seq = NULL;
+      addr_base = force_gimple_operand (addr_base, &addr_seq, true,
+					scalar_dest);
+      gimple_seq_add_seq (&seq, addr_seq);
+      addr_base = fold_build_pointer_plus (addr_base,
+					   fold_convert (sizetype,
+							 vector_offset));
+    }
+
+  gimple_seq addr_seq = NULL;
+  addr_base = force_gimple_operand (addr_base, &addr_seq, true, dest);
+  gimple_seq_add_seq (&seq, addr_seq);
   gimple_seq_add_seq (new_stmt_list, seq);
 
   if (TREE_CODE (addr_base) == SSA_NAME
@@ -5878,7 +5904,8 @@ vect_create_data_ref_ptr (vec_info *vinfo, stmt_vec_info stmt_info,
     {
       gcc_assert (bb_vinfo);
       only_init = true;
-      *ptr_incr = NULL;
+      if (ptr_incr)
+	*ptr_incr = NULL;
     }
 
   /* Create an expression for the first address accessed by this load
@@ -6014,7 +6041,9 @@ vect_create_data_ref_ptr (vec_info *vinfo, stmt_vec_info stmt_info,
 
       create_iv (aggr_ptr_init, PLUS_EXPR,
 		 iv_step, aggr_ptr, loop, &incr_gsi, insert_after,
-		 &indx_before_incr, &indx_after_incr);
+		 &indx_before_incr, &indx_after_incr,
+		 !loop_vinfo
+		   || LOOP_VINFO_IV_INCREMENT_INVARIANT_P (loop_vinfo));
       incr = gsi_stmt (incr_gsi);
 
       /* Copy the points-to information if it exists. */
@@ -6058,30 +6087,12 @@ vect_create_data_ref_ptr (vec_info *vinfo, stmt_vec_info stmt_info,
 
 /* Function bump_vector_ptr
 
-   Increment a pointer (to a vector type) by vector-size. If requested,
-   i.e. if PTR-INCR is given, then also connect the new increment stmt
-   to the existing def-use update-chain of the pointer, by modifying
-   the PTR_INCR as illustrated below:
-
-   The pointer def-use update-chain before this function:
-                        DATAREF_PTR = phi (p_0, p_2)
-                        ....
-        PTR_INCR:       p_2 = DATAREF_PTR + step
-
-   The pointer def-use update-chain after this function:
-                        DATAREF_PTR = phi (p_0, p_2)
-                        ....
-                        NEW_DATAREF_PTR = DATAREF_PTR + BUMP
-                        ....
-        PTR_INCR:       p_2 = NEW_DATAREF_PTR + step
+   Increment DATAREF_PTR by UPDATE.
 
    Input:
    DATAREF_PTR - ssa_name of a pointer (to vector type) that is being updated
                  in the loop.
-   PTR_INCR - optional. The stmt that updates the pointer in each iteration of
-	      the loop.  The increment amount across iterations is expected
-	      to be vector_size.
-   BSI - location where the new update stmt is to be placed.
+   GSI - location where the new update stmt is to be placed.
    STMT_INFO - the original scalar memory-access stmt that is being vectorized.
    UPDATE - The offset by which to bump the pointer.
 
@@ -6091,13 +6102,11 @@ vect_create_data_ref_ptr (vec_info *vinfo, stmt_vec_info stmt_info,
 
 tree
 bump_vector_ptr (vec_info *vinfo,
-		 tree dataref_ptr, gimple *ptr_incr, gimple_stmt_iterator *gsi,
+		 tree dataref_ptr, gimple_stmt_iterator *gsi,
 		 stmt_vec_info stmt_info, tree update)
 {
   struct data_reference *dr = STMT_VINFO_DATA_REF (stmt_info);
   gimple *incr_stmt;
-  ssa_op_iter iter;
-  use_operand_p use_p;
   tree new_dataref_ptr;
 
   if (TREE_CODE (dataref_ptr) == SSA_NAME)
@@ -6127,20 +6136,6 @@ bump_vector_ptr (vec_info *vinfo,
 
   /* Copy the points-to information if it exists. */
   duplicate_ssa_name_ptr_info (new_dataref_ptr, DR_PTR_INFO (dr));
-
-  if (!ptr_incr)
-    return new_dataref_ptr;
-
-  /* Update the vector-pointer's cross-iteration increment.  */
-  FOR_EACH_SSA_USE_OPERAND (use_p, ptr_incr, iter, SSA_OP_USE)
-    {
-      tree use = USE_FROM_PTR (use_p);
-
-      if (use == dataref_ptr)
-        SET_USE (use_p, new_dataref_ptr);
-      else
-        gcc_assert (operand_equal_p (use, update, 0));
-    }
 
   return new_dataref_ptr;
 }

@@ -1,3 +1,52 @@
+2026-07-13  Eikansh Gupta  <eikansh.gupta@oss.qualcomm.com>
+
+	* MAINTAINERS.yml: Add myself.
+	* MAINTAINERS (Write After Approval): Regenerate.
+	(Contributing under the DCO): Regenerate.
+
+2026-07-12  Kael Andrew Alonzo Franco  <kaelfandrew@gmail.com>
+
+	* MAINTAINERS (Write After Approval): Add myself.
+	(Contributing under the DCO): Add myself.
+	* MAINTAINERS.yml: Add myself.
+
+2026-07-12  Manuel Jacob  <me@manueljacob.de>
+
+	* configure: Regenerated.
+
+2026-07-09  Stefan Schulze Frielinghaus  <stefansf@gcc.gnu.org>
+
+	* configure: Regenerate.
+	* configure.ac: Remove deprecation warning for -m31.
+
+2026-07-07  Richard Earnshaw  <rearnsha@arm.com>
+
+	* MAINTAINERS.yml: New file.
+	* MAINTAINERS: Regenerate from MAINTAINERS.yml.
+
+2026-07-07  Richard Earnshaw  <rearnsha@arm.com>
+
+	* .editorconfig (*.yaml/.yml): Add rules.
+
+2026-07-06  Nina Ranns  <dinka.ranns@gmail.com>
+
+	* MAINTAINERS (Write After Approval): Add myself.
+
+2026-07-02  Eugene Rozenfeld  <erozen@microsoft.com>
+
+	* MAINTAINERS: Update my email address.
+
+2026-06-29  Abhishek Kaushik  <abhishek.kaushik@arm.com>
+
+	* MAINTAINERS (Write After Approval): Add myself.
+
+2026-06-29  Pietro Monteiro  <pietro@sociotechnical.xyz>
+
+	PR bootstrap/103459
+	* configure: Regenerate.
+	* configure.ac: Replace AC_TRY_COMPILE with AC_COMPILE_IFELSE.
+	Replace AC_TRY_LINK with AC_LINK_IFELSE.
+
 2026-06-23  Richard Earnshaw  <rearnsha@arm.com>
 
 	* MAINTAINERS (Write After): Add details for Robert Dubner,

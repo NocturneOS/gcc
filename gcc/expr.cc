@@ -2320,6 +2320,8 @@ emit_block_move_via_pattern (rtx x, rtx y, rtx size, unsigned int align,
 	      else
 		create_fixed_operand (&ops[8], NULL);
 	    }
+	  gcc_assert (min_size != max_size
+		      || rtx_equal_p (ops[2].value, GEN_INT (min_size)));
 	  if (maybe_expand_insn (code, nops, ops))
 	    return true;
 	}
@@ -3060,6 +3062,28 @@ emit_group_load_1 (rtx *tmps, rtx dst, rtx orig_src, tree type,
 	       && known_eq (bytelen, GET_MODE_SIZE (mode)))
 	/* Let emit_move_complex do the bulk of the work.  */
 	tmps[i] = src;
+      else if (SCALAR_INT_MODE_P (mode)
+	       && COMPLEX_MODE_P (GET_MODE (src))
+	       && known_eq (GET_MODE_SIZE (mode),
+			    GET_MODE_SIZE (GET_MODE (src)))
+	       && known_eq (bytelen, GET_MODE_SIZE (mode)))
+	{
+	  /* When passing a complex value in an integer mode of the same
+	     size, explicitly construct (highpart<<isize)+lowpart to
+	     avoid spilling to memory before reload.  */
+	  rtx tmp = read_complex_part (src, !BYTES_BIG_ENDIAN);
+	  scalar_int_mode imode = int_mode_for_mode (GET_MODE (tmp)).require();
+	  tmp = gen_lowpart (imode, tmp);
+	  tmp = simplify_gen_unary (ZERO_EXTEND, mode, tmp, imode);
+	  rtx result = force_reg (mode, tmp);
+	  result = expand_shift (LSHIFT_EXPR, mode, result,
+				 GET_MODE_BITSIZE (imode), NULL_RTX, 1);
+	  tmp = read_complex_part (src, BYTES_BIG_ENDIAN);
+	  tmp = gen_lowpart (imode, tmp);
+	  tmp = simplify_gen_unary (ZERO_EXTEND, mode, tmp, imode);
+	  result = simplify_gen_binary (PLUS, mode, result, tmp);
+	  tmps[i] = force_reg (mode, result);
+	}
       else if (GET_CODE (src) == CONCAT)
 	{
 	  poly_int64 slen = GET_MODE_SIZE (GET_MODE (src));
@@ -4045,6 +4069,8 @@ set_storage_via_setmem (rtx object, rtx size, rtx val, unsigned int align,
 	      else
 		create_fixed_operand (&ops[8], NULL);
 	    }
+	  gcc_assert (min_size != max_size
+		      || rtx_equal_p (ops[1].value, GEN_INT (min_size)));
 	  if (maybe_expand_insn (code, nops, ops))
 	    return true;
 	}
@@ -7498,11 +7524,14 @@ fields_length (const_tree type)
   return count;
 }
 
-
 /* Store the value of constructor EXP into the rtx TARGET.
    TARGET is either a REG or a MEM; we know it cannot conflict, since
    safe_from_p has been called.
    CLEARED is true if TARGET is known to have been zero'd.
+   If the constructor EXP has a vector type then elements of TARGET for which
+   there is no corresponding element in EXP are zero'd.  For a variable-length
+   vector type, only elements up to the minimum number of subparts of the type
+   are explicitly zero'd; any elements beyond that are implicitly zero.
    SIZE is the number of bytes of TARGET we are allowed to modify: this
    may not be the same as the size of EXP if we are assigning to a field
    which has been packed to exclude padding bits.
@@ -8075,14 +8104,22 @@ store_constructor (tree exp, rtx target, int cleared, poly_int64 size,
 		   similarly non-const type vectors. */
 		icode = convert_optab_handler (vec_init_optab, mode, eltmode);
 	      }
+	    else
+	      {
+		/* Handle variable-length vector types.  */
+		icode = convert_optab_handler (vec_init_optab, mode, eltmode);
+		const_n_elts = constant_lower_bound (n_elts);
+	      }
 
-	  if (const_n_elts && icode != CODE_FOR_nothing)
-	    {
-	      vector = rtvec_alloc (const_n_elts);
-	      for (unsigned int k = 0; k < const_n_elts; k++)
-		RTVEC_ELT (vector, k) = CONST0_RTX (eltmode);
-	    }
+	    if (const_n_elts && icode != CODE_FOR_nothing)
+	      {
+		vector = rtvec_alloc (const_n_elts);
+		for (unsigned int k = 0; k < const_n_elts; k++)
+		  RTVEC_ELT (vector, k) = CONST0_RTX (eltmode);
+	      }
 	  }
+	else
+	  gcc_assert (n_elts.is_constant ());
 
 	/* Compute the size of the elements in the CTOR.  It differs
 	   from the size of the vector type elements only when the
@@ -11367,6 +11404,45 @@ expand_expr_real_gassign (gassign *g, rtx target, machine_mode tmode,
   return r;
 }
 
+/* A subroutine of expand_expr_real_1.  Attempt to VIEW_CONVERT_EXPR
+   the complex expression OP0 to the vector mode MODE.  Store the
+   result at TARGET if possible (if TARGET is nonzero).  Returns
+   NULL_RTX on failure.  */
+static rtx
+try_expand_complex_as_vector (machine_mode mode, rtx op0, rtx target)
+{
+  if (COMPLEX_MODE_P (GET_MODE (op0))
+      && VECTOR_MODE_P (mode)
+      && known_eq (GET_MODE_NUNITS (mode), 2)
+      && GET_MODE_INNER (mode) == GET_MODE_INNER (GET_MODE (op0)))
+    {
+      enum insn_code icode = convert_optab_handler (vec_init_optab, mode,
+						    GET_MODE_INNER (mode));
+      if (icode != CODE_FOR_nothing)
+	{
+	  if (!target || !REG_P (target))
+	    target = gen_reg_rtx (mode);
+	  rtx rpart = read_complex_part (op0, false);
+	  rtx ipart = read_complex_part (op0, true);
+	  if (!REG_P (rpart) && !CONSTANT_P (rpart))
+	    rpart = force_reg (GET_MODE_INNER (mode), rpart);
+	  if (!REG_P (ipart) && !CONSTANT_P (ipart))
+	    ipart = force_reg (GET_MODE_INNER (mode), ipart);
+	  rtvec vec = rtvec_alloc (2);
+	  RTVEC_ELT (vec, 0) = rpart;
+	  RTVEC_ELT (vec, 1) = ipart;
+	  rtx par = gen_rtx_PARALLEL (mode, vec);
+	  rtx_insn *insn = GEN_FCN (icode) (target, par);
+	  if (insn)
+	    {
+	      emit_insn (insn);
+	      return target;
+	    }
+	}
+    }
+  return NULL_RTX;
+}
+
 rtx
 expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 		    enum expand_modifier modifier, rtx *alt_rtl,
@@ -12783,6 +12859,12 @@ expand_expr_real_1 (tree exp, rtx target, machine_mode tmode,
 	return extract_bit_field (op0, TYPE_PRECISION (type), 0,
 				  TYPE_UNSIGNED (type), NULL_RTX,
 				  mode, mode, false, NULL);
+      /* If source is a complex number and destination is a
+	 two-component vector with same inner type, try to use
+	 vector initialization.  */
+      else if ((temp = try_expand_complex_as_vector (mode, op0, target))
+	       != NULL_RTX)
+	return temp;
       /* As a last resort, spill op0 to memory, and reload it in a
 	 different mode.  */
       else if (!MEM_P (op0))

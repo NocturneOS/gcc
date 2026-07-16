@@ -221,10 +221,10 @@ struct GTY((chain_next ("%h.prev"))) c_binding {
   struct c_binding *prev;	/* the previous decl in this scope */
   struct c_binding *shadowed;	/* the innermost decl shadowed by this one */
   unsigned int depth : 28;      /* depth of this scope */
-  BOOL_BITFIELD invisible : 1;  /* normal lookup should ignore this binding */
-  BOOL_BITFIELD nested : 1;     /* do not set DECL_CONTEXT when popping */
-  BOOL_BITFIELD inner_comp : 1; /* incomplete array completed in inner scope */
-  BOOL_BITFIELD in_struct : 1;	/* currently defined as struct field */
+  bool invisible : 1;  /* normal lookup should ignore this binding */
+  bool nested : 1;     /* do not set DECL_CONTEXT when popping */
+  bool inner_comp : 1; /* incomplete array completed in inner scope */
+  bool in_struct : 1;	/* currently defined as struct field */
   location_t locus;		/* location for nested bindings */
 };
 #define B_IN_SCOPE(b1, b2) ((b1)->depth == (b2)->depth)
@@ -502,38 +502,38 @@ struct GTY((chain_next ("%h.outer"))) c_scope {
 
   /* True if we are currently filling this scope with parameter
      declarations.  */
-  BOOL_BITFIELD parm_flag : 1;
+  bool parm_flag : 1;
 
   /* True if we saw [*] in this scope.  Used to give an error messages
      if these appears in a function definition.  */
-  BOOL_BITFIELD had_vla_unspec : 1;
+  bool had_vla_unspec : 1;
 
   /* True if we parsed a list of forward parameter decls in this scope.  */
-  BOOL_BITFIELD had_forward_parm_decls : 1;
+  bool had_forward_parm_decls : 1;
 
   /* True if this is the outermost block scope of a function body.
      This scope contains the parameters, the local variables declared
      in the outermost block, and all the labels (except those in
      nested functions, or declared at block scope with __label__).  */
-  BOOL_BITFIELD function_body : 1;
+  bool function_body : 1;
 
   /* True means make a BLOCK for this scope no matter what.  */
-  BOOL_BITFIELD keep : 1;
+  bool keep : 1;
 
   /* True means that an unsuffixed float constant is _Decimal64.  */
-  BOOL_BITFIELD float_const_decimal64 : 1;
+  bool float_const_decimal64 : 1;
 
   /* True if this scope has any label bindings.  This is used to speed
      up searching for labels when popping scopes, particularly since
      labels are normally only found at function scope.  */
-  BOOL_BITFIELD has_label_bindings : 1;
+  bool has_label_bindings : 1;
 
   /* True if we should issue a warning if a goto statement crosses any
      of the bindings.  We still need to check the list of bindings to
      find the specific ones we need to warn about.  This is true if
      decl_jump_unsafe would return true for any of the bindings.  This
      is used to avoid looping over all the bindings unnecessarily.  */
-  BOOL_BITFIELD has_jump_unsafe_decl : 1;
+  bool has_jump_unsafe_decl : 1;
 };
 
 /* The scope currently in effect.  */
@@ -4957,7 +4957,8 @@ c_init_decl_processing (void)
   truthvalue_false_node = integer_zero_node;
 
   /* Even in C99, which has a real boolean type.  */
-  pushdecl (build_decl (UNKNOWN_LOCATION, TYPE_DECL, get_identifier ("_Bool"),
+  pushdecl (build_decl (UNKNOWN_LOCATION, TYPE_DECL,
+			get_identifier (flag_isoc23 ? "bool" : "_Bool"),
 			boolean_type_node));
 
   /* C-specific nullptr initialization.  */
@@ -5536,15 +5537,15 @@ one_element_array_type_p (const_tree type)
 }
 
 /* Determine whether TYPE is a zero-length array type "[0]".  */
-static bool
+bool
 zero_length_array_type_p (const_tree type)
 {
-  if (TREE_CODE (type) == ARRAY_TYPE)
-    if (tree type_size = TYPE_SIZE_UNIT (type))
-      if ((integer_zerop (type_size))
-	   && TYPE_DOMAIN (type) != NULL_TREE
-	   && TYPE_MAX_VALUE (TYPE_DOMAIN (type)) == NULL_TREE)
-	return true;
+  if (TREE_CODE (type) == ARRAY_TYPE
+      && COMPLETE_TYPE_P (type)
+      && TYPE_DOMAIN (type) != NULL_TREE
+      && (TYPE_MAX_VALUE (TYPE_DOMAIN (type)) == NULL_TREE
+	  || integer_all_onesp (TYPE_MAX_VALUE (TYPE_DOMAIN (type)))))
+    return true;
   return false;
 }
 
@@ -5563,7 +5564,7 @@ add_flexible_array_elts_to_size (tree decl, tree init)
 
   elt = CONSTRUCTOR_ELTS (init)->last ().value;
   type = TREE_TYPE (elt);
-  if (c_flexible_array_member_type_p (type))
+  if (flexible_array_member_type_p (type))
     {
       complete_array_type (&type, elt, false);
       /* For a structure, add the size of the initializer to the DECL's
@@ -7314,6 +7315,8 @@ grokdeclarator (const struct c_declarator *declarator,
 
 	    declarator = declarator->declarator;
 
+	    bool flexible_array_member = false;
+
 	    /* Check for some types that there cannot be arrays of.  */
 
 	    if (VOID_TYPE_P (type))
@@ -7526,7 +7529,6 @@ grokdeclarator (const struct c_declarator *declarator,
 	      }
 	    else if (decl_context == FIELD)
 	      {
-		bool flexible_array_member = false;
 		if (array_parm_vla_unspec_p)
 		  /* Field names can in fact have function prototype
 		     scope so [*] is disallowed here through making
@@ -7586,8 +7588,16 @@ grokdeclarator (const struct c_declarator *declarator,
 						 ENCODE_QUAL_ADDR_SPACE (as));
 		if (array_parm_vla_unspec_p)
 		  type = c_build_array_type_unspecified (type);
+		/* The GCC extension for zero-length arrays differs from
+		   ISO flexible array members in that sizeof yields
+		   zero.  */
+		else if (size && integer_zerop (size))
+		  type = c_build_array_type_zero_size (type);
 		else
 		  type = c_build_array_type (type, itype);
+
+		if (!valid_array_size_p (loc, type, name))
+		  type = error_mark_node;
 	      }
 
 	    if (array_parm_vla_unspec_p)
@@ -7606,23 +7616,10 @@ grokdeclarator (const struct c_declarator *declarator,
 		size_varies = true;
 	      }
 
-	    if (type != error_mark_node)
-	      {
-		/* The GCC extension for zero-length arrays differs from
-		   ISO flexible array members in that sizeof yields
-		   zero.  */
-		if (size && integer_zerop (size))
-		  {
-		    gcc_assert (itype);
-		    type = build_distinct_type_copy (TYPE_MAIN_VARIANT (type));
-		    TYPE_SIZE (type) = bitsize_zero_node;
-		    TYPE_SIZE_UNIT (type) = size_zero_node;
-		    SET_TYPE_STRUCTURAL_EQUALITY (type);
-		  }
 
-		if (!valid_array_size_p (loc, type, name))
-		  type = error_mark_node;
-	      }
+	    gcc_assert (type == error_mark_node
+			|| flexible_array_member
+			   == flexible_array_member_type_p (type));
 
 	    if (decl_context != PARM
 		&& (array_ptr_quals != TYPE_UNQUALIFIED
@@ -9412,7 +9409,7 @@ is_flexible_array_member_p (bool is_last_field,
 
   bool is_zero_length_array = zero_length_array_type_p (TREE_TYPE (x));
   bool is_one_element_array = one_element_array_type_p (TREE_TYPE (x));
-  bool is_flexible_array = c_flexible_array_member_type_p (TREE_TYPE (x));
+  bool is_flexible_array = flexible_array_member_type_p (TREE_TYPE (x));
 
   unsigned int strict_flex_array_level = c_strict_flex_array_level_of (x);
 
@@ -9538,7 +9535,7 @@ verify_counted_by_attribute (tree outmost_struct_type,
   for (tree field = TYPE_FIELDS (cur_struct_type); field;
        field = TREE_CHAIN (field))
     {
-      if (c_flexible_array_member_type_p (TREE_TYPE (field))
+      if (flexible_array_member_type_p (TREE_TYPE (field))
 	   || TREE_CODE (TREE_TYPE (field)) == POINTER_TYPE)
 	{
 	  tree attr_counted_by = lookup_attribute ("counted_by",
@@ -9741,7 +9738,7 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
 	DECL_PACKED (x) = 1;
 
       /* Detect flexible array member in an invalid context.  */
-      if (c_flexible_array_member_type_p (TREE_TYPE (x)))
+      if (flexible_array_member_type_p (TREE_TYPE (x)))
 	{
 	  if (TREE_CODE (t) == UNION_TYPE)
 	    pedwarn (DECL_SOURCE_LOCATION (x), OPT_Wpedantic,
@@ -9788,7 +9785,7 @@ finish_struct (location_t loc, tree t, tree fieldlist, tree attributes,
 	 the result for multiple last_fields.  */
       if (TREE_CODE (TREE_TYPE (x)) == ARRAY_TYPE)
 	TYPE_INCLUDES_FLEXARRAY (t)
-	  |= is_last_field && c_flexible_array_member_type_p (TREE_TYPE (x));
+	  |= is_last_field && flexible_array_member_type_p (TREE_TYPE (x));
       /* Recursively set TYPE_INCLUDES_FLEXARRAY for the context of x, t
 	 when x is an union or record and is the last field.  */
       else if (RECORD_OR_UNION_TYPE_P (TREE_TYPE (x)))

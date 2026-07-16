@@ -4381,6 +4381,19 @@ rs6000_option_override_internal (bool global_init_p)
       rs6000_isa_flags &= ~OPTION_MASK_MMA;
     }
 
+  /* Enable -mdense_math by default on future systems.  */
+  if (TARGET_FUTURE && (rs6000_isa_flags_explicit & OPTION_MASK_DMF) == 0)
+    rs6000_isa_flags |= OPTION_MASK_DMF;
+
+  /* Turn off DMF options on non-future systems.  */
+  else if (!TARGET_FUTURE && TARGET_DMF)
+    {
+      if ((rs6000_isa_flags_explicit & OPTION_MASK_DMF) != 0)
+	error ("%qs requires %qs", "-mdense_math", "-mcpu=future");
+
+      rs6000_isa_flags &= ~OPTION_MASK_DMF;
+    }
+
   /* Enable power10 fusion if we are tuning for power10, even if we aren't
      generating power10 instructions.  */
   if (!(rs6000_isa_flags_explicit & OPTION_MASK_P10_FUSION))
@@ -16749,12 +16762,13 @@ emit_unlikely_jump (rtx cond, rtx label)
 
 /* A subroutine of the atomic operation splitters.  Emit a load-locked
    instruction in MODE.  For QI/HImode, possibly use a pattern than includes
-   the zero_extend operation.  */
+   the zero_extend operation.  LOCAL indicates the EH bit value for the
+   load-locked instruction.  */
 
 static void
-emit_load_locked (machine_mode mode, rtx reg, rtx mem)
+emit_load_locked (machine_mode mode, rtx reg, rtx mem, rtx local)
 {
-  rtx (*fn) (rtx, rtx) = NULL;
+  rtx (*fn) (rtx, rtx, rtx) = NULL;
 
   switch (mode)
     {
@@ -16781,7 +16795,7 @@ emit_load_locked (machine_mode mode, rtx reg, rtx mem)
     default:
       gcc_unreachable ();
     }
-  emit_insn (fn (reg, mem));
+  emit_insn (fn (reg, mem, local));
 }
 
 /* A subroutine of the atomic operation splitters.  Emit a store-conditional
@@ -16951,7 +16965,7 @@ rs6000_finish_atomic_subword (rtx narrow, rtx wide, rtx shift)
 /* Expand an atomic compare and swap operation.  */
 
 void
-rs6000_expand_atomic_compare_and_swap (rtx operands[])
+rs6000_expand_atomic_compare_and_swap (rtx operands[], bool local)
 {
   rtx boolval, retval, mem, oldval, newval, cond;
   rtx label1, label2, x, mask, shift;
@@ -17014,7 +17028,7 @@ rs6000_expand_atomic_compare_and_swap (rtx operands[])
     }
   label2 = gen_rtx_LABEL_REF (VOIDmode, gen_label_rtx ());
 
-  emit_load_locked (mode, retval, mem);
+  emit_load_locked (mode, retval, mem, local ? const1_rtx : const0_rtx);
 
   x = retval;
   if (mask)
@@ -17112,7 +17126,7 @@ rs6000_expand_atomic_exchange (rtx operands[])
   label = gen_rtx_LABEL_REF (VOIDmode, gen_label_rtx ());
   emit_label (XEXP (label, 0));
 
-  emit_load_locked (mode, retval, mem);
+  emit_load_locked (mode, retval, mem, const0_rtx);
 
   x = val;
   if (mask)
@@ -17217,7 +17231,7 @@ rs6000_expand_atomic_op (enum rtx_code code, rtx mem, rtx val,
   if (before == NULL_RTX)
     before = gen_reg_rtx (mode);
 
-  emit_load_locked (mode, before, mem);
+  emit_load_locked (mode, before, mem, const0_rtx);
 
   if (code == NOT)
     {
@@ -24469,6 +24483,7 @@ static struct rs6000_opt_mask const rs6000_opt_masks[] =
   { "power10",			OPTION_MASK_POWER10,		false, true  },
   { "power11",			OPTION_MASK_POWER11,		false, false },
   { "future",			OPTION_MASK_FUTURE,		false, false },
+  { "dense-math",		OPTION_MASK_DMF,		false, true  },
   { "hard-dfp",			OPTION_MASK_DFP,		false, true  },
   { "htm",			OPTION_MASK_HTM,		false, true  },
   { "isel",			OPTION_MASK_ISEL,		false, true  },

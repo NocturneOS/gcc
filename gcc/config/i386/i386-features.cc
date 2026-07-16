@@ -90,6 +90,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-vector-builder.h"
 #include "debug.h"
 #include "dwarf2out.h"
+#include "function-abi.h"
 #include "i386-builtins.h"
 #include "i386-features.h"
 #include "i386-expand.h"
@@ -863,6 +864,16 @@ general_scalar_chain::compute_convert_gain ()
 		}
 	      break;
 
+	    case ZERO_EXTEND:
+	      /* mov eax (6 bytes) vs movd xmm0 (8 bytes). */
+	      /* mov eax; xor edx,edx (7 bytes).  */
+	      if (speed_p)
+		igain += COSTS_N_INSNS (ix86_cost->int_load[2]
+					- ix86_cost->sse_load[0]) / 2;
+	      else
+		igain += COSTS_N_BYTES (TARGET_64BIT ? -2 : -1);
+	      break;
+
 	    default:
 	      gcc_unreachable ();
 	    }
@@ -1586,6 +1597,11 @@ general_scalar_chain::convert_insn (rtx_insn *insn)
 	  rtx par = gen_rtx_PARALLEL (VOIDmode, vec);
 	  src = gen_rtx_VEC_SELECT (vmode, XEXP (src, 0), par);
 	}
+      break;
+
+    case ZERO_EXTEND:
+      /* *zero_extendsidi2 becomes *vec_setv2di_0_zero_extendsi_1.  */
+      src = gen_rtx_VEC_CONCAT (V2DImode, src, const0_rtx);
       break;
 
     default:
@@ -2498,6 +2514,13 @@ general_scalar_to_vector_candidate_p (rtx_insn *insn, enum machine_mode mode)
 	     && GET_CODE (XEXP (src, 1)) == PARALLEL
 	     && XVECLEN (XEXP (src, 1), 0) == 1
 	     && CONST_INT_P (XVECEXP (XEXP (src, 1), 0, 0));
+
+    case ZERO_EXTEND:
+      /* *zero_extendsidi2 becomes *vec_setv2di_0_zero_extendsi_1.  */
+      return mode == DImode
+	     && REG_P (dst)
+	     && GET_MODE (XEXP (src, 0)) == SImode
+	     && MEM_P (XEXP (src, 0));
 
     default:
       return false;
@@ -4326,11 +4349,15 @@ ix86_emit_tls_call (rtx tls_set, x86_cse_kind kind, basic_block bb,
       /* Get all live caller-saved registers for TLS_GD and TLS_LD_BASE
 	 instructions.  */
       if (kind != X86_CSE_TLSDESC)
-	for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
-	  if (call_used_regs[i]
-	      && !fixed_regs[i]
-	      && bitmap_bit_p (in, i))
-	    bitmap_set_bit (live_caller_saved_regs, i);
+	{
+	  const predefined_function_abi &tls_abi
+	    = ix86_tls_get_addr_abi ();
+	  for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
+	    if (tls_abi.clobbers_full_reg_p (i)
+		&& !fixed_regs[i]
+		&& bitmap_bit_p (in, i))
+	      bitmap_set_bit (live_caller_saved_regs, i);
+	}
 
       if (bitmap_empty_p (live_caller_saved_regs))
 	{
@@ -4503,6 +4530,7 @@ ix86_place_single_tls_call (rtx dest, rtx val, x86_cse_kind kind,
 
       symbol = XVECEXP (val, 0, 0);
       tls = gen_tls_global_dynamic_64 (Pmode, rax, symbol, caddr, rdi);
+      CALL_INSN_ABI_ID (tls) = ix86_tls_get_addr_abi ().id ();
 
       if (GET_MODE (symbol) != Pmode)
 	symbol = gen_rtx_ZERO_EXTEND (Pmode, symbol);
@@ -4515,6 +4543,7 @@ ix86_place_single_tls_call (rtx dest, rtx val, x86_cse_kind kind,
       caddr = ix86_tls_get_addr ();
 
       tls = gen_tls_local_dynamic_base_64 (Pmode, rax, caddr, rdi);
+      CALL_INSN_ABI_ID (tls) = ix86_tls_get_addr_abi ().id ();
 
       /* Attach a unique REG_EQUAL to DEST, to allow the RTL optimizers
 	 to share the LD_BASE result with other LD model accesses.  */

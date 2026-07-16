@@ -10108,10 +10108,14 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 	      tree guard = NULL_TREE;
 	      if (cleanups || cleanup)
 		{
-		  guard = get_internal_target_expr (boolean_false_node);
-		  add_stmt (guard);
-		  guard = TARGET_EXPR_SLOT (guard);
+		  /* Since the CLEANUP_STMT will refer to the guard, we need it
+		      to be a variable with the same lifetime.  ??? It might be
+		      better to use wrap_temporary_cleanups.  */
+		  guard = get_temp_regvar (boolean_type_node, boolean_false_node);
+		  /* And make sure register_local_var_uses sees it.  */
+		  pushdecl (guard);
 		}
+
 	      tree sl = push_stmt_list ();
 	      initialize_local_var (decl, init, true);
 	      if (guard)
@@ -10137,9 +10141,8 @@ cp_finish_decl (tree decl, tree init, bool init_const_expr_p,
 		     popped that all, so push those extra cleanups around
 		     the whole sequence with a guard variable.  */
 		  gcc_assert (TREE_CODE (sl) == STATEMENT_LIST);
-		  guard = get_internal_target_expr (integer_zero_node);
-		  add_stmt (guard);
-		  guard = TARGET_EXPR_SLOT (guard);
+		  guard = get_temp_regvar (integer_type_node, integer_zero_node);
+		  pushdecl (guard);
 		  for (unsigned i = 0; i < n_extra_cleanups; ++i)
 		    {
 		      tree_stmt_iterator tsi = tsi_last (sl);
@@ -10708,7 +10711,7 @@ cp_finish_decomp (tree decl, cp_decomp *decomp, bool test_p)
 	    }
 	  first = DECL_CHAIN (first);
 	}
-      if (DECL_P (decl) && DECL_NAMESPACE_SCOPE_P (decl))
+      if (DECL_P (decl) && TREE_STATIC (decl))
 	SET_DECL_ASSEMBLER_NAME (decl, get_identifier ("<decomp>"));
       return false;
     }
@@ -12162,6 +12165,14 @@ grokfndecl (tree ctype,
       error_at (location, "function concepts are no longer supported");
       return NULL_TREE;
     }
+
+  /* [except.spec]/9 - A deallocation function with no explicit noexcept-specifier
+     has a non-throwing exception specification.  */
+  if (raises == NULL_TREE
+      && cxx_dialect >= cxx11
+      && IDENTIFIER_NEWDEL_OP_P (declarator)
+      && !IDENTIFIER_NEW_OP_P (declarator))
+    raises = noexcept_true_spec;
 
   type = build_cp_fntype_variant (type, rqual, raises, late_return_type_p);
 
@@ -13772,6 +13783,8 @@ diagnose_non_c_class_typedef_for_linkage (tree type, tree orig)
 static bool
 maybe_diagnose_non_c_class_typedef_for_linkage (tree type, tree orig, tree t)
 {
+  if (!COMPLETE_TYPE_P (t))
+    return false;
   if (!BINFO_BASE_BINFOS (TYPE_BINFO (t))->is_empty ())
     {
       auto_diagnostic_group d;
@@ -20271,7 +20284,7 @@ store_parm_decls (tree current_function_parms)
 
   /* Register cleanups for parameters with trivial_abi attribute, the cleanup
      of which is the callee's responsibility.  */
-  if (!processing_template_decl)
+  if (!processing_template_decl && !DECL_CLONED_FUNCTION_P (fndecl))
     for (tree parm = DECL_ARGUMENTS (fndecl); parm; parm = DECL_CHAIN (parm))
       {
 	if (TREE_CODE (parm) == PARM_DECL)
@@ -20302,7 +20315,7 @@ maybe_prepare_return_this (tree cdtor)
   if (targetm.cxx.cdtor_returns_this ())
     if (tree val = DECL_ARGUMENTS (cdtor))
       {
-	suppress_warning (val, OPT_Wuse_after_free);
+	suppress_warning (val, OPT_Wuse_after_free_);
 	return val;
       }
 
@@ -21220,6 +21233,7 @@ cp_tree_node_structure (union lang_tree_node * t)
     case TRAIT_EXPR:		return TS_CP_TRAIT_EXPR;
     case TU_LOCAL_ENTITY:	return TS_CP_TU_LOCAL_ENTITY;
     case USERDEF_LITERAL:	return TS_CP_USERDEF_LITERAL;
+    case REQUIRES_EXPR:		return TS_CP_REQUIRES_EXPR;
     default:			return TS_CP_GENERIC;
     }
 }

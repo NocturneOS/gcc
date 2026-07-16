@@ -228,6 +228,9 @@ extern int fprintf_unlocked (FILE *, const char *, ...);
 #ifdef INCLUDE_SSTREAM
 # include <sstream>
 #endif
+#ifdef INCLUDE_ITERATOR
+# include <iterator>
+#endif
 # include <memory>
 # include <cstring>
 # include <initializer_list>
@@ -895,9 +898,6 @@ extern void fancy_abort (const char *, int, const char *)
 # define FALSE false
 #endif /* !__cplusplus */
 
-/* Some compilers do not allow the use of unsigned char in bitfields.  */
-#define BOOL_BITFIELD unsigned int
-
 /* As the last action in this file, we poison the identifiers that
    shouldn't be used.  Note, luckily gcc-3.0's token-based integrated
    preprocessor won't trip on poisoned identifiers that arrive from
@@ -1069,7 +1069,7 @@ extern void fancy_abort (const char *, int, const char *)
 	STANDARD_INCLUDE_DIR STANDARD_INCLUDE_COMPONENT			   \
 	LINK_ELIMINATE_DUPLICATE_LDIRECTORIES MIPS_DEBUGGING_INFO	   \
 	IDENT_ASM_OP ALL_COP_ADDITIONAL_REGISTER_NAMES			   \
-	RANGE_TEST_NON_SHORT_CIRCUIT					   \
+	RANGE_TEST_NON_SHORT_CIRCUIT EXTENDED_SDB_BASIC_TYPES		   \
 	REAL_VALUE_TRUNCATE REVERSE_CONDEXEC_PREDICATES_P		   \
 	TARGET_ALIGN_ANON_BITFIELDS TARGET_NARROW_VOLATILE_BITFIELDS	   \
 	IDENT_ASM_OP UNALIGNED_SHORT_ASM_OP UNALIGNED_INT_ASM_OP	   \
@@ -1089,7 +1089,8 @@ extern void fancy_abort (const char *, int, const char *)
 	EH_FRAME_IN_DATA_SECTION TARGET_FLT_EVAL_METHOD_NON_DEFAULT	   \
 	JCR_SECTION_NAME TARGET_USE_JCR_SECTION SDB_DEBUGGING_INFO	   \
 	SDB_DEBUG NO_IMPLICIT_EXTERN_C NOTICE_UPDATE_CC			   \
-	CC_STATUS_MDEP_INIT CC_STATUS_MDEP CC_STATUS SLOW_SHORT_ACCESS
+	CC_STATUS_MDEP_INIT CC_STATUS_MDEP CC_STATUS SLOW_SHORT_ACCESS	   \
+	WIDEST_HARDWARE_FP_SIZE ADA_LONG_TYPE_SIZE
 
 /* Hooks that are no longer used.  */
  #pragma GCC poison LANG_HOOKS_FUNCTION_MARK LANG_HOOKS_FUNCTION_FREE	\
@@ -1106,7 +1107,7 @@ extern void fancy_abort (const char *, int, const char *)
 	TARGET_VECTORIZE_BUILTIN_MUL_WIDEN_EVEN \
 	TARGET_VECTORIZE_BUILTIN_MUL_WIDEN_ODD \
 	TARGET_MD_ASM_CLOBBERS TARGET_RELAXED_ORDERING \
-	EXTENDED_SDB_BASIC_TYPES TARGET_INVALID_PARAMETER_TYPE \
+	TARGET_INVALID_PARAMETER_TYPE \
 	TARGET_INVALID_RETURN_TYPE
 
 /* Arrays that were deleted in favor of a functional interface.  */

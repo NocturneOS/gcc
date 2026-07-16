@@ -50,6 +50,7 @@
 #include "genmath.h"
 #include "structs.h"
 #include "../../libgcobol/gcobolio.h"
+#include "../../libgcobol/cobol-endian.h"
 #include "../../libgcobol/charmaps.h"
 #include "../../libgcobol/valconv.h"
 #include "show_parse.h"
@@ -561,7 +562,7 @@ get_class_condition_string(cbl_field_t *var)
                               : strlen(domain->first.name());
 
     cbl_encoding_t from = var->codeset.default_encodings.source->type;
-    cbl_encoding_t to = DEFAULT_32_ENCODING;
+    cbl_encoding_t to = HOST_32_ENCODING;
     size_t nbytes;
     const char *converted;
 
@@ -735,29 +736,6 @@ parser_call_target_convention( tree func )
     }
 
   return cbl_call_cobol_e;
-  }
-
-void
-parser_call_targets_dump()
-  {
-    dbgmsg( "call targets for #" HOST_SIZE_T_PRINT_UNSIGNED " NOT dumping",
-            (fmt_size_t)current_program_index() );
-#if 0 // A change to call_targets rendered this routine useless.  Until we get
-      // around to repairing it, this code is left for reference.
-    for( const auto& elem : call_targets ) {
-      const auto& k = elem.first;
-      const auto& v = elem.second;
-      fprintf(stderr, "\t#%-3" GCC_PRISZ "u %s calls %s ",
-              (fmt_size_t)k.caller, cbl_label_of(symbol_at(k.caller))->name,
-              k.called);
-      char ch = '[';
-      for( auto func : v ) {
-        fprintf( stderr, "%c %s", ch, IDENTIFIER_POINTER(DECL_NAME(func)) );
-        ch = ',';
-      }
-      fprintf(stderr, " ]\n");
-    }
-#endif
   }
 
 size_t
@@ -1227,6 +1205,15 @@ parser_statement_end( const std::list<cbl_field_t*>&flist)
     }
   }
 
+
+static const int DEFAULT_BYTE_MASK = 0x00000000FF;
+static const int NSUBSCRIPT_MASK   = 0x0000000F00;
+static const int NSUBSCRIPT_SHIFT  =            8;
+static const int DEFAULTBYTE_BIT   = 0x0000001000;
+static const int EXPLICIT_BIT      = 0x0000002000;
+static const int REDEFINED_BIT     = 0x0000004000;
+static const int JUST_ONCE_BIT     = 0x0000008000;
+
 static void
 initialize_variable_internal( cbl_refer_t refer,
                               bool explicitly=false,
@@ -1416,14 +1403,6 @@ initialize_variable_internal( cbl_refer_t refer,
       parsed_var->attr |= has_value_e;
       }
     }
-
-  static const int DEFAULT_BYTE_MASK = 0x00000000FF;
-  static const int NSUBSCRIPT_MASK   = 0x0000000F00;
-  static const int NSUBSCRIPT_SHIFT  =            8;
-  static const int DEFAULTBYTE_BIT   = 0x0000001000;
-  static const int EXPLICIT_BIT      = 0x0000002000;
-  static const int REDEFINED_BIT     = 0x0000004000;
-  static const int JUST_ONCE_BIT     = 0x0000008000;
 
   int flag_bits  = 0;
   flag_bits     |= explicitly ? EXPLICIT_BIT : 0;
@@ -2042,11 +2021,16 @@ leave_section_internal()
   Analyze();
   SHOW_PARSE
     {
-    if(gg_trans_unit.function_stack.size() && current_function && current_function->current_section)
+    if(   gg_trans_unit.function_stack.size()
+       && current_function && current_function->current_section)
       {
       SHOW_PARSE_HEADER
       SHOW_PARSE_TEXT(" ")
       SHOW_PARSE_TEXT(current_function->current_section->label->name)
+      SHOW_PARSE_TEXT(" ")
+      fprintf(stderr,
+              "%p",
+              static_cast<void *>(current_function->current_section->label));
       SHOW_PARSE_END
       }
     }
@@ -2348,9 +2332,10 @@ parser_alter( cbl_perform_tgt_t *tgt )
   }
 
 void
-parser_goto( cbl_refer_t value_ref, size_t narg, cbl_label_t * const labels[] )
-  // This routine takes
-{
+parser_goto(const cbl_refer_t &value_ref,
+            size_t narg,
+            cbl_label_t * const labels[] )
+  {
   // This is part of the Terrible Trio of parser_perform, parser_goto and
   // parser_enter_[procedure].  parser_goto has an easier time of it than
   // the other two, because it just has to jump from here to the entry point
@@ -2390,11 +2375,8 @@ parser_goto( cbl_refer_t value_ref, size_t narg, cbl_label_t * const labels[] )
     {
     // We will implement the two or more fanout with a switch statement.
 
-    tree value = gg_define_int();
-    get_binary_value( value,
-                      NULL,
-                      value_ref.field,
-                      refer_offset(value_ref));
+    tree value;
+    get_binary_value(value, value_ref, INT);
 
     // value is properly 1 through nargs
 
@@ -2439,7 +2421,7 @@ parser_goto( cbl_refer_t value_ref, size_t narg, cbl_label_t * const labels[] )
   }
 
 void
-parser_perform_times( cbl_label_t *proc_1, cbl_refer_t count )
+parser_perform_times( cbl_label_t *proc_1, const cbl_refer_t &count )
   {
   Analyze();
   SHOW_PARSE
@@ -2451,7 +2433,8 @@ parser_perform_times( cbl_label_t *proc_1, cbl_refer_t count )
     char ach[32];
     sprintf(ach, " proc_1 is at %p", static_cast<void*>(proc_1));
     SHOW_PARSE_TEXT(ach)
-    sprintf(ach, " proc_1->proc is %p", static_cast<void*>(proc_1->structs.proc));
+    sprintf(ach, " proc_1->proc is %p",
+            static_cast<void*>(proc_1->structs.proc));
     SHOW_PARSE_TEXT(ach)
     SHOW_PARSE_END
     }
@@ -2463,13 +2446,9 @@ parser_perform_times( cbl_label_t *proc_1, cbl_refer_t count )
 
   perform_is_armed = CURRENT_LINE_NUMBER ;
 
-  tree counter       = gg_define_variable(LONG);
-
   // Get the count:
-  get_binary_value( counter,
-                    NULL,
-                    count.field,
-                    refer_offset(count));
+  tree counter;
+  get_binary_value(counter, count, LONG);
 
   // Make sure the initial count is valid:
   WHILE( counter, gt_op, gg_cast(LONG, integer_zero_node) )
@@ -2588,7 +2567,7 @@ parser_perform(cbl_label_t *label, bool suppress_nexting)
 static void
 internal_perform_through_times(   cbl_label_t *proc_1,
                                   cbl_label_t *proc_2,
-                                  cbl_refer_t &count)
+                            const cbl_refer_t &count)
   {
   Analyze();
   SHOW_PARSE
@@ -2626,11 +2605,8 @@ internal_perform_through_times(   cbl_label_t *proc_1,
 
   perform_is_armed = CURRENT_LINE_NUMBER ;
 
-  tree counter       = gg_define_variable(LONG);
-  get_binary_value( counter,
-                    NULL,
-                    count.field,
-                    refer_offset(count));
+  tree counter;
+  get_binary_value(counter, count, LONG);
   WHILE( counter, gt_op, gg_cast(LONG, integer_zero_node) )
     {
     internal_perform_through(proc_1, proc_2, true); // true means suppress_nexting
@@ -3502,13 +3478,14 @@ parser_init_list()
           "..variables_to_init_" HOST_SIZE_T_PRINT_DEC,
           (fmt_size_t)current_function->our_symbol_table_index);
   tree array = gg_trans_unit_var_decl(ach);
+
+  int flag_bits =  wsclear()
+                ? DEFAULTBYTE_BIT + (*wsclear() & DEFAULT_BYTE_MASK)
+                : 0;
   gg_call(VOID,
           "__gg__variables_to_init",
           gg_pointer_to_array(array),
-          wsclear() ? build_string_literal(
-                                    1,
-                                    reinterpret_cast<const char *>(wsclear()))
-                    : null_pointer_node,
+          build_int_cst_type(INT, flag_bits),
           NULL_TREE);
   }
 
@@ -4399,16 +4376,16 @@ parser_accept_date_hhmmssff( struct cbl_field_t *target )
  */
 
 void
-parser_alphabet( const cbl_alphabet_t& alphabet )
+parser_alphabet( const cbl_alphabet_t *alphabet )
   {
   Analyze();
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    char *psz = xasprintf(" %s ", alphabet.name);
+    char *psz = xasprintf(" %s ", alphabet->name);
     SHOW_PARSE_TEXT(psz);
     free(psz);
-    switch(alphabet.encoding)
+    switch(alphabet->encoding)
       {
       case iconv_CP1252_e:
         psz = xasprintf("CP1252");
@@ -4426,10 +4403,10 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
         psz = xasprintf("UTF8");
         break;
       case custom_encoding_e:
-        psz = xasprintf("%s", alphabet.name);
+        psz = xasprintf("%s", alphabet->name);
         break;
       default:
-        { const char * p = __gg__encoding_iconv_name( alphabet.encoding );
+        { const char * p = __gg__encoding_iconv_name( alphabet->encoding );
           psz = xasprintf("%s", p? p : "[unknown]");
         }
       }
@@ -4439,7 +4416,7 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
     SHOW_PARSE_END
     }
 
-  switch(alphabet.encoding)
+  switch(alphabet->encoding)
     {
     case iconv_CP1252_e:
     case ASCII_e:
@@ -4450,7 +4427,7 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
 
     case custom_encoding_e:
       {
-      uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(&alphabet));
+      uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(alphabet));
 
       unsigned char ach[256];
 
@@ -4461,21 +4438,21 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
         // character i has the ordinal alphabet[i]
         unsigned char ch = i;
 
-        ach[ch] = (alphabet.collation_sequence[i]);
+        ach[ch] = (alphabet->collation_sequence[i]);
         gg_assign(  gg_array_value(table256, ch),
-                    build_int_cst_type(UCHAR, (alphabet.collation_sequence[i])) );
+                    build_int_cst_type(UCHAR, (alphabet->collation_sequence[i])) );
         }
 
-      unsigned int low_char  = alphabet.low_char;
-      unsigned int high_char = alphabet.high_char;
-      __gg__alphabet_create(alphabet.encoding,
+      unsigned int low_char  = alphabet->low_char;
+      unsigned int high_char = alphabet->high_char;
+      __gg__alphabet_create(alphabet->encoding,
                             alphabet_index,
                             ach,
                             low_char,
                             high_char);
       gg_call(VOID,
               "__gg__alphabet_create",
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               gg_pointer_to_array(table256),
               build_int_cst_type(INT, low_char),
@@ -4492,16 +4469,16 @@ parser_alphabet( const cbl_alphabet_t& alphabet )
   }
 
 void
-parser_alphabet_use( cbl_alphabet_t& alphabet )
+parser_alphabet_use( const cbl_alphabet_t *alphabet )
   {
   Analyze();
   SHOW_PARSE
     {
     SHOW_PARSE_HEADER
-    char *psz = xasprintf(" %s ", alphabet.name);
+    char *psz = xasprintf(" %s ", alphabet->name);
     SHOW_PARSE_TEXT(psz);
     free(psz);
-    switch(alphabet.encoding)
+    switch(alphabet->encoding)
       {
       case iconv_CP1252_e:
         psz = xasprintf("CP1252");
@@ -4519,7 +4496,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
         psz = xasprintf("UTF8");
         break;
       case custom_encoding_e:
-        psz = xasprintf("%s", alphabet.name);
+        psz = xasprintf("%s", alphabet->name);
         break;
       default:
         gcc_unreachable();
@@ -4529,11 +4506,11 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
     SHOW_PARSE_END
     }
 
-  uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(&alphabet));
+  uint64_t alphabet_index = symbol_unique_index(symbol_elem_of(alphabet));
 
   current_function->alphabet_in_use = true;
 
-  switch(alphabet.encoding)
+  switch(alphabet->encoding)
     {
     default:
       gcc_unreachable();
@@ -4548,7 +4525,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
               "__gg__alphabet_use",
               build_int_cst_type(INT, current_encoding(display_encoding_e)),
               build_int_cst_type(INT, current_encoding(national_encoding_e)),
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               null_pointer_node,
               NULL_TREE);
       break;
@@ -4565,7 +4542,7 @@ parser_alphabet_use( cbl_alphabet_t& alphabet )
               "__gg__alphabet_use",
               build_int_cst_type(INT, current_encoding(display_encoding_e)),
               build_int_cst_type(INT, current_encoding(national_encoding_e)),
-              build_int_cst_type(INT, alphabet.encoding),
+              build_int_cst_type(INT, alphabet->encoding),
               build_int_cst_type(SIZE_T, alphabet_index),
               NULL_TREE);
       break;
@@ -4608,7 +4585,7 @@ parser_display_literal(const char *literal, bool advance)
 
 void
 parser_display_internal(tree file_descriptor,
-                        cbl_refer_t refer,
+                  const cbl_refer_t &refer,
                         bool advance)
   {
   Analyze();
@@ -5576,8 +5553,8 @@ parser_exit_program()
 
 static
 void
-program_end_stuff(cbl_refer_t refer,
-                  ec_type_t ec)
+program_end_stuff(const cbl_refer_t &refer,
+                        ec_type_t    ec)
   {
   // Looking for hijack here puts the hijacked code just before the
   // exit sequence
@@ -5607,9 +5584,7 @@ program_end_stuff(cbl_refer_t refer,
   if( returner )
     {
     cbl_field_type_t field_type = returner->type;
-    size_t nbytes = 0;
-    tree return_type = tree_type_from_field_type(returner,
-                                                 nbytes);
+    tree return_type = tree_type_from_field(returner);
     tree retval   = gg_define_variable(return_type);
 
     gg_assign(retval, gg_cast(return_type, integer_zero_node));
@@ -5622,24 +5597,22 @@ program_end_stuff(cbl_refer_t refer,
           ||  field_type == FldPointer
           ||  field_type == FldIndex )
         {
-        // These are easily handled because they are all little-endian.
+        // These are easily handled because they are all native binary
         gg_memcpy(gg_get_address_of(retval),
                   member(returner, "data"),
                   build_int_cst_type( SIZE_T,
-                                      std::min(nbytes, (size_t)returner->data.capacity())));
+                                      std::min(gg_sizeof(return_type),
+                                         (size_t)returner->data.capacity())));
         }
       else
         {
         // The field_type has a PICTURE string, so we need to convert from the
-        // COBOL form to little-endian binary:
-        tree value   = gg_define_int128();
-        get_binary_value( value,
-                          NULL,
-                          returner,
-                          size_t_zero_node);
+        // COBOL form to native binary:
+        tree value;
+        get_binary_value( value, returner, return_type);
         gg_memcpy(gg_get_address_of(retval),
                   gg_get_address_of(value),
-                  build_int_cst_type(SIZE_T, nbytes));
+                  build_int_cst_type(SIZE_T, gg_sizeof(return_type)));
         }
       restore_local_variables();
       gg_return(retval);
@@ -6320,29 +6293,15 @@ establish_using(size_t nusing,
       // This code is relevant at compile time.  It takes each
       // expected formal parameter and tacks it onto the end of the
       // function's arguments chain.
-
       char *ach = xasprintf("_p_%s", args[i].refer.field->name);
-
-      size_t nbytes = 0;
-      tree par_type = tree_type_from_field_type(args[i].refer.field, nbytes);
-      if( par_type == FLOAT )
+      tree par_type;
+      if( args[i].crv == by_value_e )
         {
-        if( nbytes == 16 )
-          {
-          par_type = INT128;
-          }
-        else
-          {
-          par_type = SSIZE_T;
-          }
+        par_type = tree_type_from_refer(args[i].refer);
         }
-      if( par_type == DOUBLE )
+      else
         {
-        par_type = SSIZE_T;
-        }
-      if( par_type == FLOAT128 )
-        {
-        par_type = INT128;
+        par_type = VOID_P;
         }
       chain_parameter_to_function(current_function->function_decl, par_type, ach);
       free(ach);
@@ -6403,7 +6362,7 @@ establish_using(size_t nusing,
     tree rt_i = gg_define_int();
     for(size_t i=0; i<nusing; i++)
       {
-      // And this compiler code generates run-time execution code. The
+      // And this generates run-time execution code. The
       // generated code picks up, at run time, the variable we just
       // established in the chain at compile time.
 
@@ -6477,8 +6436,7 @@ establish_using(size_t nusing,
                       // gg_array_value(var_decl_call_parameter_lengths, rt_i),
                       // NULL_TREE);
 
-            // Get the length from the global lengths[] side channel.  Don't
-            // forget to use the length mask on the table value.
+            // Get the length from the global lengths[] side channel.
             gg_assign(member(args[i].refer.field->var_decl_node, "capacity"),
                       gg_array_value(var_decl_call_parameter_lengths, rt_i));
             }
@@ -6488,6 +6446,39 @@ establish_using(size_t nusing,
           gg_assign(reference, gg_cast(UCHAR_P, null_pointer_node));
           }
         ENDIF
+        if(     cobol_target_big_endian()  // cppcheck-suppress knownConditionTrueFalse
+            &&  (    args[i].refer.field->type == FldNumericBin5
+                  || args[i].refer.field->type == FldNumericBinary) )
+          {
+          // We have another thing to think about.  The reference we are
+          // processing might have come from an intermediate, and those are
+          // sixteen-byte values.  On a little-endian machine we can just use
+          // the value as-is, because the extra zeroes are to the right of the
+          // one we need.  But a big endian sixteen-byte value has a bunch of
+          // leading zeroes, and we need to skip past them.
+          tree offset = gg_define_variable(SIZE_T);
+          // Pick up the length metadata.
+          gg_assign(offset,
+                    gg_array_value(var_decl_call_parameter_lengths, rt_i));
+
+          // That value is probably sixteen.  Subtract the length of our target
+          // value from that.
+          gg_assign(offset,
+                    gg_subtract(offset,
+                                member(args[i].refer.field->var_decl_node,
+                                       "capacity")));
+          // And add that value to 'reference'
+          gg_assign(reference, gg_add(reference, offset));
+          // This code was added when I encountered a function call using
+          // func( N - 1 ), where the function expected a single-byte value.
+          // In little-endian, no problem, because the calculated value of 3
+          // produced a sixteen-byte 0x03 00 00 00.....  But in big-endian,
+          // the sixteen bytes are 0x00 00 00 00 ... 00 03.  The above
+          // calculation starts with sixteen, subtracts one from it to get
+          // fifteen, and then adds fifteen to 'reference' to point to the
+          // 0x03.
+          }
+
         // 'parameter' is a reference, so it it becomes the data member of
         // the cblc_field_t COBOL variable.
         gg_assign(member(args[i].field()->var_decl_node, "data"), reference);
@@ -6499,19 +6490,7 @@ establish_using(size_t nusing,
 
       if( crv == by_value_e )
         {
-        size_t nbytes;
-        tree_type_from_field_type(new_var, nbytes);
-        tree parm = gg_define_variable(INT128);
-
-        tree value_type;
-        if( nbytes == 16 )
-          {
-          value_type = INT128;
-          }
-        else
-          {
-          value_type = SSIZE_T;
-          }
+        tree value_type = tree_type_from_field(new_var);
 
         // 'parameter' is the 64-bit or 128-bit value that was placed on the stack
         tree value = gg_define_variable(value_type);
@@ -6529,10 +6508,9 @@ establish_using(size_t nusing,
             // These are subsequent parameters
             parameter = TREE_CHAIN(parameter);
             }
-          gg_assign(value, gg_cast(value_type, parameter));
           gg_memcpy(gg_get_address_of(value),
                     gg_get_address_of(parameter),
-                    build_int_cst_type(SIZE_T, nbytes));
+                    build_int_cst_type(SIZE_T, gg_sizeof(value)));
 
           if( args[i].refer.field->attr & any_length_e )
             {
@@ -6553,41 +6531,8 @@ establish_using(size_t nusing,
           }
         ENDIF
 
-        if( nbytes <= 8 )
-          {
-          // Our input is a 64-bit number
-          if( new_var->attr & signable_e )
-            {
-            IF( gg_bitwise_and( gg_cast(SIZE_T, value),
-                                build_int_cst_type(SIZE_T, 0x8000000000000000ULL)),
-                ne_op,
-                gg_cast(SIZE_T, integer_zero_node) )
-              {
-              // Our input is a negative number.  Set it to -1, so that the
-              // eight high-order bytes are 0xFF
-              gg_assign(parm, gg_cast(INT128, integer_minus_one_node));
-              }
-            ELSE
-              {
-              // Our input is a positive number, so set it to zero, so that
-              // the eight high-order bytes are 0x00
-              gg_assign(parm, gg_cast(INT128, integer_zero_node));
-              }
-            ENDIF
-            }
-          else
-            {
-            // This is a 64-bit positive number: so set it to zero, so that
-              // the eight high-order bytes are 0x00
-            gg_assign(parm, gg_cast(INT128, integer_zero_node));
-            }
-          }
-
-        // Now copy over the little-endian binary bytes, either 8 or 16 as
-        // necessary
-        gg_memcpy(gg_get_address_of(parm),
-                  gg_get_address_of(value),
-                  build_int_cst_type(SIZE_T, nbytes));
+        // Because new_var is linkage, at this point it has no data area. We
+        // need to create that data area.
         tree array_type = build_array_type_nelts(UCHAR, new_var->data.capacity());
         tree data_decl_node = gg_define_variable( array_type,
                                                   NULL,
@@ -6595,12 +6540,21 @@ establish_using(size_t nusing,
         gg_assign( member(new_var->var_decl_node, "data"),
                           gg_pointer_to_array(data_decl_node) );
 
-        // And then move it into place
-        gg_call(VOID,
-                "__gg__assign_value_from_stack",
-                gg_get_address_of(new_var->var_decl_node),
-                parm,
-                NULL_TREE);
+        // And then put 'value' into place:
+        if( new_var->type == FldFloat )
+          {
+          gg_memcpy(member(new_var->var_decl_node, "data"),
+                    gg_get_address(value),
+                    build_int_cst_type(SIZE_T, new_var->data.capacity()));
+          }
+        else
+          {
+          gg_call(VOID,
+                  "__gg__assign_value_from_stack",
+                  gg_get_address_of(new_var->var_decl_node),
+                  gg_cast(INT128, value),
+                  NULL_TREE);
+          }
         // We now have to handle an oddball situation.  It's possible we are
         // dealing with
         //
@@ -7210,11 +7164,8 @@ parser_relop_long(cbl_field_t *tgt,
     }
 
   tree tree_a  = build_int_cst_type(LONG, avalue);
-  tree tree_b  = gg_define_variable(LONG);
-  get_binary_value( tree_b,
-                    NULL,
-                    bref.field,
-                    refer_offset(bref) );
+  tree tree_b;
+  get_binary_value( tree_b, bref.field, LONG);
   tree comp_res = gg_define_variable(LONG);
   gg_assign(comp_res, gg_subtract(tree_a, tree_b));
 
@@ -7327,15 +7278,11 @@ parser_see_stop_run(struct cbl_refer_t exit_status,
     }
 
   // It's a stop run.  Return return-code to the operating system:
-  tree returned_value = gg_define_variable(INT);
-
+  tree returned_value;
   if( exit_status.field )
     {
     // There is an exit_status, so it wins:
-    get_binary_value( returned_value,
-                      NULL,
-                      exit_status.field,
-                      refer_offset(exit_status));
+    get_binary_value( returned_value, exit_status.field, INT);
     TRACE1
       {
       TRACE1_REFER(" exit_status ", exit_status, "")
@@ -7343,6 +7290,7 @@ parser_see_stop_run(struct cbl_refer_t exit_status,
     }
   else
     {
+    returned_value = gg_define_variable(INT);
     gg_assign(returned_value, gg_cast(INT, current_function->var_decl_return));
     TRACE1
       {
@@ -7568,7 +7516,7 @@ parser_classify(    cbl_field_t *tgt,
   }
 
 void
-parser_perform(const cbl_perform_tgt_t *tgt, cbl_refer_t how_many)
+parser_perform(const cbl_perform_tgt_t *tgt, const cbl_refer_t &how_many)
   {
   const cbl_field_t *N = how_many.field;
   // No SHOW_PARSE here; we want to fall through:
@@ -8692,11 +8640,8 @@ parser_perform_inline_times(struct cbl_perform_tgt_t *tgt,
     }
 
   gcc_assert(tgt);
-  cbl_field_t *count = how_many.field;
-  CHECK_FIELD(count);
 
-  // This has to be on the stack, because performs can be nested
-  tree counter       = gg_define_variable(LONG);
+  tree counter = gg_define_variable(LONG);
 
   /*
               GOTO SETUP
@@ -8764,10 +8709,9 @@ parser_perform_inline_times(struct cbl_perform_tgt_t *tgt,
     SHOW_PARSE_END
     }
 
-  get_binary_value( counter,
-                    NULL,
-                    count,
-                    refer_offset(how_many));
+  tree initial_value;
+  get_binary_value(initial_value, how_many, LONG);
+  gg_assign(counter, initial_value);
 
   SHOW_PARSE
     {
@@ -9430,11 +9374,8 @@ parser_file_write( cbl_file_t *file,
   tree t_advance = gg_define_variable(INT);
   if(advance.field)
     {
-    tree value = gg_define_variable(INT);
-    get_binary_value( value,
-                      NULL,
-                      advance.field,
-                      refer_offset(advance));
+    tree value;
+    get_binary_value( value, advance, INT);
     gg_assign(t_advance, gg_cast(INT, value));
     }
   else
@@ -9741,7 +9682,7 @@ void
 parser_file_start(struct cbl_file_t *file,
                   relop_t op,
                   int flk,
-                  cbl_refer_t length_ref )
+            const cbl_refer_t &length_ref )
   {
   Analyze();
   SHOW_PARSE
@@ -9797,13 +9738,12 @@ parser_file_start(struct cbl_file_t *file,
     flk = -1;
     }
 
-  tree length = gg_define_variable(SIZE_T);
-  gg_assign(length, size_t_zero_node);
+  tree length = size_t_zero_node;
 
   if( flk > 0 && !length_ref.field )
     {
-    // We need a length, and we don't have one.  We have to calculate the length
-    // from the lengths of the fields that make up the specified key.
+    // We need a length, and we don't have one.  We have to calculate the
+    // length from the lengths of the fields that make up the specified key.
 
     size_t combined_length = 0;
 
@@ -9818,14 +9758,11 @@ parser_file_start(struct cbl_file_t *file,
       cbl_field_t *field = cbl_field_of(symbol_at(nfield));
       combined_length += field->data.capacity();
       }
-    gg_assign(length, build_int_cst_type(SIZE_T, combined_length));
+    length = build_int_cst_type(SIZE_T, combined_length);
     }
   else if( flk > 0 )
     {
-    get_binary_value( length,
-                      NULL,
-                      length_ref.field,
-                      refer_offset(length_ref));
+    get_binary_value( length, length_ref, SIZE_T);
     }
 
   sv_is_i_o = true;
@@ -10820,7 +10757,7 @@ handle_gg_trim(cbl_field_t *tgt,
                                             (arg.field->attr & FIGCONST_MASK);
         if( figconst )
           {
-          cbl_char_t figcst = charmap->figconst_character(figconst);
+          uint8_t figcst = charmap->figconst_character(figconst);
           tree tfigcst = build_int_cst_type(UCHAR, figcst);
           gg_assign(gg_indirect(char_p), tfigcst);
           }
@@ -10858,8 +10795,9 @@ parser_trim( cbl_field_t *tgt,
   gcc_assert(how >= 1 && how <= 3);
   if( !handle_gg_trim(tgt, input, how, args) )
     {
+    // We know stride is bigger than 1.
     cbl_encoding_t encoding = input.field->codeset.encoding;
-    charmap_t *charmap = __gg__get_charmap(encoding);
+    const charmap_t *charmap = __gg__get_charmap(encoding);
     int stride = charmap->stride();
     tree tstride = build_int_cst_type(SIZE_T, stride);
 
@@ -10878,15 +10816,24 @@ parser_trim( cbl_field_t *tgt,
                                           (arg.field->attr & FIGCONST_MASK);
       if( figconst )
         {
-        cbl_char_t figcst = charmap->figconst_character(figconst);
-        tree tfigcst = build_int_cst_type(ULONG, figcst);
+        char space[] = " ";
+        *space = char_from_figconst(figconst);
 
+        // Convert that character to the encoded version:
+        size_t nbytes;
+        const char *converted =  __gg__iconverter(DEFAULT_SOURCE_ENCODING,
+                                                  encoding,
+                                                  space,
+                                                  1,
+                                                  &nbytes);
+        // And add it to the array:
         gg_memcpy(char_p,
-                  gg_get_address_of(tfigcst),
-                  tstride );
+                  build_string_literal(stride, converted),
+                  tstride);
         }
       else
         {
+        // It's not a figurative constant, so we get our value from 'arg'
         tree location;
         get_location(location, arg);
         gg_memcpy(char_p,
@@ -11069,17 +11016,15 @@ parser_intrinsic_call_4( cbl_field_t *tgt,
 static void
 field_increment(cbl_field_t *fld )
   {
-  static tree value   = gg_define_variable(INT128);
-  static tree rdigits = gg_define_variable(INT);
-
-  get_binary_value(value, rdigits, fld, size_t_zero_node);
-  gg_assign(  value,
-              gg_add(value, gg_cast(SIZE_T, integer_one_node)));
+  // rdigits has to be zero.
+  tree value;
+  get_binary_value(value, fld, INT128);
+  gg_increment(value);
   gg_call(VOID,
           "__gg__int128_to_field",
           gg_get_address_of(fld->var_decl_node),
-          value,
-          rdigits,
+          gg_cast(INT128, value),
+          integer_zero_node,
           build_int_cst_type(INT, truncation_e),
           null_pointer_node,
           NULL_TREE );
@@ -11164,14 +11109,18 @@ parser_lsearch_start(   cbl_label_t *name,
   // Establish the initial value of our counter:
   lsearch->counter = gg_define_variable(LONG);
 
-  tree value   = gg_define_int128();
+  tree value;
   if(varying)
     {
-    get_binary_value(value, NULL, varying, size_t_zero_node);
+    get_binary_value(value, varying, SIZE_T);
     }
   else if( index )
     {
-    get_binary_value(value, NULL, index, size_t_zero_node);
+    get_binary_value(value, index, SIZE_T);
+    }
+  else
+    {
+    gcc_unreachable();
     }
   gg_assign(lsearch->counter, gg_cast(LONG, value));
 
@@ -11693,7 +11642,7 @@ parser_sort(cbl_refer_t tableref,
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__sort_table",
@@ -11841,7 +11790,7 @@ parser_file_sort(   cbl_file_t *workfile,
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__sort_workfile",
@@ -11925,7 +11874,7 @@ parser_file_sort(   cbl_file_t *workfile,
   }
 
 void
-parser_release( cbl_field_t *record_area )
+parser_release( const cbl_field_t *record_area )
   {
   Analyze();
   SHOW_PARSE
@@ -12126,7 +12075,7 @@ gg_array_of_file_pointers(  size_t N,
 
 void
 parser_file_merge(  cbl_file_t *workfile,
-                    cbl_alphabet_t *alphabet,
+              const cbl_alphabet_t *alphabet,
                     const std::vector<cbl_key_t>& keys,
                     size_t ninputs,
                     cbl_file_t **inputs,
@@ -12242,7 +12191,7 @@ parser_file_merge(  cbl_file_t *workfile,
   if( alphabet )
     {
     push_program_state();
-    parser_alphabet_use(*alphabet);
+    parser_alphabet_use(alphabet);
     }
   gg_call(VOID,
           "__gg__merge_files",
@@ -12688,16 +12637,23 @@ create_and_call(size_t narg,
       crv = by_value_e;
       }
 
-    if( args[i].attr == address_of_e || args[i].refer.addr_of )
+    if(    args[i].attr == address_of_e
+        || args[i].attr == length_of_e
+        || args[i].refer.addr_of )
       {
-      // ADDRESS OF has to be passed by value.
+      // These have to be passed to be passed by value.
       crv = by_value_e;
+      }
+    else if( crv == by_value_e && args[i].refer.field->type == FldAlphanumeric)
+      {
+      // Maybe passing an alphanumeric BY VALUE should be a syntax error?
+      crv = by_content_e;
       }
 
     allocated[i] = 0;
 
-    tree location = gg_define_variable(UCHAR_P, "..location.1", vs_stack);
-    tree length   = gg_define_variable(SIZE_T,  "..length.1",   vs_stack);
+    tree location = gg_define_variable(UCHAR_P);
+    tree length   = gg_define_variable(SIZE_T);
 
     if( !args[i].refer.field )
       {
@@ -12714,7 +12670,8 @@ create_and_call(size_t narg,
         {
         crv = by_content_e;
         gg_assign(location,
-                  gg_cast(UCHAR_P, build_string_literal(args[i].refer.field->data.capacity(),
+                  gg_cast(UCHAR_P,
+                     build_string_literal(args[i].refer.field->data.capacity(),
                                        args[i].refer.field->data.original())));
         gg_assign(length,
                   build_int_cst_type( SIZE_T,
@@ -12767,29 +12724,10 @@ create_and_call(size_t narg,
         switch(args[i].attr)
           {
           case address_of_e:
-            {
-            // Allocate the memory, and make the copy:
-            arguments[i] = gg_define_char_star();
-            allocated[i] = 1;
-            gg_assign(arguments[i], gg_malloc(length) ) ;
-            gg_memcpy(arguments[i],
-                      location,
-                      length);
-            break;
-            }
-
           case length_of_e:
             {
-            // The BY CONTENT LENGTH OF gets passed as an 64-bit big-endian
-            // value
-            arguments[i] = gg_define_size_t();
-            allocated[i] = 1;
-            gg_assign(arguments[i], gg_malloc(length) ) ;
-            gg_call(VOID,
-                    "__gg__copy_as_big_endian",
-                    gg_get_address_of(arguments[i]),
-                    length,
-                    NULL_TREE);
+            // Up above, we converted these to by_value_e
+            gcc_unreachable();
             break;
             }
 
@@ -12808,9 +12746,8 @@ create_and_call(size_t narg,
 
       case by_value_e:
         {
-        // For BY VALUE, we take whatever we've been given and do our best to
-        // make a 64-bit value out of it, although we move to 128 bits when
-        // necessary.
+        // For BY VALUE, we take whatever we've been given and make a INT128
+        // out of it if necessary, and either LONG or ULONG otherwise.
 
         cbl_ffi_arg_attr_t attr = args[i].attr;
         if( args[i].refer.addr_of )
@@ -12824,7 +12761,7 @@ create_and_call(size_t narg,
             {
             arguments[i] = gg_define_size_t();
             gg_assign(arguments[i], gg_cast(SIZE_T, location ));
-            gg_assign(length, build_int_cst_type(SIZE_T, 8));
+            gg_assign(length, build_int_cst_type(SIZE_T, gg_sizeof(CHAR_P)));
             break;
             }
 
@@ -12832,61 +12769,15 @@ create_and_call(size_t narg,
             {
             arguments[i] = gg_define_size_t();
             gg_assign(arguments[i], gg_cast(SIZE_T, length));
-            gg_assign(length, build_int_cst_type(SIZE_T, 8));
+            gg_assign(length, build_int_cst_type(SIZE_T, gg_sizeof(CHAR_P)));
             break;
             }
 
           case none_of_e:
             {
-            assert(args[i].refer.field);
-            bool as_int128 = false;
-            if( !(args[i].refer.field->attr & intermediate_e) )
-              {
-              // All temporaries are SIZE_T
-              if( args[i].refer.field->type == FldFloat )
-                {
-                as_int128 = true;
-                }
-              else if(   args[i].refer.field->type == FldNumericBin5
-                      && args[i].refer.field->data.digits   == 0
-                      && args[i].refer.field->data.capacity() == 16 )
-                {
-                as_int128 = true;
-                }
-              else if( args[i].refer.field->data.digits > 18 )
-                {
-                as_int128 = true;
-                }
-              }
-
-            if( as_int128 )
-              {
-              arguments[i] = gg_define_variable(INT128);
-              gg_assign(arguments[i],
-                        gg_cast(INT128,
-                                gg_call_expr(
-                                INT128,
-                                "__gg__fetch_call_by_value_value",
-                                gg_get_address_of(args[i].refer.field->var_decl_node),
-                                refer_offset(args[i].refer),
-                                refer_size_source(args[i].refer),
-                                NULL_TREE)));
-              gg_assign(length, build_int_cst_type(SIZE_T, 16));
-              }
-            else
-              {
-              arguments[i] = gg_define_size_t();
-              gg_assign(arguments[i],
-                        gg_cast(SIZE_T,
-                                gg_call_expr(
-                                INT128,
-                                "__gg__fetch_call_by_value_value",
-                                gg_get_address_of(args[i].refer.field->var_decl_node),
-                                refer_offset(args[i].refer),
-                                refer_size_source(args[i].refer),
-                                NULL_TREE)));
-              gg_assign(length, build_int_cst_type(SIZE_T, 8));
-              }
+            tree type = tree_type_from_refer(args[i].refer);
+            arguments[i] = gg_define_variable(type);
+            safe_assign(arguments[i], args[i].refer);
             break;
             }
           }
@@ -12924,7 +12815,6 @@ create_and_call(size_t narg,
     // Fetch the FUNCTION_DECL for that FUNCTION_TYPE
     tree function_decl = gg_build_fn_decl(funcname, fndecl_type);
     set_call_convention(function_decl, current_call_convention());
-
     // Take the address of the function decl:
     tree address_of_function = gg_get_address_of(function_decl);
 
@@ -13047,7 +12937,7 @@ create_and_call(size_t narg,
     {
     // There is no explicit location to assign the returned value.
     push_program_state();
-    if( dialect_ibm() )
+    if( dialect_ibm() || dialect_mf() || dialect_gnu() )
       {
       // Because no explicit returning value is expected, we call the
       // designated function and assign the return value to our RETURN-CODE.
@@ -13055,8 +12945,8 @@ create_and_call(size_t narg,
       }
     else
       {
-      // Because it is not IBM, we execute the called function and ignore the
-      // any returned value.
+      // Because it is not IBM/MF/GNU, we execute the called function and
+      // ignore any returned value.
       gg_append_statement(call_expr);
       }
     pop_program_state();
@@ -13943,8 +13833,8 @@ parser_match_exception(cbl_field_t *index)
 
   TRACE1
     {
-    tree index_val = gg_define_variable(INT);
-    get_binary_value(index_val, NULL, index, size_t_zero_node);
+    tree index_val;
+    get_binary_value(index_val, index, INT);
     TRACE1_INDENT
     gg_printf("returned value is 0x%x (%d)", index_val, index_val, NULL_TREE);
     TRACE1_END
@@ -14339,7 +14229,7 @@ actually_create_the_static_field( cbl_field_t *new_var,
     }
   else if( new_var->type == FldClass )
     {
-    encoding = DEFAULT_32_ENCODING;
+    encoding = HOST_32_ENCODING;
     }
   else
     {
@@ -14683,7 +14573,9 @@ parser_local_add(struct cbl_field_t *new_var )
   }
 
 void
-parser_field_attr_set( cbl_field_t *tgt, cbl_field_attr_t attr, bool on_off )
+parser_field_attr_set(const cbl_field_t *tgt,
+                            cbl_field_attr_t attr,
+                            bool on_off )
   {
   if( on_off )
     {
@@ -14986,7 +14878,7 @@ parser_symbol_add(struct cbl_field_t *new_var )
         size_t converted_length;
         const char *converted = __gg__iconverter(
                                  new_var->codeset.default_encodings.source->type,
-                                 DEFAULT_32_ENCODING,
+                                 HOST_32_ENCODING,
                                  level_88_string,
                                  level_88_string_size,  // Convert the NUL
                                  &converted_length);

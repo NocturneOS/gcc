@@ -7150,6 +7150,23 @@ proc check_effective_target_arm_v8_1m_mve_ok { } {
 		check_effective_target_arm_v8_1m_mve_ok_nocache]
 }
 
+# Return 1 if the target can link ARMv8.1-M MVE code using the
+# options selected by arm_v8_1m_mve_ok, 0 otherwise.
+
+proc check_effective_target_arm_v8_1m_mve_link { } {
+    if { ![check_effective_target_arm_v8_1m_mve_ok] } {
+	return 0
+    }
+
+    return [check_no_compiler_messages arm_v8_1m_mve_link executable {
+	int
+	main (void)
+	{
+	  return 0;
+	}
+    } [add_options_for_arm_v8_1m_mve ""]]
+}
+
 proc add_options_for_arm_v8_1m_mve { flags } {
     if { ! [check_effective_target_arm_v8_1m_mve_ok] } {
 	return "$flags"
@@ -10364,7 +10381,15 @@ proc check_effective_target_section_anchors { } {
 # Return 1 if the target supports atomic operations on "int_128" values.
 
 proc check_effective_target_sync_int_128 { } {
-    return 0
+    return [check_no_messages_and_pattern sync_int_128 \
+	    "!__atomic_compare_exchange_16" assembly {
+	__int128 v;
+	void foo (__int128 *expected, __int128 desired)
+	  {
+	    __atomic_compare_exchange_n (&v, expected, desired, 0,
+					__ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+	  }
+    } "" ]
 }
 
 # Return 1 if the target supports atomic operations on "int_128" values
@@ -11545,17 +11570,6 @@ proc check_effective_target_amx_avx512 { } {
 	  __asm__ volatile ("tilemovrow\t%%edx, %%tmm2, %%zmm1" ::);
 	}
     } "-mamx-avx512" ]
-}
-
-# Return 1 if amx-tf32 instructions can be compiled.
-proc check_effective_target_amx_tf32 { } {
-    return [check_no_compiler_messages amx_tf32 object {
-	void
-	foo ()
-	{
-	  __asm__ volatile ("tmmultf32ps\t%%tmm1, %%tmm2, %%tmm3" ::);
-	}
-    } "-mamx-tf32" ]
 }
 
 # Return 1 if amx-fp8 instructions can be compiled.
@@ -12895,6 +12909,17 @@ proc check_effective_target_aarch64_gas_has_build_attributes { } {
     }]
 }
 
+# Return 1 if Gas supports DTPREL Relocation on AArch64 target
+proc check_effective_target_aarch64_gas_has_dtprel_reloc { } {
+    if { ![istarget aarch64*-*-*] || ![check_effective_target_tls_native] } {
+	return 0
+    }
+    return [check_no_compiler_messages aarch64_gas_has_dtprel_reloc object {
+	/* Assembly */
+	.xword %dtprel(expr)
+    }]
+}
+
 # Create functions to check that the AArch64 assembler supports the
 # various architecture extensions via the .arch_extension pseudo-op.
 
@@ -12906,7 +12931,7 @@ set exts {
     "sme-f8f16" "sme-f8f32"
     "sme-b16b16" "sme-f16f16" "sme-i16i64" "sme" "sme2" "sme2p1" "sme2p2"
     "ssve-fp8dot2" "ssve-fp8dot4" "ssve-fp8fma" "sve-bfscale" "sme-lutv2"
-    "ssve-fexpa" "ssve-bitperm"
+    "ssve-fexpa" "ssve-bitperm" "ssve-aes"
 }
 
 foreach { aarch64_ext } $exts {
